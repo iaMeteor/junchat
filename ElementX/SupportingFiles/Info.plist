@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.heyujk.junchat.background.refresh</string>
+	</array>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>zh-Hans</string>
+	<key>CFBundleDisplayName</key>
+	<string>$(APP_DISPLAY_NAME)</string>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Mention Pills</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<string>$(PILLS_UT_TYPE_IDENTIFIER)</string>
+		</dict>
+	</array>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>zh-Hans</string>
+		<string>zh-Hant-TW</string>
+	</array>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>Application</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>$(BASE_BUNDLE_IDENTIFIER)</string>
+				<string>matrix</string>
+			</array>
+		</dict>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<false/>
+	<key>NSCameraUsageDescription</key>
+	<string>To take pictures or videos and send them as a message $(APP_DISPLAY_NAME) needs access to the camera.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Face ID is used to access your app.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>君聊仅在你主动使用位置相关功能时访问位置信息，用于发送当前位置或实时位置共享。未使用该功能时不会访问你的定位。</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>君聊仅在你主动使用位置相关功能时访问位置信息，用于发送当前位置或查看位置消息。未使用该功能时不会访问你的定位。</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>To record and send messages with audio, $(APP_DISPLAY_NAME) needs to access the microphone.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>This lets you save images and videos to your photo library.</string>
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>INSendMessageIntent</string>
+		<string>INStartCallIntent</string>
+	</array>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<true/>
+	</dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+		<string>processing</string>
+		<string>voip</string>
+	</array>
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string>colors/background-color</string>
+	</dict>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.text</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Mention Pills</string>
+			<key>UTTypeIdentifier</key>
+			<string>$(PILLS_UT_TYPE_IDENTIFIER)</string>
+		</dict>
+	</array>
+	<key>appGroupIdentifier</key>
+	<string>$(APP_GROUP_IDENTIFIER)</string>
+	<key>baseBundleIdentifier</key>
+	<string>$(BASE_BUNDLE_IDENTIFIER)</string>
+	<key>keychainAccessGroupIdentifier</key>
+	<string>$(KEYCHAIN_ACCESS_GROUP_IDENTIFIER)</string>
+	<key>productionAppName</key>
+	<string>$(PRODUCTION_APP_NAME)</string>
+</dict>
+</plist>

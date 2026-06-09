@@ -1,0 +1,741 @@
+//
+// Copyright 2025 Element Creations Ltd.
+// Copyright 2022-2025 New Vector Ltd.
+//
+// SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial.
+// Please see LICENSE files in the repository root for full details.
+//
+
+import Combine
+@testable import ElementX
+import Foundation
+import MatrixRustSDK
+import Testing
+
+@MainActor
+final class TimelineViewModelTests {
+    var userIndicatorControllerMock: UserIndicatorControllerMock!
+    var cancellables = Set<AnyCancellable>()
+
+    init() async throws {
+        AppSettings.resetAllSettings()
+        cancellables.removeAll()
+        userIndicatorControllerMock = UserIndicatorControllerMock.default
+    }
+
+    deinit {
+        userIndicatorControllerMock = nil
+    }
+
+    // MARK: - Message Grouping
+
+    @Test
+    func messageGrouping() {
+        // Given 3 messages from Bob.
+        let items = [
+            TextRoomTimelineItem(text: "Message 1",
+                                 sender: "bob"),
+            TextRoomTimelineItem(text: "Message 2",
+                                 sender: "bob"),
+            TextRoomTimelineItem(text: "Message 3",
+                                 sender: "bob")
+        ]
+
+        // When showing them in a timeline.
+        let timelineController = MockTimelineController()
+        timelineController.timelineItems = items
+        let viewModel = makeViewModel(timelineController: timelineController)
+
+        // Then the messages should be grouped together.
+        #expect(viewModel.state.timelineState.itemViewStates[0].groupStyle == .first, "Nothing should prevent the first message from being grouped.")
+        #expect(viewModel.state.timelineState.itemViewStates[1].groupStyle == .middle, "Nothing should prevent the middle message from being grouped.")
+        #expect(viewModel.state.timelineState.itemViewStates[2].groupStyle == .last, "Nothing should prevent the last message from being grouped.")
+    }
+
+    @Test
+    func messageGroupingMultipleSenders() {
+        // Given some interleaved messages from Bob and Alice.
+        let items = [
+            TextRoomTimelineItem(text: "Message 1",
+                                 sender: "alice"),
+            TextRoomTimelineItem(text: "Message 2",
+                                 sender: "bob"),
+            TextRoomTimelineItem(text: "Message 3",
+                                 sender: "alice"),
+            TextRoomTimelineItem(text: "Message 4",
+                                 sender: "alice"),
+            TextRoomTimelineItem(text: "Message 5",
+                                 sender: "bob"),
+            TextRoomTimelineItem(text: "Message 6",
+                                 sender: "bob")
+        ]
+
+        // When showing them in a timeline.
+        let timelineController = MockTimelineController()
+        timelineController.timelineItems = items
+        let viewModel = makeViewModel(timelineController: timelineController)
+
+        // Then the messages should be grouped by sender.
+        #expect(viewModel.state.timelineState.itemViewStates[0].groupStyle == .single, "A message should not be grouped when the sender changes.")
+        #expect(viewModel.state.timelineState.itemViewStates[1].groupStyle == .single, "A message should not be grouped when the sender changes.")
+        #expect(viewModel.state.timelineState.itemViewStates[2].groupStyle == .first, "A group should start with a new sender if there are more messages from that sender.")
+        #expect(viewModel.state.timelineState.itemViewStates[3].groupStyle == .last, "A group should be ended when the sender changes in the next message.")
+        #expect(viewModel.state.timelineState.itemViewStates[4].groupStyle == .first, "A group should start with a new sender if there are more messages from that sender.")
+        #expect(viewModel.state.timelineState.itemViewStates[5].groupStyle == .last, "A group should be ended when the sender changes in the next message.")
+    }
+
+    @Test
+    func messageGroupingWithLeadingReactions() {
+        // Given 3 messages from Bob where the first message has a reaction.
+        let items = [
+            TextRoomTimelineItem(text: "Message 1",
+                                 sender: "bob",
+                                 addReactions: true),
+            TextRoomTimelineItem(text: "Message 2",
+                                 sender: "bob"),
+            TextRoomTimelineItem(text: "Message 3",
+                                 sender: "bob")
+        ]
+
+        // When showing them in a timeline.
+        let timelineController = MockTimelineController()
+        timelineController.timelineItems = items
+        let viewModel = makeViewModel(timelineController: timelineController)
+
+        // Then the first message should not be grouped but the other two should.
+        #expect(viewModel.state.timelineState.itemViewStates[0].groupStyle == .single, "When the first message has reactions it should not be grouped.")
+        #expect(viewModel.state.timelineState.itemViewStates[1].groupStyle == .first, "A new group should be made when the preceding message has reactions.")
+        #expect(viewModel.state.timelineState.itemViewStates[2].groupStyle == .last, "Nothing should prevent the last message from being grouped.")
+    }
+
+    @Test
+    func messageGroupingWithInnerReactions() {
+        // Given 3 messages from Bob where the middle message has a reaction.
+        let items = [
+            TextRoomTimelineItem(text: "Message 1",
+                                 sender: "bob"),
+            TextRoomTimelineItem(text: "Message 2",
+                                 sender: "bob",
+                                 addReactions: true),
+            TextRoomTimelineItem(text: "Message 3",
+                                 sender: "bob")
+        ]
+
+        // When showing them in a timeline.
+        let timelineController = MockTimelineController()
+        timelineController.timelineItems = items
+        let viewModel = makeViewModel(timelineController: timelineController)
+
+        // Then the first and second messages should be grouped and the last one should not.
+        #expect(viewModel.state.timelineState.itemViewStates[0].groupStyle == .first, "Nothing should prevent the first message from being grouped.")
+        #expect(viewModel.state.timelineState.itemViewStates[1].groupStyle == .last, "When the message has reactions, the group should end here.")
+        #expect(viewModel.state.timelineState.itemViewStates[2].groupStyle == .single, "The last message should not be grouped when the preceding message has reactions.")
+    }
+
+    @Test
+    func messageGroupingWithTrailingReactions() {
+        // Given 3 messages from Bob where the last message has a reaction.
+        let items = [
+            TextRoomTimelineItem(text: "Message 1",
+                                 sender: "bob"),
+            TextRoomTimelineItem(text: "Message 2",
+                                 sender: "bob"),
+            TextRoomTimelineItem(text: "Message 3",
+                                 sender: "bob",
+                                 addReactions: true)
+        ]
+
+        // When showing them in a timeline.
+        let timelineController = MockTimelineController()
+        timelineController.timelineItems = items
+        let viewModel = makeViewModel(timelineController: timelineController)
+
+        // Then the messages should be grouped together.
+        #expect(viewModel.state.timelineState.itemViewStates[0].groupStyle == .first, "Nothing should prevent the first message from being grouped.")
+        #expect(viewModel.state.timelineState.itemViewStates[1].groupStyle == .middle, "Nothing should prevent the second message from being grouped.")
+        #expect(viewModel.state.timelineState.itemViewStates[2].groupStyle == .last, "Reactions on the last message should not prevent it from being grouped.")
+    }
+
+    // MARK: - Focussing
+
+    @Test
+    func focusItem() async throws {
+        // Given a room with 3 items loaded in a live timeline.
+        let items = [TextRoomTimelineItem(eventID: "t1"),
+                     TextRoomTimelineItem(eventID: "t2"),
+                     TextRoomTimelineItem(eventID: "t3")]
+        let timelineController = MockTimelineController()
+        timelineController.timelineItems = items
+
+        let viewModel = makeViewModel(timelineController: timelineController)
+        #expect(timelineController.focusOnEventCallCount == 0)
+        #expect(viewModel.context.viewState.timelineState.isLive)
+        #expect(viewModel.context.viewState.timelineState.focussedEvent == nil)
+
+        // When focussing on an item that isn't loaded.
+        let deferred = deferFulfillment(viewModel.context.$viewState) { !$0.timelineState.isLive }
+        await viewModel.focusOnEvent(eventID: "t4")
+        try await deferred.fulfill()
+
+        // Then a new timeline should be loaded and the room focussed on that event.
+        #expect(timelineController.focusOnEventCallCount == 1)
+        #expect(!viewModel.context.viewState.timelineState.isLive)
+        #expect(viewModel.context.viewState.timelineState.focussedEvent == .init(eventID: "t4", appearance: .immediate))
+    }
+
+    @Test
+    func focusLoadedItem() async throws {
+        // Given a room with 3 items loaded in a live timeline.
+        let items = [TextRoomTimelineItem(eventID: "t1"),
+                     TextRoomTimelineItem(eventID: "t2"),
+                     TextRoomTimelineItem(eventID: "t3")]
+        let timelineController = MockTimelineController()
+        timelineController.timelineItems = items
+
+        let viewModel = makeViewModel(timelineController: timelineController)
+        #expect(timelineController.focusOnEventCallCount == 0)
+        #expect(viewModel.context.viewState.timelineState.isLive)
+        #expect(viewModel.context.viewState.timelineState.focussedEvent == nil)
+
+        // When focussing on a loaded item.
+        let deferred = deferFailure(viewModel.context.$viewState, timeout: .seconds(1)) { !$0.timelineState.isLive }
+        await viewModel.focusOnEvent(eventID: "t1")
+        try await deferred.fulfill()
+
+        // Then the timeline should remain live and the item should be focussed.
+        #expect(timelineController.focusOnEventCallCount == 0)
+        #expect(viewModel.context.viewState.timelineState.isLive)
+        #expect(viewModel.context.viewState.timelineState.focussedEvent == .init(eventID: "t1", appearance: .animated))
+    }
+
+    @Test
+    func focusLive() async throws {
+        // Given a room with a non-live timeline focussed on a particular event.
+        let items = [TextRoomTimelineItem(eventID: "t1"),
+                     TextRoomTimelineItem(eventID: "t2"),
+                     TextRoomTimelineItem(eventID: "t3")]
+        let timelineController = MockTimelineController()
+        timelineController.timelineItems = items
+
+        let viewModel = makeViewModel(timelineController: timelineController)
+
+        var deferred = deferFulfillment(viewModel.context.$viewState) { !$0.timelineState.isLive }
+        await viewModel.focusOnEvent(eventID: "t4")
+        try await deferred.fulfill()
+
+        #expect(timelineController.focusLiveCallCount == 0)
+        #expect(!viewModel.context.viewState.timelineState.isLive)
+        #expect(viewModel.context.viewState.timelineState.focussedEvent == .init(eventID: "t4", appearance: .immediate))
+
+        // When switching back to a live timeline.
+        deferred = deferFulfillment(viewModel.context.$viewState) { $0.timelineState.isLive }
+        viewModel.context.send(viewAction: .focusLive)
+        try await deferred.fulfill()
+
+        // Then the timeline should switch back to being live and the event focus should be removed.
+        #expect(timelineController.focusLiveCallCount == 1)
+        #expect(viewModel.context.viewState.timelineState.isLive)
+        #expect(viewModel.context.viewState.timelineState.focussedEvent == nil)
+    }
+
+    @Test
+    func initialFocusViewState() {
+        let timelineController = MockTimelineController()
+
+        let viewModel = makeViewModel(focussedEventID: "t10", timelineController: timelineController)
+        #expect(viewModel.context.viewState.timelineState.focussedEvent == .init(eventID: "t10", appearance: .immediate))
+    }
+
+    // MARK: - Read Receipts
+
+    @Test
+    func sendReadReceipt() async throws {
+        // Given a room with only text items in the timeline
+        let items = [TextRoomTimelineItem(eventID: "t1"),
+                     TextRoomTimelineItem(eventID: "t2"),
+                     TextRoomTimelineItem(eventID: "t3")]
+        let (viewModel, _, timelineProxy, _) = readReceiptsConfiguration(with: items)
+
+        // When sending a read receipt for the last item.
+        try viewModel.context.send(viewAction: .sendReadReceiptIfNeeded(#require(items.last?.id)))
+        try await Task.sleep(for: .milliseconds(100))
+
+        // Then the receipt should be sent.
+        #expect(timelineProxy.sendReadReceiptForTypeCalled == true)
+        let arguments = timelineProxy.sendReadReceiptForTypeReceivedArguments
+        #expect(arguments?.eventID == "t3")
+        #expect(arguments?.type == .read)
+    }
+
+    @Test
+    func sendReadReceiptWithoutEvents() async throws {
+        // Given a room with only virtual items.
+        let items = [SeparatorRoomTimelineItem(uniqueID: .init("v1")),
+                     SeparatorRoomTimelineItem(uniqueID: .init("v2")),
+                     SeparatorRoomTimelineItem(uniqueID: .init("v3"))]
+        let (viewModel, _, timelineProxy, _) = readReceiptsConfiguration(with: items)
+
+        // When sending a read receipt for the last item.
+        try viewModel.context.send(viewAction: .sendReadReceiptIfNeeded(#require(items.last?.id)))
+        try await Task.sleep(for: .milliseconds(100))
+
+        // Then nothing should be sent.
+        #expect(timelineProxy.sendReadReceiptForTypeCalled == false)
+    }
+
+    @Test
+    func sendReadReceiptVirtualLast() async throws {
+        // Given a room where the last event is a virtual item.
+        let items: [RoomTimelineItemProtocol] = [TextRoomTimelineItem(eventID: "t1"),
+                                                 TextRoomTimelineItem(eventID: "t2"),
+                                                 SeparatorRoomTimelineItem(uniqueID: .init("v3"))]
+        let (viewModel, _, _, _) = readReceiptsConfiguration(with: items)
+
+        // When sending a read receipt for the last item.
+        try viewModel.context.send(viewAction: .sendReadReceiptIfNeeded(#require(items.last?.id)))
+        try await Task.sleep(for: .milliseconds(100))
+    }
+
+    // swiftlint:disable:next large_tuple
+    private func readReceiptsConfiguration(with items: [RoomTimelineItemProtocol]) -> (TimelineViewModel,
+                                                                                       JoinedRoomProxyMock,
+                                                                                       TimelineProxyMock,
+                                                                                       MockTimelineController) {
+        let roomProxy = JoinedRoomProxyMock(.init(name: ""))
+
+        let timelineProxy = TimelineProxyMock()
+
+        roomProxy.timeline = timelineProxy
+        let timelineController = MockTimelineController()
+
+        timelineProxy.sendReadReceiptForTypeReturnValue = .success(())
+
+        timelineController.timelineItems = items
+        timelineController.roomProxy = roomProxy
+
+        let viewModel = TimelineViewModel(roomProxy: roomProxy,
+                                          timelineController: timelineController,
+                                          userSession: UserSessionMock(.init()),
+                                          mediaPlayerProvider: MediaPlayerProviderMock(),
+                                          userIndicatorController: userIndicatorControllerMock,
+                                          appMediator: AppMediatorMock.default,
+                                          appSettings: ServiceLocator.shared.settings,
+                                          analyticsService: ServiceLocator.shared.analytics,
+                                          emojiProvider: EmojiProvider(appSettings: ServiceLocator.shared.settings),
+                                          linkMetadataProvider: LinkMetadataProvider(),
+                                          timelineControllerFactory: TimelineControllerFactoryMock(.init()))
+        return (viewModel, roomProxy, timelineProxy, timelineController)
+    }
+
+    @Test
+    func showReadReceipts() async throws {
+        let receipts: [ReadReceipt] = [.init(userID: "@alice:matrix.org", formattedTimestamp: "12:00"),
+                                       .init(userID: "@charlie:matrix.org", formattedTimestamp: "11:00")]
+        // Given 3 messages from Bob where the middle message has a reaction.
+        let message = TextRoomTimelineItem(text: "Test",
+                                           sender: "bob",
+                                           addReadReceipts: receipts)
+        let id = message.id
+
+        // When showing them in a timeline.
+        let timelineController = MockTimelineController()
+        timelineController.timelineItems = [message]
+        let viewModel = TimelineViewModel(roomProxy: JoinedRoomProxyMock(.init(name: "", members: [RoomMemberProxyMock.mockAlice, RoomMemberProxyMock.mockCharlie])),
+                                          timelineController: timelineController,
+                                          userSession: UserSessionMock(.init()),
+                                          mediaPlayerProvider: MediaPlayerProviderMock(),
+                                          userIndicatorController: userIndicatorControllerMock,
+                                          appMediator: AppMediatorMock.default,
+                                          appSettings: ServiceLocator.shared.settings,
+                                          analyticsService: ServiceLocator.shared.analytics,
+                                          emojiProvider: EmojiProvider(appSettings: ServiceLocator.shared.settings),
+                                          linkMetadataProvider: LinkMetadataProvider(),
+                                          timelineControllerFactory: TimelineControllerFactoryMock(.init()))
+
+        let deferred = deferFulfillment(viewModel.context.$viewState) { value in
+            value.bindings.readReceiptsSummaryInfo?.orderedReceipts == receipts
+        }
+
+        viewModel.context.send(viewAction: .displayReadReceipts(itemID: id))
+        try await deferred.fulfill()
+    }
+
+    @Test
+    func showManageUserAsAdmin() async throws {
+        let viewModel = TimelineViewModel(roomProxy: JoinedRoomProxyMock(.init(name: "",
+                                                                               members: [RoomMemberProxyMock.mockAdmin,
+                                                                                         RoomMemberProxyMock.mockAlice],
+                                                                               ownUserID: RoomMemberProxyMock.mockAdmin.userID)),
+                                          timelineController: MockTimelineController(),
+                                          userSession: UserSessionMock(.init()),
+                                          mediaPlayerProvider: MediaPlayerProviderMock(),
+                                          userIndicatorController: userIndicatorControllerMock,
+                                          appMediator: AppMediatorMock.default,
+                                          appSettings: ServiceLocator.shared.settings,
+                                          analyticsService: ServiceLocator.shared.analytics,
+                                          emojiProvider: EmojiProvider(appSettings: ServiceLocator.shared.settings),
+                                          linkMetadataProvider: LinkMetadataProvider(),
+                                          timelineControllerFactory: TimelineControllerFactoryMock(.init()))
+
+        var deferred = deferFulfillment(viewModel.context.$viewState) { value in
+            value.canCurrentUserKick && value.canCurrentUserBan
+        }
+
+        try await deferred.fulfill()
+
+        deferred = deferFulfillment(viewModel.context.$viewState) { value in
+            value.bindings.manageMemberViewModel != nil
+        }
+
+        viewModel.context.send(viewAction: .tappedOnSenderDetails(sender: .init(with: RoomMemberProxyMock.mockAlice)))
+        try await deferred.fulfill()
+
+        #expect(viewModel.context.manageMemberViewModel?.id == RoomMemberProxyMock.mockAlice.userID)
+        #expect(viewModel.context.manageMemberViewModel?.state.permissions.canBan == true)
+        #expect(viewModel.context.manageMemberViewModel?.state.permissions.canKick == true)
+        #expect(viewModel.context.manageMemberViewModel?.state.isKickDisabled == false)
+        #expect(viewModel.context.manageMemberViewModel?.state.isBanUnbanDisabled == false)
+    }
+
+    @Test
+    func showDetailsForAnAdmin() async throws {
+        let viewModel = TimelineViewModel(roomProxy: JoinedRoomProxyMock(.init(name: "",
+                                                                               members: [RoomMemberProxyMock.mockAdmin,
+                                                                                         RoomMemberProxyMock.mockAlice],
+                                                                               ownUserID: RoomMemberProxyMock.mockAlice.userID)),
+                                          timelineController: MockTimelineController(),
+                                          userSession: UserSessionMock(.init()),
+                                          mediaPlayerProvider: MediaPlayerProviderMock(),
+                                          userIndicatorController: userIndicatorControllerMock,
+                                          appMediator: AppMediatorMock.default,
+                                          appSettings: ServiceLocator.shared.settings,
+                                          analyticsService: ServiceLocator.shared.analytics,
+                                          emojiProvider: EmojiProvider(appSettings: ServiceLocator.shared.settings),
+                                          linkMetadataProvider: LinkMetadataProvider(),
+                                          timelineControllerFactory: TimelineControllerFactoryMock(.init()))
+
+        var deferredState = deferFulfillment(viewModel.context.$viewState) { value in
+            !value.canCurrentUserKick && !value.canCurrentUserBan
+        }
+
+        try await deferredState.fulfill()
+
+        deferredState = deferFulfillment(viewModel.context.$viewState) { value in
+            value.bindings.manageMemberViewModel != nil
+        }
+
+        viewModel.context.send(viewAction: .tappedOnSenderDetails(sender: .init(with: RoomMemberProxyMock.mockAdmin)))
+        try await deferredState.fulfill()
+
+        #expect(viewModel.context.manageMemberViewModel?.state.permissions.canBan == false)
+        #expect(viewModel.context.manageMemberViewModel?.state.permissions.canKick == false)
+        #expect(viewModel.context.manageMemberViewModel?.state.isKickDisabled == true)
+        #expect(viewModel.context.manageMemberViewModel?.state.isBanUnbanDisabled == true)
+        #expect(viewModel.context.manageMemberViewModel?.id == RoomMemberProxyMock.mockAdmin.userID)
+    }
+
+    @Test
+    func showDetailsForABannedUser() async throws {
+        let viewModel = TimelineViewModel(roomProxy: JoinedRoomProxyMock(.init(name: "",
+                                                                               members: [RoomMemberProxyMock.mockAdmin,
+                                                                                         RoomMemberProxyMock.mockBanned[0]],
+                                                                               ownUserID: RoomMemberProxyMock.mockAdmin.userID)),
+                                          timelineController: MockTimelineController(),
+                                          userSession: UserSessionMock(.init()),
+                                          mediaPlayerProvider: MediaPlayerProviderMock(),
+                                          userIndicatorController: userIndicatorControllerMock,
+                                          appMediator: AppMediatorMock.default,
+                                          appSettings: ServiceLocator.shared.settings,
+                                          analyticsService: ServiceLocator.shared.analytics,
+                                          emojiProvider: EmojiProvider(appSettings: ServiceLocator.shared.settings),
+                                          linkMetadataProvider: LinkMetadataProvider(),
+                                          timelineControllerFactory: TimelineControllerFactoryMock(.init()))
+
+        var deferredState = deferFulfillment(viewModel.context.$viewState) { value in
+            value.canCurrentUserKick && value.canCurrentUserBan
+        }
+
+        try await deferredState.fulfill()
+
+        deferredState = deferFulfillment(viewModel.context.$viewState) { value in
+            value.bindings.manageMemberViewModel != nil
+        }
+
+        viewModel.context.send(viewAction: .tappedOnSenderDetails(sender: .init(with: RoomMemberProxyMock.mockBanned[0])))
+        try await deferredState.fulfill()
+
+        #expect(viewModel.context.manageMemberViewModel?.state.permissions.canBan == true)
+        #expect(viewModel.context.manageMemberViewModel?.state.permissions.canKick == true)
+        #expect(viewModel.context.manageMemberViewModel?.state.isKickDisabled == true)
+        #expect(viewModel.context.manageMemberViewModel?.state.isBanUnbanDisabled == false)
+        #expect(viewModel.context.manageMemberViewModel?.state.isMemberBanned == true)
+        #expect(viewModel.context.manageMemberViewModel?.id == RoomMemberProxyMock.mockBanned[0].userID)
+    }
+
+    // MARK: - Pins
+
+    @Test
+    func pinnedEvents() async throws {
+        var configuration = JoinedRoomProxyMockConfiguration(name: "",
+                                                             pinnedEventIDs: .init(["test1"]))
+        let roomProxyMock = JoinedRoomProxyMock(configuration)
+        let infoSubject = CurrentValueSubject<RoomInfoProxyProtocol, Never>(RoomInfoProxyMock(configuration))
+        roomProxyMock.underlyingInfoPublisher = infoSubject.asCurrentValuePublisher()
+
+        let viewModel = TimelineViewModel(roomProxy: roomProxyMock,
+                                          timelineController: MockTimelineController(),
+                                          userSession: UserSessionMock(.init()),
+                                          mediaPlayerProvider: MediaPlayerProviderMock(),
+                                          userIndicatorController: userIndicatorControllerMock,
+                                          appMediator: AppMediatorMock.default,
+                                          appSettings: ServiceLocator.shared.settings,
+                                          analyticsService: ServiceLocator.shared.analytics,
+                                          emojiProvider: EmojiProvider(appSettings: ServiceLocator.shared.settings),
+                                          linkMetadataProvider: LinkMetadataProvider(),
+                                          timelineControllerFactory: TimelineControllerFactoryMock(.init()))
+        #expect(configuration.pinnedEventIDs == viewModel.context.viewState.pinnedEventIDs)
+
+        configuration.pinnedEventIDs = ["test1", "test2"]
+        let deferred = deferFulfillment(viewModel.context.$viewState) { value in
+            value.pinnedEventIDs == ["test1", "test2"]
+        }
+        infoSubject.send(RoomInfoProxyMock(configuration))
+        try await deferred.fulfill()
+    }
+
+    @Test
+    func canUserPinEvents() async throws {
+        let configuration = JoinedRoomProxyMockConfiguration(name: "",
+                                                             powerLevelsConfiguration: .init(canUserPin: true))
+        let roomProxyMock = JoinedRoomProxyMock(configuration)
+        let infoSubject = CurrentValueSubject<RoomInfoProxyProtocol, Never>(RoomInfoProxyMock(configuration))
+        roomProxyMock.underlyingInfoPublisher = infoSubject.asCurrentValuePublisher()
+
+        let viewModel = TimelineViewModel(roomProxy: roomProxyMock,
+                                          timelineController: MockTimelineController(),
+                                          userSession: UserSessionMock(.init()),
+                                          mediaPlayerProvider: MediaPlayerProviderMock(),
+                                          userIndicatorController: userIndicatorControllerMock,
+                                          appMediator: AppMediatorMock.default,
+                                          appSettings: ServiceLocator.shared.settings,
+                                          analyticsService: ServiceLocator.shared.analytics,
+                                          emojiProvider: EmojiProvider(appSettings: ServiceLocator.shared.settings),
+                                          linkMetadataProvider: LinkMetadataProvider(),
+                                          timelineControllerFactory: TimelineControllerFactoryMock(.init()))
+
+        var deferred = deferFulfillment(viewModel.context.$viewState) { value in
+            value.canCurrentUserPin
+        }
+        try await deferred.fulfill()
+
+        let powerLevelsProxyMock = RoomPowerLevelsProxyMock(configuration: .init())
+        powerLevelsProxyMock.canUserPinOrUnpinUserIDReturnValue = .success(false)
+        powerLevelsProxyMock.canOwnUserPinOrUnpinReturnValue = false
+        roomProxyMock.powerLevelsReturnValue = .success(powerLevelsProxyMock)
+
+        let roomInfoProxyMock = RoomInfoProxyMock(configuration)
+        roomInfoProxyMock.powerLevels = powerLevelsProxyMock
+
+        deferred = deferFulfillment(viewModel.context.$viewState) { value in
+            !value.canCurrentUserPin
+        }
+        infoSubject.send(roomInfoProxyMock)
+        try await deferred.fulfill()
+    }
+
+    // MARK: - Tap Actions
+
+    @Test
+    func tapSendInfoEncryptionAuthentictyDisplaysAlert() {
+        // Given a room with an event whose authenticity could not be verified
+        let items = [TextRoomTimelineItem(eventID: "t1", encryptionAuthenticity: .verificationViolation(color: .red))]
+        let timelineController = MockTimelineController()
+        timelineController.timelineItems = items
+        let viewModel = makeViewModel(timelineController: timelineController)
+
+        #expect(viewModel.state.bindings.alertInfo == nil)
+
+        viewModel.process(viewAction: .itemSendInfoTapped(itemID: items[0].id))
+
+        #expect(viewModel.state.bindings.alertInfo?.title == L10n.cryptoEventAuthenticityPreviouslyVerified)
+    }
+
+    @Test
+    func tapSendInfoEncryptionForwarderDisplaysAlert() {
+        // Given a room with an event whose key was forwarded
+        let items = [TextRoomTimelineItem(eventID: "t1", keyForwarder: .test)]
+        let timelineController = MockTimelineController()
+        timelineController.timelineItems = items
+        let viewModel = makeViewModel(timelineController: timelineController)
+
+        #expect(viewModel.state.bindings.alertInfo == nil)
+
+        viewModel.process(viewAction: .itemSendInfoTapped(itemID: items[0].id))
+
+        #expect(viewModel.state.bindings.alertInfo?.title == L10n.cryptoEventKeyForwardedKnownProfileDialogContent("alice", "@alice:matrix.org"))
+    }
+
+    @Test
+    func privacyModeMessageIsRedactedAfterLifetime() async throws {
+        let appSettings = AppSettings()
+        appSettings.junchatPrivacyModeRoomIDs = ["MockRoomIdentifier"]
+        let timelineController = MockTimelineController(timelineItems: [])
+        let viewModel = makeViewModel(timelineController: timelineController,
+                                      appSettings: appSettings,
+                                      privacyMessageLifetime: .milliseconds(10))
+
+        viewModel.process(composerAction: .sendMessage(plain: "secret",
+                                                       html: nil,
+                                                       mode: .default,
+                                                       intentionalMentions: .init(userIDs: [], atRoom: false)))
+
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(timelineController.redactCalled)
+        #expect(timelineController.redactedEventOrTransactionID == .eventID("mock-sent-message-1"))
+        _ = viewModel
+    }
+
+    @Test
+    func privacyModeMessageIsMarkedAsPrivacyControlled() async throws {
+        let appSettings = AppSettings()
+        appSettings.junchatPrivacyModeRoomIDs = ["MockRoomIdentifier"]
+        let timelineController = MockTimelineController(timelineItems: [])
+        let viewModel = makeViewModel(timelineController: timelineController,
+                                      appSettings: appSettings,
+                                      privacyMessageLifetime: .seconds(180))
+
+        viewModel.process(composerAction: .sendMessage(plain: "secret",
+                                                       html: nil,
+                                                       mode: .default,
+                                                       intentionalMentions: .init(userIDs: [], atRoom: false)))
+
+        try await Task.sleep(for: .milliseconds(50))
+
+        guard let sentMessageID = timelineController.timelineItems.first?.id.uniqueID else {
+            Issue.record("Expected the privacy mode message to be sent.")
+            return
+        }
+        #expect(viewModel.state.privacyControlledTimelineItemIDs == [sentMessageID])
+        _ = viewModel
+    }
+
+    @Test
+    func bulkRedactionSelectionRedactsSelectedMessages() async throws {
+        let items = [
+            TextRoomTimelineItem(eventID: "bulk-1", sender: "bob"),
+            TextRoomTimelineItem(eventID: "bulk-2", sender: "bob")
+        ]
+        let timelineController = MockTimelineController(timelineItems: items)
+        let viewModel = makeViewModel(timelineController: timelineController)
+        viewModel.state.canCurrentUserRedactSelf = true
+
+        viewModel.process(viewAction: .handleTimelineItemMenuAction(itemID: items[0].id, action: .selectMessages))
+        #expect(viewModel.state.bulkRedactionSelectionState.selectedIDs == [.eventID("bulk-1")])
+
+        viewModel.process(viewAction: .toggleBulkRedactionSelection(itemID: items[1].id))
+        #expect(viewModel.state.bulkRedactionSelectionState.selectedIDs == [.eventID("bulk-1"), .eventID("bulk-2")])
+
+        viewModel.process(viewAction: .confirmBulkRedactionSelection)
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(Set(timelineController.redactedEventOrTransactionIDs) == [.eventID("bulk-1"), .eventID("bulk-2")])
+        #expect(!viewModel.state.bulkRedactionSelectionState.isActive)
+        _ = viewModel
+    }
+
+    // MARK: - Helpers
+
+    private func makeViewModel(roomProxy: JoinedRoomProxyProtocol? = nil,
+                               focussedEventID: String? = nil,
+                               timelineController: TimelineControllerProtocol,
+                               appSettings: AppSettings = ServiceLocator.shared.settings,
+                               privacyMessageLifetime: Duration = .seconds(180)) -> TimelineViewModel {
+        TimelineViewModel(roomProxy: roomProxy ?? JoinedRoomProxyMock(.init(name: "")),
+                          focussedEventID: focussedEventID,
+                          timelineController: timelineController,
+                          userSession: UserSessionMock(.init()),
+                          mediaPlayerProvider: MediaPlayerProviderMock(),
+                          userIndicatorController: userIndicatorControllerMock,
+                          appMediator: AppMediatorMock.default,
+                          appSettings: appSettings,
+                          analyticsService: ServiceLocator.shared.analytics,
+                          emojiProvider: EmojiProvider(appSettings: ServiceLocator.shared.settings),
+                          linkMetadataProvider: LinkMetadataProvider(),
+                          timelineControllerFactory: TimelineControllerFactoryMock(.init()),
+                          privacyMessageLifetime: privacyMessageLifetime)
+    }
+}
+
+private extension TextRoomTimelineItem {
+    init(text: String, sender: String, addReactions: Bool = false, addReadReceipts: [ReadReceipt] = []) {
+        let reactions = addReactions ? [AggregatedReaction(accountOwnerID: "bob", key: "🦄", senders: [ReactionSender(id: sender, timestamp: Date())])] : []
+        self.init(id: .randomEvent,
+                  timestamp: .mock,
+                  isOutgoing: sender == "bob",
+                  isEditable: sender == "bob",
+                  canBeRepliedTo: true,
+                  sender: .init(id: "@\(sender):server.com", displayName: sender),
+                  content: .init(body: text),
+                  properties: RoomTimelineItemProperties(reactions: reactions, orderedReadReceipts: addReadReceipts))
+    }
+}
+
+private extension SeparatorRoomTimelineItem {
+    init(uniqueID: TimelineItemIdentifier.UniqueID) {
+        self.init(id: .virtual(uniqueID: uniqueID), timestamp: .mock)
+    }
+}
+
+private extension TextRoomTimelineItem {
+    init(eventID: String, text: String = "Hello, World!", sender: String = "") {
+        self.init(id: .event(uniqueID: .init(UUID().uuidString), eventOrTransactionID: .eventID(eventID)),
+                  timestamp: .mock,
+                  isOutgoing: sender == "bob",
+                  isEditable: sender == "bob",
+                  canBeRepliedTo: true,
+                  sender: .init(id: sender.isEmpty ? "" : "@\(sender):server.com", displayName: sender),
+                  content: .init(body: text))
+    }
+}
+
+private extension TextRoomTimelineItem {
+    init(eventID: String, keyForwarder: TimelineItemKeyForwarder) {
+        self.init(id: .event(uniqueID: .init(UUID().uuidString), eventOrTransactionID: .eventID(eventID)),
+                  timestamp: .mock,
+                  isOutgoing: false,
+                  isEditable: false,
+                  canBeRepliedTo: true,
+                  sender: .init(id: ""),
+                  content: .init(body: "Hello, World!"),
+                  properties: RoomTimelineItemProperties(encryptionForwarder: keyForwarder))
+    }
+}
+
+private extension TextRoomTimelineItem {
+    init(eventID: String, encryptionAuthenticity: EncryptionAuthenticity) {
+        self.init(id: .event(uniqueID: .init(UUID().uuidString), eventOrTransactionID: .eventID(eventID)),
+                  timestamp: .mock,
+                  isOutgoing: false,
+                  isEditable: false,
+                  canBeRepliedTo: true,
+                  sender: .init(id: ""),
+                  content: .init(body: "Hello, World!"),
+                  properties: RoomTimelineItemProperties(encryptionAuthenticity: encryptionAuthenticity))
+    }
+}
+
+private extension TimelineItemSender {
+    init(with proxy: RoomMemberProxyMock) {
+        self.init(id: proxy.userID,
+                  displayName: proxy.displayName ?? "",
+                  isDisplayNameAmbiguous: false,
+                  avatarURL: proxy.avatarURL)
+    }
+}
+
+private extension TimelineItemKeyForwarder {
+    static var test: TimelineItemKeyForwarder {
+        TimelineItemKeyForwarder(id: "@alice:matrix.org", displayName: "alice")
+    }
+}

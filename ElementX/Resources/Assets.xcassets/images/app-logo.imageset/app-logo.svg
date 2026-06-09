@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="junchatBubble" x1="42" y1="36" x2="214" y2="216" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#39E69B"/>
+      <stop offset="0.48" stop-color="#12B981"/>
+      <stop offset="1" stop-color="#047A66"/>
+    </linearGradient>
+    <filter id="softShadow" x="20" y="20" width="216" height="216" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#04594B" flood-opacity="0.24"/>
+    </filter>
+  </defs>
+  <path filter="url(#softShadow)" d="M43 78c0-24 20-44 44-44h82c24 0 44 20 44 44v66c0 24-20 44-44 44h-37l-47 34c-8 6-20 0-20-10v-33c-13-7-22-21-22-35V78z" fill="url(#junchatBubble)"/>
+  <path d="M64 80c0-15 12-27 27-27h75c15 0 27 12 27 27v59c0 15-12 27-27 27h-41l-35 25v-30c-15 0-26-12-26-27V80z" fill="#fff" opacity="0.11"/>
+  <text x="128" y="123" text-anchor="middle" dominant-baseline="middle" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="56" font-weight="800" fill="#FFFFFF" letter-spacing="0">Jun</text>
+</svg>

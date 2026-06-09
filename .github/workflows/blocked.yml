@@ -1,0 +1,23 @@
+name: Prevent blocked
+
+on:
+  # Privilege escalation necessary to access PR context and set status checks
+  # 🚨 We must not execute any checked out code here, and be careful around use of user-controlled inputs.
+  pull_request_target: # zizmor: ignore[dangerous-triggers]
+    types: [opened, labeled, unlabeled, synchronize]
+
+permissions: {}
+
+jobs:
+  prevent-blocked:
+    name: Prevent blocked
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - name: Add notice
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        if: contains(github.event.pull_request.labels.*.name, 'X-Blocked')
+        with:
+          script: |
+            core.setFailed("PR has been labeled with X-Blocked; it cannot be merged.");

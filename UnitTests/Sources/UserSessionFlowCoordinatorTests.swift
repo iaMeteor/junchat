@@ -1,0 +1,461 @@
+//
+// Copyright 2025 Element Creations Ltd.
+// Copyright 2023-2025 New Vector Ltd.
+//
+// SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial.
+// Please see LICENSE files in the repository root for full details.
+//
+
+import Combine
+@testable import ElementX
+import Foundation
+import MatrixRustSDKMocks
+import Testing
+
+@MainActor
+struct UserSessionFlowCoordinatorTests {
+    private var userSessionFlowCoordinator: UserSessionFlowCoordinator!
+    private var rootCoordinator: NavigationRootCoordinator!
+    private var clientProxy: ClientProxyMock!
+    private var elementCallService: ElementCallServiceMock!
+    private var userIndicatorController: UserIndicatorControllerMock!
+    private let stateMachineFactory = PublishedStateMachineFactory()
+
+    private let staticRoomListSubject = CurrentValueSubject<[RoomSummary], Never>([])
+    private let ongoingCallRoomIDSubject = CurrentValueSubject<String?, Never>(nil)
+    private let incomingCallRoomIDSubject = CurrentValueSubject<String?, Never>(nil)
+    private let networkReachabilitySubject: CurrentValueSubject<NetworkMonitorReachability, Never> = .init(.reachable)
+    private let homeserverReachabilitySubject: CurrentValueSubject<NetworkMonitorReachability, Never> = .init(.reachable)
+    private var cancellables = Set<AnyCancellable>()
+
+    private var tabCoordinator: NavigationTabCoordinator<UserSessionFlowCoordinator.HomeTab>? {
+        rootCoordinator?.rootCoordinator as? NavigationTabCoordinator
+    }
+
+    private var chatsSplitCoordinator: NavigationSplitCoordinator? {
+        tabCoordinator?.tabCoordinators.first as? NavigationSplitCoordinator
+    }
+
+    private var detailCoordinator: CoordinatorProtocol? {
+        chatsSplitCoordinator?.detailCoordinator
+    }
+
+    private var detailNavigationStack: NavigationStackCoordinator? {
+        detailCoordinator as? NavigationStackCoordinator
+    }
+
+    init() async throws {
+        AppSettings.resetAllSettings()
+        rootCoordinator = NavigationRootCoordinator()
+
+        clientProxy = ClientProxyMock(.init(userID: "hi@bob",
+                                            deviceID: "DEVICEID",
+                                            roomSummaryProvider: RoomSummaryProviderMock(.init(state: .loaded(.mockRooms)))))
+        clientProxy.homeserverReachabilityPublisher = homeserverReachabilitySubject.asCurrentValuePublisher()
+        let staticRoomSummaryProvider = RoomSummaryProviderMock()
+        staticRoomSummaryProvider.roomListPublisher = staticRoomListSubject.asCurrentValuePublisher()
+        staticRoomSummaryProvider.statePublisher = CurrentValueSubject<RoomSummaryProviderState, Never>(.loaded(totalNumberOfRooms: 0)).asCurrentValuePublisher()
+        clientProxy.staticRoomSummaryProvider = staticRoomSummaryProvider
+
+        let networkMonitor = NetworkMonitorMock.default
+        networkMonitor.reachabilityPublisher = networkReachabilitySubject.asCurrentValuePublisher()
+        let appMediator = AppMediatorMock.default
+        appMediator.networkMonitor = networkMonitor
+
+        userIndicatorController = UserIndicatorControllerMock()
+
+        elementCallService = ElementCallServiceMock(.init())
+        elementCallService.ongoingCallRoomIDPublisher = ongoingCallRoomIDSubject.asCurrentValuePublisher()
+        elementCallService.incomingCallRoomIDPublisher = incomingCallRoomIDSubject.asCurrentValuePublisher()
+
+        let flowParameters = CommonFlowParameters(userSession: UserSessionMock(.init(clientProxy: clientProxy)),
+                                                  bugReportService: BugReportServiceMock(.init()),
+                                                  elementCallService: elementCallService,
+                                                  timelineControllerFactory: TimelineControllerFactoryMock(.init()),
+                                                  emojiProvider: EmojiProvider(appSettings: ServiceLocator.shared.settings),
+                                                  linkMetadataProvider: LinkMetadataProvider(),
+                                                  appMediator: appMediator,
+                                                  appSettings: ServiceLocator.shared.settings,
+                                                  appHooks: AppHooks(),
+                                                  analytics: ServiceLocator.shared.analytics,
+                                                  userIndicatorController: userIndicatorController,
+                                                  notificationManager: NotificationManagerMock(),
+                                                  stateMachineFactory: stateMachineFactory)
+
+        userSessionFlowCoordinator = UserSessionFlowCoordinator(isNewLogin: false,
+                                                                navigationRootCoordinator: rootCoordinator,
+                                                                appLockService: AppLockServiceMock(),
+                                                                flowParameters: flowParameters)
+
+        userSessionFlowCoordinator.start()
+    }
+
+    // MARK: Navigation
+
+    @Test
+    func initialState() {
+        #expect(chatsSplitCoordinator != nil)
+        #expect(detailCoordinator == nil)
+    }
+
+    @Test
+    func homeTabsIncludeContactsBetweenChatsAndSpaces() throws {
+        let coordinators = try #require(tabCoordinator?.tabCoordinators)
+
+        #expect(coordinators.count == 3)
+
+        guard coordinators.count == 3 else {
+            Issue.record("Expected chats, contacts and spaces tabs.")
+            return
+        }
+
+        #expect(tabCoordinator?.selectedTab == .chats)
+        #expect(coordinators[0] is NavigationSplitCoordinator)
+        #expect((coordinators[1] as? NavigationStackCoordinator)?.rootCoordinator is ContactsScreenCoordinator)
+        #expect(coordinators[2] is NavigationSplitCoordinator)
+    }
+
+    @Test
+    func onboardingDoesNotRequireIdentityConfirmationForJunChat() {
+        let appSettings = AppSettings()
+        appSettings.analyticsConsentState = .optedOut
+        appSettings.hasRunNotificationPermissionsOnboarding = true
+        appSettings.hasRunIdentityConfirmationOnboarding = false
+
+        let userSession = UserSessionMock(.init())
+        userSession.sessionSecurityStatePublisher = CurrentValueSubject<SessionSecurityState, Never>(.init(verificationState: .unverified, recoveryState: .enabled)).asCurrentValuePublisher()
+
+        let onboardingFlowCoordinator = OnboardingFlowCoordinator(isNewLogin: false,
+                                                                  appLockService: AppLockServiceMock(),
+                                                                  navigationStackCoordinator: NavigationStackCoordinator(),
+                                                                  flowParameters: makeCommonFlowParameters(userSession: userSession,
+                                                                                                           appSettings: appSettings))
+
+        #expect(!onboardingFlowCoordinator.shouldStart)
+    }
+
+    @Test
+    mutating func homeTabsIncludeEntertainmentWhenEnabled() async throws {
+        ServiceLocator.shared.settings.showEntertainmentTab = true
+        try await Task.sleep(for: .milliseconds(100))
+        let coordinators = try #require(tabCoordinator?.tabCoordinators)
+
+        #expect(coordinators.count == 4)
+
+        guard coordinators.count == 4 else {
+            Issue.record("Expected chats, contacts, entertainment and spaces tabs.")
+            return
+        }
+
+        #expect(coordinators[0] is NavigationSplitCoordinator)
+        #expect((coordinators[1] as? NavigationStackCoordinator)?.rootCoordinator is ContactsScreenCoordinator)
+        #expect((coordinators[2] as? NavigationStackCoordinator)?.rootCoordinator is EntertainmentScreenCoordinator)
+        #expect(coordinators[3] is NavigationSplitCoordinator)
+    }
+
+    @Test
+    mutating func settingsPresentation() async throws {
+        try await process(route: .settings, expectedUserSessionState: .settingsScreen)
+        #expect((tabCoordinator?.sheetCoordinator as? NavigationStackCoordinator)?.rootCoordinator is SettingsScreenCoordinator)
+    }
+
+    @Test
+    mutating func roomPresentation() async throws {
+        try await process(route: .room(roomID: "1", via: []), expectedChatsState: .roomList(detailState: .room(roomID: "1")))
+        #expect(detailNavigationStack?.rootCoordinator is RoomScreenCoordinator)
+        #expect(detailCoordinator != nil)
+    }
+
+    @Test
+    mutating func incomingCallOverlayIsShownEvenWhenViewingTheSameRoom() async throws {
+        try await process(route: .room(roomID: "1", via: []), expectedChatsState: .roomList(detailState: .room(roomID: "1")))
+
+        incomingCallRoomIDSubject.send("1")
+        staticRoomListSubject.send([incomingCallRoomSummary(id: "1")])
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(tabCoordinator?.overlayCoordinator is IncomingCallScreenCoordinator)
+    }
+
+    @Test
+    mutating func incomingCallOverlayStaysVisibleWhenSameRoomBecomesOngoingBeforeAccepting() async throws {
+        incomingCallRoomIDSubject.send("1")
+        staticRoomListSubject.send([incomingCallRoomSummary(id: "1")])
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(tabCoordinator?.overlayCoordinator is IncomingCallScreenCoordinator)
+
+        ongoingCallRoomIDSubject.send("1")
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(tabCoordinator?.overlayCoordinator is IncomingCallScreenCoordinator)
+    }
+
+    @Test
+    mutating func callScreenIsNotDismissedForTransientInactiveRoomSummary() async throws {
+        userSessionFlowCoordinator.handleAppRoute(.call(roomID: "1", isVoiceCall: true), animated: false)
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(tabCoordinator?.overlayCoordinator is CallScreenCoordinator)
+
+        ongoingCallRoomIDSubject.send("1")
+        staticRoomListSubject.send([incomingCallRoomSummary(id: "1", hasOngoingCall: false, activeRoomCallParticipants: [])])
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(tabCoordinator?.overlayCoordinator is CallScreenCoordinator)
+        #expect(!elementCallService.tearDownCallSessionCalled)
+
+        staticRoomListSubject.send([incomingCallRoomSummary(id: "1")])
+        try await Task.sleep(for: .milliseconds(1200))
+
+        #expect(tabCoordinator?.overlayCoordinator is CallScreenCoordinator)
+        #expect(!elementCallService.tearDownCallSessionCalled)
+    }
+
+    @Test
+    mutating func callScreenIsDismissedWhenOnlyOwnCallMembershipRemains() async throws {
+        userSessionFlowCoordinator.handleAppRoute(.call(roomID: "1", isVoiceCall: true), animated: false)
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(tabCoordinator?.overlayCoordinator is CallScreenCoordinator)
+
+        ongoingCallRoomIDSubject.send("1")
+        staticRoomListSubject.send([incomingCallRoomSummary(id: "1", activeRoomCallParticipants: ["@caller:junchat.yyzs120.cn"])])
+        try await Task.sleep(for: .milliseconds(100))
+
+        staticRoomListSubject.send([incomingCallRoomSummary(id: "1", activeRoomCallParticipants: ["hi@bob"])])
+        try await Task.sleep(for: .milliseconds(1500))
+
+        #expect(tabCoordinator?.overlayCoordinator == nil)
+        #expect(elementCallService.tearDownCallSessionCalled)
+    }
+
+    @Test
+    mutating func callScreenIsNotDismissedDuringInitialOwnOnlyCallMembershipSync() async throws {
+        userSessionFlowCoordinator.handleAppRoute(.call(roomID: "1", isVoiceCall: true), animated: false)
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(tabCoordinator?.overlayCoordinator is CallScreenCoordinator)
+
+        ongoingCallRoomIDSubject.send("1")
+        staticRoomListSubject.send([incomingCallRoomSummary(id: "1", activeRoomCallParticipants: ["hi@bob"])])
+        try await Task.sleep(for: .milliseconds(1500))
+
+        #expect(tabCoordinator?.overlayCoordinator is CallScreenCoordinator)
+        #expect(!elementCallService.tearDownCallSessionCalled)
+    }
+
+    @Test
+    mutating func roomPresentationClearsSettings() async throws {
+        try await process(route: .settings, expectedUserSessionState: .settingsScreen)
+        #expect((tabCoordinator?.sheetCoordinator as? NavigationStackCoordinator)?.rootCoordinator is SettingsScreenCoordinator)
+        #expect(detailCoordinator == nil)
+
+        try await process(route: .room(roomID: "1", via: []), expectedChatsState: .roomList(detailState: .room(roomID: "1")))
+        #expect(tabCoordinator?.sheetCoordinator == nil)
+        #expect(detailNavigationStack?.rootCoordinator is RoomScreenCoordinator)
+        #expect(detailCoordinator != nil)
+    }
+
+    @Test
+    mutating func childRoomPresentation() async throws {
+        try await process(route: .room(roomID: "1", via: []), expectedChatsState: .roomList(detailState: .room(roomID: "1")))
+        let detailNavigationStack = try #require(detailNavigationStack, "There must be a navigation stack.")
+        #expect(detailNavigationStack.rootCoordinator is RoomScreenCoordinator)
+        #expect(detailCoordinator != nil)
+
+        let deferred = deferFulfillment(detailNavigationStack.observe(\.stackCoordinators.count)) { $0 == 1 }
+        try await process(route: .childRoom(roomID: "2", via: []))
+        try await deferred.fulfill()
+        #expect(detailNavigationStack.rootCoordinator is RoomScreenCoordinator)
+        #expect(detailCoordinator != nil)
+        #expect(detailNavigationStack.stackCoordinators.count == 1)
+        #expect(detailNavigationStack.stackCoordinators.first is RoomScreenCoordinator)
+    }
+
+    @Test
+    mutating func shareMediaRouteWithoutRoom() async throws {
+        try await process(route: .settings, expectedUserSessionState: .settingsScreen)
+        #expect((tabCoordinator?.sheetCoordinator as? NavigationStackCoordinator)?.rootCoordinator is SettingsScreenCoordinator)
+        #expect(chatsSplitCoordinator?.sheetCoordinator == nil)
+
+        let sharePayload: ShareExtensionPayload = .mediaFiles(roomID: nil, mediaFiles: [.init(url: .picturesDirectory, suggestedName: nil)])
+        try await process(route: .share(sharePayload),
+                          expectedUserSessionState: .tabBar,
+                          expectedChatsState: .shareExtensionRoomList(sharePayload: sharePayload))
+        #expect(tabCoordinator?.sheetCoordinator == nil)
+        #expect((chatsSplitCoordinator?.sheetCoordinator as? NavigationStackCoordinator)?.rootCoordinator is RoomSelectionScreenCoordinator)
+    }
+
+    @Test
+    mutating func shareMediaRouteWithRoom() async throws {
+        try await process(route: .event(eventID: "1", roomID: "1", via: []), expectedChatsState: .roomList(detailState: .room(roomID: "1")))
+        #expect(detailNavigationStack?.rootCoordinator is RoomScreenCoordinator)
+        #expect(tabCoordinator?.sheetCoordinator == nil)
+        #expect(chatsSplitCoordinator?.sheetCoordinator == nil)
+
+        let sharePayload: ShareExtensionPayload = .mediaFiles(roomID: "2", mediaFiles: [.init(url: .picturesDirectory, suggestedName: nil)])
+        try await process(route: .share(sharePayload),
+                          expectedChatsState: .roomList(detailState: .room(roomID: "2")))
+
+        #expect(detailNavigationStack?.rootCoordinator is RoomScreenCoordinator)
+        #expect(tabCoordinator?.sheetCoordinator == nil)
+        #expect((chatsSplitCoordinator?.sheetCoordinator as? NavigationStackCoordinator)?.rootCoordinator is MediaUploadPreviewScreenCoordinator)
+    }
+
+    @Test
+    mutating func shareTextRouteWithoutRoom() async throws {
+        try await process(route: .settings, expectedUserSessionState: .settingsScreen)
+        #expect((tabCoordinator?.sheetCoordinator as? NavigationStackCoordinator)?.rootCoordinator is SettingsScreenCoordinator)
+        #expect(chatsSplitCoordinator?.sheetCoordinator == nil)
+
+        let sharePayload: ShareExtensionPayload = .text(roomID: nil, text: "Important Text")
+        try await process(route: .share(sharePayload),
+                          expectedUserSessionState: .tabBar,
+                          expectedChatsState: .shareExtensionRoomList(sharePayload: sharePayload))
+        #expect(tabCoordinator?.sheetCoordinator == nil)
+        #expect((chatsSplitCoordinator?.sheetCoordinator as? NavigationStackCoordinator)?.rootCoordinator is RoomSelectionScreenCoordinator)
+    }
+
+    @Test
+    mutating func shareTextRouteWithRoom() async throws {
+        try await process(route: .event(eventID: "1", roomID: "1", via: []), expectedChatsState: .roomList(detailState: .room(roomID: "1")))
+        #expect(detailNavigationStack?.rootCoordinator is RoomScreenCoordinator)
+        #expect(tabCoordinator?.sheetCoordinator == nil)
+        #expect(chatsSplitCoordinator?.sheetCoordinator == nil)
+
+        let sharePayload: ShareExtensionPayload = .text(roomID: "2", text: "Important text")
+        try await process(route: .share(sharePayload),
+                          expectedChatsState: .roomList(detailState: .room(roomID: "2")))
+
+        #expect(detailNavigationStack?.rootCoordinator is RoomScreenCoordinator)
+        #expect(tabCoordinator?.sheetCoordinator == nil)
+        #expect(chatsSplitCoordinator?.sheetCoordinator == nil, "The media upload sheet shouldn't be shown when sharing text.")
+    }
+
+    // MARK: Indicators
+
+    @Test
+    func reachabilityIndicators() async throws {
+        // Given a flow in its initial state.
+        try await Task.sleep(for: .milliseconds(100))
+
+        // Then no reachability indicators should be shown.
+        #expect(!userIndicatorController.submitIndicatorDelayCalled)
+        #expect(retractReachabilityIndicatorCallsCount == 1) // The initial state removes the indicator.
+
+        // When the homeserver becomes unreachable.
+        homeserverReachabilitySubject.send(.unreachable)
+        try await Task.sleep(for: .milliseconds(100))
+
+        // Then a server unreachable indicator should be shown.
+        #expect(userIndicatorController.submitIndicatorDelayCallsCount == 1)
+        #expect(userIndicatorController.submitIndicatorDelayReceivedArguments?.indicator.title == L10n.commonServerUnreachable)
+        #expect(retractReachabilityIndicatorCallsCount == 1)
+
+        // When the network also becomes unreachable.
+        networkReachabilitySubject.send(.unreachable)
+        try await Task.sleep(for: .milliseconds(100))
+
+        // Then the server unreachable indicator should be replaced with an offline indicator.
+        #expect(userIndicatorController.submitIndicatorDelayCallsCount == 2)
+        #expect(userIndicatorController.submitIndicatorDelayReceivedArguments?.indicator.title == L10n.commonOffline)
+        #expect(retractReachabilityIndicatorCallsCount == 1)
+
+        // When the homeserver becomes reachable again.
+        homeserverReachabilitySubject.send(.reachable)
+        try await Task.sleep(for: .milliseconds(100))
+
+        // Then there should still be an offline indicator (as we don't yet support air-gapped servers on iOS).
+        #expect(userIndicatorController.submitIndicatorDelayCallsCount == 3)
+        #expect(userIndicatorController.submitIndicatorDelayReceivedArguments?.indicator.title == L10n.commonOffline)
+        #expect(retractReachabilityIndicatorCallsCount == 1)
+
+        // When the network becomes reachable again.
+        networkReachabilitySubject.send(.reachable)
+        try await Task.sleep(for: .milliseconds(100))
+
+        // Then the indicator should be hidden now as everything is back to normal
+        #expect(userIndicatorController.submitIndicatorDelayCallsCount == 3)
+        #expect(retractReachabilityIndicatorCallsCount == 2)
+    }
+
+    // MARK: - Helpers
+
+    private mutating func process(route: AppRoute,
+                                  expectedUserSessionState: UserSessionFlowCoordinator.State? = nil,
+                                  expectedChatsState: ChatsTabFlowCoordinatorStateMachine.State? = nil) async throws {
+        let deferredUserSession: DeferredFulfillment<UserSessionFlowCoordinator.State>? = if let expectedUserSessionState {
+            deferFulfillment(stateMachineFactory.userSessionFlowStatePublisher.delay(for: .milliseconds(100), scheduler: DispatchQueue.main)) {
+                $0 == expectedUserSessionState
+            }
+        } else {
+            nil
+        }
+
+        let deferredChatsState: DeferredFulfillment<ChatsTabFlowCoordinatorStateMachine.State>? = if let expectedChatsState {
+            deferFulfillment(stateMachineFactory.chatsTabFlowStatePublisher.delay(for: .milliseconds(100), scheduler: DispatchQueue.main)) {
+                $0 == expectedChatsState
+            }
+        } else {
+            nil
+        }
+
+        userSessionFlowCoordinator.handleAppRoute(route, animated: true)
+        try await deferredUserSession?.fulfill()
+        try await deferredChatsState?.fulfill()
+    }
+
+    /// Other services retract indicators, so this filters based on the reachability ID.
+    private var retractReachabilityIndicatorCallsCount: Int {
+        userIndicatorController
+            .retractIndicatorWithIdReceivedInvocations
+            .filter { $0 == "io.element.elementx.reachability.notification" }
+            .count
+    }
+
+    private func incomingCallRoomSummary(id: String,
+                                         hasOngoingCall: Bool = true,
+                                         activeRoomCallParticipants: [String] = ["@caller:junchat.yyzs120.cn"]) -> RoomSummary {
+        RoomSummary(room: RoomSDKMock(),
+                    id: id,
+                    joinRequestType: nil,
+                    name: "测试用户 2",
+                    isDirect: true,
+                    isSpace: false,
+                    avatarURL: nil,
+                    heroes: [],
+                    activeMembersCount: 2,
+                    lastMessage: nil,
+                    lastMessageDate: .mock,
+                    lastMessageState: nil,
+                    unreadMessagesCount: 0,
+                    unreadMentionsCount: 0,
+                    unreadNotificationsCount: 0,
+                    notificationMode: .allMessages,
+                    canonicalAlias: nil,
+                    alternativeAliases: [],
+                    hasOngoingCall: hasOngoingCall,
+                    activeCallIntent: .audio,
+                    activeRoomCallParticipants: activeRoomCallParticipants,
+                    isMarkedUnread: false,
+                    isFavourite: false,
+                    isTombstoned: false)
+    }
+
+    private func makeCommonFlowParameters(userSession: UserSessionProtocol,
+                                          appSettings: AppSettings) -> CommonFlowParameters {
+        CommonFlowParameters(userSession: userSession,
+                             bugReportService: BugReportServiceMock(.init()),
+                             elementCallService: ElementCallServiceMock(.init()),
+                             timelineControllerFactory: TimelineControllerFactoryMock(.init()),
+                             emojiProvider: EmojiProvider(appSettings: appSettings),
+                             linkMetadataProvider: LinkMetadataProvider(),
+                             appMediator: AppMediatorMock.default,
+                             appSettings: appSettings,
+                             appHooks: AppHooks(),
+                             analytics: AnalyticsService(client: AnalyticsClientMock(), appSettings: appSettings),
+                             userIndicatorController: UserIndicatorControllerMock(),
+                             notificationManager: NotificationManagerMock(),
+                             stateMachineFactory: PublishedStateMachineFactory())
+    }
+}

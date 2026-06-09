@@ -1,0 +1,93 @@
+//
+// Copyright 2025 Element Creations Ltd.
+// Copyright 2023-2025 New Vector Ltd.
+//
+// SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial.
+// Please see LICENSE files in the repository root for full details.
+//
+
+@testable import ElementX
+import Foundation
+import Testing
+
+struct DateTests {
+    let calendar = Calendar.current
+    var startOfToday: Date {
+        Calendar.current.startOfDay(for: .now)
+    }
+    
+    var startOfYesterday: Date {
+        // swiftlint: disable:next force_unwrapping
+        Calendar.current.startOfDay(for: Calendar.current.date(byAdding: .day, value: -1, to: .now)!)
+    }
+    
+    @Test
+    func minimalDateFormatting() throws {
+        let today = try #require(calendar.date(byAdding: DateComponents(hour: 9, minute: 30), to: startOfToday))
+        #expect(today.formattedMinimal() == today.formatted(date: .omitted, time: .shortened))
+        
+        let yesterday = try #require(calendar.date(byAdding: .hour, value: 1, to: startOfYesterday))
+        #expect(yesterday.formattedMinimal() == yesterday.formatted(Date.RelativeFormatStyle(presentation: .named, capitalizationContext: .beginningOfSentence)))
+        
+        let nearYesterday = try #require(calendar.date(byAdding: DateComponents(hour: -10), to: today))
+        #expect(nearYesterday.formattedMinimal() == yesterday.formatted(Date.RelativeFormatStyle(presentation: .named, capitalizationContext: .beginningOfSentence)))
+        
+        let threeDaysAgo = try #require(calendar.date(byAdding: .day, value: -3, to: startOfToday))
+        #expect(threeDaysAgo.formattedMinimal() == threeDaysAgo.formatted(.dateTime.weekday(.wide)))
+        
+        let sometimeInTheLastYear = try #require(calendar.date(byAdding: .month, value: -10, to: startOfToday))
+        #expect(sometimeInTheLastYear.formattedMinimal() == sometimeInTheLastYear.formatted(.dateTime.day().month()))
+        
+        let theMillennium = try #require(calendar.date(from: DateComponents(year: 2000, month: 1, day: 1)))
+        #expect(theMillennium.formattedMinimal() == theMillennium.formatted(.dateTime.year().day().month()))
+    }
+    
+    @Test
+    func expirationDateFormatting() throws {
+        // Within 24 hours → show time only
+        let in23Hours = try #require(calendar.date(byAdding: .hour, value: 23, to: .now))
+        #expect(in23Hours.formattedExpiration() == in23Hours.formatted(date: .omitted, time: .shortened))
+        
+        // Just over the 24h boundary → show day and month
+        let in25Hours = try #require(calendar.date(byAdding: .hour, value: 25, to: .now))
+        #expect(in25Hours.formattedExpiration() == in25Hours.formatted(.dateTime.day().month()))
+        
+        // Several months away → show day and month
+        let inSixMonths = try #require(calendar.date(byAdding: .month, value: 6, to: .now))
+        #expect(inSixMonths.formattedExpiration() == inSixMonths.formatted(.dateTime.day().month()))
+        
+        // More than a year away → show year only
+        let inTwoYears = try #require(calendar.date(byAdding: .year, value: 2, to: .now))
+        #expect(inTwoYears.formattedExpiration() == inTwoYears.formatted(.dateTime.year()))
+    }
+    
+    @Test
+    func dateSeparatorFormatting() throws {
+        let today = try #require(calendar.date(byAdding: DateComponents(hour: 9, minute: 30), to: startOfToday))
+        #expect(today.formattedDateSeparator() == relativeDateString(from: today))
+        
+        let yesterday = try #require(calendar.date(byAdding: .hour, value: 1, to: startOfYesterday))
+        #expect(yesterday.formattedDateSeparator() == relativeDateString(from: yesterday))
+        
+        let nearYesterday = try #require(calendar.date(byAdding: DateComponents(hour: -10), to: today))
+        #expect(nearYesterday.formattedDateSeparator() == yesterday.formatted(Date.RelativeFormatStyle(presentation: .named, capitalizationContext: .beginningOfSentence)))
+        
+        let threeDaysAgo = try #require(calendar.date(byAdding: .day, value: -3, to: startOfToday))
+        #expect(threeDaysAgo.formattedDateSeparator() == threeDaysAgo.formatted(.dateTime.weekday(.wide)))
+        
+        // This test will fail during the first 6 days of the year.
+        let startOfTheYear = try #require(calendar.dateInterval(of: .year, for: startOfToday)?.start)
+        #expect(startOfTheYear.formattedDateSeparator() == startOfTheYear.formatted(.dateTime.weekday(.wide).day().month(.wide)))
+        
+        let theMillennium = try #require(calendar.date(from: DateComponents(year: 2000, month: 1, day: 1)))
+        #expect(theMillennium.formattedDateSeparator() == theMillennium.formatted(.dateTime.weekday(.wide).day().month(.wide).year()))
+    }
+    
+    private func relativeDateString(from date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.doesRelativeDateFormatting = true
+        formatter.dateStyle = .long
+        formatter.timeStyle = .none
+        return formatter.string(from: date)
+    }
+}

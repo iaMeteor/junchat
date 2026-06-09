@@ -1,0 +1,13 @@
+"crypto_history_sharing_confirm_invite_dialog_content" = "你当前还没有与这些联系人聊天。继续前请确认是否邀请他们加入此房间。";
+"crypto_history_sharing_confirm_invite_dialog_title" = "邀请新联系人加入此房间？";
+"crypto_history_sharing_confirm_start_chat_dialog_content" = "你当前还没有与此人聊天。继续前请确认是否邀请对方。";
+"crypto_history_sharing_confirm_start_chat_dialog_title" = "开始与这个新联系人聊天？";
+"soft_logout_clear_data_dialog_content" = "要清除此设备上当前存储的所有数据吗？\n重新登录后可访问你的账号数据和消息。";
+"soft_logout_clear_data_dialog_title" = "清除数据";
+"soft_logout_clear_data_notice" = "警告：你的个人数据（包括加密密钥）仍存储在此设备上。\n\n如果你已不再使用此设备，或想登录其他账号，请清除这些数据。";
+"soft_logout_clear_data_submit" = "清除所有数据";
+"soft_logout_clear_data_title" = "清除个人数据";
+"soft_logout_signin_e2e_warning_notice" = "登录以恢复仅存储在此设备上的加密密钥。你需要这些密钥才能在任意设备上读取所有安全消息。";
+"soft_logout_signin_notice" = "你的家服务器（%1$s）管理员已将你从账号 %2$s（%3$s）退出。";
+"soft_logout_signin_title" = "登录";
+"untranslated" = "未翻译";

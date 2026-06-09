@@ -1,0 +1,382 @@
+//
+// Copyright 2026 Element Creations Ltd.
+//
+// SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial.
+// Please see LICENSE files in the repository root for full details.
+//
+
+import Combine
+import CoreLocation
+import Foundation
+
+class LiveLocationManager: NSObject, LiveLocationManagerProtocol, CLLocationManagerDelegate {
+    private let clientProxy: ClientProxyProtocol
+    private let locationManager: CLLocationManagerProtocol
+    private let appSettings: AppSettings
+    private let isLocationSharingEnabled: Bool
+    
+    private let authorizationStatusSubject: CurrentValueSubject<CLAuthorizationStatus, Never>
+    var authorizationStatus: CurrentValuePublisher<CLAuthorizationStatus, Never> {
+        authorizationStatusSubject.asCurrentValuePublisher()
+    }
+    
+    /// Cached joined room proxies keyed by room ID, kept in sync with the active sessions dictionary.
+    private var activeRoomProxies = [String: JoinedRoomProxyProtocol]()
+    
+    /// Subject used to pipe location updates into the backpressure-aware processing loop.
+    private let locationUpdateSubject = PassthroughSubject<CLLocationCoordinate2D, Never>()
+
+    /// The most recent location update waiting to be sent. When a send is already in progress,
+    /// new updates overwrite this value so only the latest is sent once the current send completes.
+    private var latestPendingLocation: CLLocationCoordinate2D?
+
+    /// Whether a location send cycle (send + minimum delay) is currently in progress.
+    private var isProcessingLocationUpdate = false
+
+    private var cancellables = Set<AnyCancellable>()
+    
+    private var isUpdatingLocation = false
+    
+    private var lastLocation: CLLocationCoordinate2D?
+    
+    @MainActor
+    init(clientProxy: ClientProxyProtocol,
+         appSettings: AppSettings,
+         locationSharingEnabled: Bool? = nil,
+         locationManager: @autoclosure @MainActor () -> CLLocationManagerProtocol = DeferredCLLocationManager()) {
+        self.clientProxy = clientProxy
+        self.appSettings = appSettings
+        isLocationSharingEnabled = locationSharingEnabled ?? appSettings.mapTilerConfiguration.isEnabled
+        // Very important, the CLLocationManager needs to be initialised on the main thread
+        // or the delegate functions won't be handled!
+        // https://developer.apple.com/documentation/corelocation/cllocationmanagerdelegate
+        self.locationManager = isLocationSharingEnabled ? locationManager() : DisabledLocationManager()
+        authorizationStatusSubject = CurrentValueSubject(self.locationManager.authorizationStatus)
+        
+        super.init()
+        
+        guard isLocationSharingEnabled else { return }
+        
+        // Configure CLLocationManager for continuous background tracking.
+        self.locationManager.delegate = self
+        if Self.supportsBackgroundLocationUpdates() {
+            self.locationManager.allowsBackgroundLocationUpdates = true
+            self.locationManager.showsBackgroundLocationIndicator = true
+            
+            // Since unpausing location updates is not trivial, let's always keep the location updates running.
+            // The distance filtering will already take care of not sending updates when not required.
+            // https://developer.apple.com/documentation/corelocation/cllocationmanager/pauseslocationupdatesautomatically
+            self.locationManager.pausesLocationUpdatesAutomatically = false
+        }
+        
+        setupMinimumDistanceUpdatesAndAccuracy(minimumDistance: appSettings.liveLocationMinimumDistanceUpdate)
+        setupSubscriptions()
+    }
+
+    // MARK: - LiveLocationManagerProtocol
+    
+    var hasDisplayedLiveLocationDisclaimer: Bool {
+        get {
+            appSettings.liveLocationDisclaimerDisplayed
+        }
+        set {
+            appSettings.liveLocationDisclaimerDisplayed = newValue
+        }
+    }
+    
+    @discardableResult
+    func requestAlwaysAuthorizationIfPossible() -> Bool {
+        guard isLocationSharingEnabled else { return false }
+        guard !appSettings.hasRequestedLocationAlwaysLocationAuthorization else { return false }
+        appSettings.hasRequestedLocationAlwaysLocationAuthorization = true
+        locationManager.requestAlwaysAuthorization()
+        return true
+    }
+    
+    func startLiveLocation(roomID: String, duration: Duration) async -> Result<Void, LiveLocationManagerError> {
+        guard isLocationSharingEnabled else {
+            MXLog.warning("Ignoring live location start request because location sharing is disabled.")
+            return .failure(.startFailed)
+        }
+        
+        // Stop any existing session for this room first
+        var didAlreadyStopLocalSession = false
+        if appSettings.liveLocationSharingTimeoutDatesByRoomID[roomID] != nil {
+            await stopLiveLocation(roomID: roomID)
+            didAlreadyStopLocalSession = true
+        }
+        
+        guard case .joined(let roomProxy) = await clientProxy.roomForIdentifier(roomID) else {
+            MXLog.error("Failed to resolve joined room for identifier: \(roomID)")
+            return .failure(.roomNotJoined)
+        }
+        
+        if !didAlreadyStopLocalSession {
+            // In case an existing session has been started from another device, let's try to stop it.
+            // It's a best effort thing, so we don't care if no session is present or if it fails.
+            _ = await roomProxy.stopLiveLocationShare()
+        }
+        let result = await roomProxy.startLiveLocationShare(duration: duration)
+        
+        guard case .success = result else {
+            MXLog.error("Failed to start live location share in room: \(roomID)")
+            return .failure(.startFailed)
+        }
+        
+        let timeoutDate = Date().addingTimeInterval(TimeInterval(duration.seconds))
+        appSettings.liveLocationSharingTimeoutDatesByRoomID[roomID] = timeoutDate
+        
+        if isUpdatingLocation, let lastLocation {
+            // To make sure the newly started session is in sync with the existing ones,
+            // we re-send the last location received by the manager.
+            // Otherwise we would need to wait a distance filtered update.
+            locationUpdateSubject.send(lastLocation)
+        }
+        
+        return .success(())
+    }
+    
+    func stopLiveLocation(roomID: String) async {
+        var roomProxy: JoinedRoomProxyProtocol?
+        let cachedRoomProxy = activeRoomProxies[roomID]
+        appSettings.liveLocationSharingTimeoutDatesByRoomID.removeValue(forKey: roomID)
+        
+        guard isLocationSharingEnabled else { return }
+        
+        if let cachedRoomProxy {
+            roomProxy = cachedRoomProxy
+            // Best effort: send the stop event to the room regardless of tracking state.
+        } else if case let .joined(fetchedRoomProxy) = await clientProxy.roomForIdentifier(roomID) {
+            roomProxy = fetchedRoomProxy
+        }
+        
+        if let roomProxy {
+            let result = await roomProxy.stopLiveLocationShare()
+            if case .failure(let error) = result {
+                MXLog.error("Failed to stop live location share in room \(roomID): \(error)")
+            }
+        }
+    }
+    
+    // MARK: - CLLocationManagerDelegate
+    
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        // If the system resets authorization to notDetermined (e.g. after app reinstall or
+        // settings reset), clear the flag so we can request again.
+        if manager.authorizationStatus == .notDetermined {
+            appSettings.hasRequestedLocationAlwaysLocationAuthorization = false
+        }
+        
+        // If authorization was revoked, stop all active sessions. Junchat only needs
+        // foreground live sharing, so "when in use" is enough and avoids App Store
+        // background-location requirements.
+        if manager.authorizationStatus != .authorizedAlways,
+           manager.authorizationStatus != .authorizedWhenInUse {
+            stopAllSessions()
+        }
+        
+        // Accuracy authorization may have changed, reapply new accuracy settings.
+        setupMinimumDistanceUpdatesAndAccuracy(minimumDistance: appSettings.liveLocationMinimumDistanceUpdate)
+        
+        authorizationStatusSubject.send(manager.authorizationStatus)
+    }
+    
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard let location = locations.last else { return }
+        
+        MXLog.verbose("Received location update via delegate, sending to rooms")
+        locationUpdateSubject.send(location.coordinate)
+        lastLocation = location.coordinate
+    }
+    
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        MXLog.error("Location manager failed with error: \(error)")
+        stopAllSessions()
+    }
+    
+    // MARK: - Private
+    
+    private static func supportsBackgroundLocationUpdates(bundle: Bundle = .main) -> Bool {
+        guard let backgroundModes = bundle.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String] else {
+            return false
+        }
+        
+        return backgroundModes.contains("location")
+    }
+    
+    private func setupSubscriptions() {
+        locationUpdateSubject
+            .sink { [weak self] update in
+                guard let self else { return }
+                latestPendingLocation = update
+                processLocationUpdateIfNeeded()
+            }
+            .store(in: &cancellables)
+        
+        appSettings.$liveLocationSharingTimeoutDatesByRoomID
+            .removeDuplicates()
+            .sink { [weak self] sessions in
+                guard let self else { return }
+                syncActiveRoomProxies(with: sessions)
+                
+                if sessions.isEmpty {
+                    self.stopUpdatingLocation()
+                } else {
+                    self.startUpdatingLocation()
+                }
+            }
+            .store(in: &cancellables)
+        
+        appSettings.$liveLocationMinimumDistanceUpdate
+            .removeDuplicates()
+            .debounce(for: .seconds(1), scheduler: DispatchQueue.main)
+            .sink { [weak self] newValue in
+                self?.setupMinimumDistanceUpdatesAndAccuracy(minimumDistance: newValue)
+            }
+            .store(in: &cancellables)
+    }
+    
+    private func syncActiveRoomProxies(with sessions: [String: Date]) {
+        // Remove proxies for rooms no longer in the dictionary.
+        let activeRoomIDs = Set(sessions.keys)
+        for roomID in activeRoomProxies.keys where !activeRoomIDs.contains(roomID) {
+            activeRoomProxies.removeValue(forKey: roomID)
+        }
+    }
+    
+    /// Sets up the distance filter and the most optimal accuracy given the minimum distance to save battery.
+    private func setupMinimumDistanceUpdatesAndAccuracy(minimumDistance: Int) {
+        if locationManager.accuracyAuthorization == .fullAccuracy {
+            switch minimumDistance {
+            case 0..<10:
+                locationManager.desiredAccuracy = kCLLocationAccuracyBest
+            case 10..<100:
+                locationManager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
+            default:
+                locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+            }
+        } else {
+            locationManager.desiredAccuracy = kCLLocationAccuracyReduced
+        }
+        locationManager.distanceFilter = CLLocationDistance(minimumDistance)
+    }
+    
+    private func startUpdatingLocation() {
+        guard !isUpdatingLocation else { return }
+        
+        MXLog.info("Starting live location updates")
+        isUpdatingLocation = true
+        locationManager.startUpdatingLocation()
+    }
+    
+    private func stopUpdatingLocation() {
+        guard isUpdatingLocation else { return }
+        
+        MXLog.info("Stopping live location updates")
+        locationManager.stopUpdatingLocation()
+        isUpdatingLocation = false
+        lastLocation = nil
+    }
+    
+    /// Kicks off a send cycle if one isn't already running. Each cycle:
+    /// 1. Takes the latest pending location and clears it.
+    /// 2. Sends the location to all active rooms **and** waits a minimum 3-second delay (in parallel).
+    /// 3. After both complete, checks for a new pending location and loops if one exists.
+    /// This ensures at least 3 seconds or the send duration itself between consecutive sends,
+    /// discarding any intermediate updates while always keeping the last one.
+    private func processLocationUpdateIfNeeded() {
+        guard !isProcessingLocationUpdate, let location = latestPendingLocation else { return }
+        guard !appSettings.liveLocationSharingTimeoutDatesByRoomID.isEmpty else { return }
+
+        latestPendingLocation = nil
+        isProcessingLocationUpdate = true
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            
+            // Wait for both the send and the minimum throttle interval.
+            // This guarantees at least 3 seconds between sends, plus the full send duration.
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask { [weak self] in
+                    await self?.sendLocationToActiveRooms(location)
+                }
+                group.addTask {
+                    try? await Task.sleep(for: .seconds(3))
+                }
+            }
+            
+            isProcessingLocationUpdate = false
+            processLocationUpdateIfNeeded()
+        }
+    }
+
+    private func sendLocationToActiveRooms(_ coordinate: CLLocationCoordinate2D) async {
+        let sessions = appSettings.liveLocationSharingTimeoutDatesByRoomID
+        let geoURI = GeoURI(coordinate: coordinate, uncertainty: nil)
+        
+        for (roomID, timeoutDate) in sessions {
+            if Date() >= timeoutDate {
+                MXLog.info("Live location session expired for room: \(roomID)")
+                await stopLiveLocation(roomID: roomID)
+                continue
+            }
+            
+            let roomProxy = await resolveRoomProxy(for: roomID)
+            guard let roomProxy else {
+                MXLog.error("Failed to resolve room proxy for live location update in room: \(roomID)")
+                continue
+            }
+            
+            switch await roomProxy.sendLiveLocation(geoURI: geoURI) {
+            case .success:
+                MXLog.debug("Sent live location to room: \(roomID)")
+            case .failure(let error):
+                switch error {
+                case .liveLocationSessionIsNotActive:
+                    MXLog.error("Failed to send live locatio update to room \(roomID): session not active")
+                    await stopLiveLocation(roomID: roomID)
+                default:
+                    MXLog.error("Failed to send live location update to room \(roomID): \(error)")
+                }
+            }
+        }
+    }
+    
+    private func resolveRoomProxy(for roomID: String) async -> JoinedRoomProxyProtocol? {
+        if let cached = activeRoomProxies[roomID] {
+            return cached
+        }
+        
+        guard case .joined(let roomProxy) = await clientProxy.roomForIdentifier(roomID) else {
+            return nil
+        }
+        
+        activeRoomProxies[roomID] = roomProxy
+        return roomProxy
+    }
+    
+    private func stopAllSessions() {
+        let roomIDs = Array(appSettings.liveLocationSharingTimeoutDatesByRoomID.keys)
+        Task { [weak self] in
+            guard let self else { return }
+            for roomID in roomIDs {
+                await stopLiveLocation(roomID: roomID)
+            }
+        }
+    }
+}
+
+private final class DisabledLocationManager: CLLocationManagerProtocol {
+    weak var delegate: CLLocationManagerDelegate?
+    var allowsBackgroundLocationUpdates = false
+    var showsBackgroundLocationIndicator = false
+    var desiredAccuracy: CLLocationAccuracy = kCLLocationAccuracyReduced
+    var distanceFilter: CLLocationDistance = kCLDistanceFilterNone
+    var pausesLocationUpdatesAutomatically = true
+    var authorizationStatus: CLAuthorizationStatus { .denied }
+    var accuracyAuthorization: CLAccuracyAuthorization { .reducedAccuracy }
+    
+    func requestAlwaysAuthorization() { }
+    func startUpdatingLocation() { }
+    func stopUpdatingLocation() { }
+}

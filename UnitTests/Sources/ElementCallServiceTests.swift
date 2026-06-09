@@ -1,0 +1,207 @@
+//
+// Copyright 2025 New Vector Ltd.
+//
+// SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
+// Please see LICENSE files in the repository root for full details.
+//
+
+import Clocks
+@testable import ElementX
+import PushKit
+import Testing
+
+@MainActor
+final class ElementCallServiceTests {
+    private var callProvider: CXProviderMock!
+    private var currentDate: Date!
+    private var testClock: TestClock<Duration>!
+    private var pushRegistry: PKPushRegistry!
+    private var service: ElementCallService!
+    
+    init() {
+        pushRegistry = PKPushRegistry(queue: nil)
+        callProvider = CXProviderMock(.init())
+        currentDate = Date()
+        testClock = TestClock()
+        let dateProvider: () -> Date = {
+            self.currentDate
+        }
+        service = ElementCallService(callProvider: callProvider, timeProvider: TimeProvider(clock: testClock, now: dateProvider))
+    }
+    
+    deinit {
+        callProvider = nil
+        currentDate = nil
+        testClock = nil
+        pushRegistry = nil
+    }
+    
+    @Test
+    func incomingCall() async {
+        #expect(!callProvider.reportNewIncomingCallWithUpdateCompletionCalled)
+        
+        await confirmation { confirmation in
+            let pkPushPayloadMock = PKPushPayloadMock().updatingExpiration(currentDate, lifetime: 30)
+            
+            service.pushRegistry(pushRegistry, didReceiveIncomingPushWith: pkPushPayloadMock, for: .voIP) {
+                confirmation()
+            }
+        }
+        
+        #expect(callProvider.reportNewIncomingCallWithUpdateCompletionCalled)
+        // Verify the provider was called with a CXCallUpdate that has video enabled
+        if let args = callProvider.reportNewIncomingCallWithUpdateCompletionReceivedArguments {
+            #expect(args.update.hasVideo == true)
+        } else {
+            Issue.record("Expected reportNewIncomingCallWithUpdateCompletionReceivedArguments to be captured")
+        }
+    }
+    
+    @Test
+    func incomingVoiceCall() async {
+        #expect(!callProvider.reportNewIncomingCallWithUpdateCompletionCalled)
+        
+        await confirmation { confirmation in
+            let pkPushPayloadMock = PKPushPayloadMock().updatingExpiration(currentDate, lifetime: 30)
+                .updateIsVoice(true)
+            
+            service.pushRegistry(pushRegistry, didReceiveIncomingPushWith: pkPushPayloadMock, for: .voIP) {
+                confirmation()
+            }
+        }
+        
+        #expect(callProvider.reportNewIncomingCallWithUpdateCompletionCalled)
+        // Verify the provider was called with a CXCallUpdate that has video enabled
+        if let args = callProvider.reportNewIncomingCallWithUpdateCompletionReceivedArguments {
+            // Due to a limitation on Callkit and Webviews, we currently have to report voice calls as having video,
+            // even if they are voice calls :/ If not the webview is not started and the call is not shown to the user.
+            #expect(args.update.hasVideo == true)
+        } else {
+            Issue.record("Expected reportNewIncomingCallWithUpdateCompletionReceivedArguments to be captured")
+        }
+    }
+
+    @Test
+    func acceptingIncomingCallStopsCallKitRingingImmediately() async {
+        await confirmation { confirmation in
+            let pkPushPayloadMock = PKPushPayloadMock().updatingExpiration(currentDate, lifetime: 30)
+                .updateIsVoice(true)
+            
+            service.pushRegistry(pushRegistry, didReceiveIncomingPushWith: pkPushPayloadMock, for: .voIP) {
+                confirmation()
+            }
+        }
+        
+        #expect(service.incomingCallRoomIDPublisher.value == "!room:example.com")
+        #expect(!callProvider.reportCallWithEndedAtReasonCalled)
+        
+        await service.acceptIncomingCall(roomID: "!room:example.com", isVoiceCall: true)
+        
+        #expect(callProvider.reportCallWithEndedAtReasonCalled)
+        #expect(callProvider.reportCallWithEndedAtReasonReceivedArguments?.reason == .remoteEnded)
+        #expect(callProvider.reportCallWithEndedAtReasonCallsCount == 1)
+        #expect(service.incomingCallRoomIDPublisher.value == nil)
+        
+        await service.setupCallSession(roomID: "!room:example.com", roomDisplayName: "welcome")
+        
+        #expect(callProvider.reportCallWithEndedAtReasonCallsCount == 1)
+        #expect(service.incomingCallRoomIDPublisher.value == nil)
+        #expect(service.ongoingCallRoomIDPublisher.value == "!room:example.com")
+    }
+    
+    @Test(.disabled())
+    func callIsTimingOut() async {
+        #expect(!callProvider.reportNewIncomingCallWithUpdateCompletionCalled)
+        
+        await confirmation { confirmation in
+            let pushPayload = PKPushPayloadMock().updatingExpiration(currentDate, lifetime: 20)
+            
+            service.pushRegistry(pushRegistry,
+                                 didReceiveIncomingPushWith: pushPayload,
+                                 for: .voIP) {
+                confirmation()
+            }
+        }
+        
+        await confirmation { confirmation in
+            callProvider.reportCallWithEndedAtReasonClosure = { _, _, reason in
+                if reason == .unanswered {
+                    confirmation()
+                } else {
+                    Issue.record("Call should have ended as unanswered")
+                }
+            }
+            
+            // advance past the timeout
+            await testClock.advance(by: .seconds(30))
+        }
+    }
+    
+    @Test
+    func expiredRingLifetimeIsIgnored() async {
+        #expect(!callProvider.reportNewIncomingCallWithUpdateCompletionCalled)
+        
+        let pushPayload = PKPushPayloadMock().updatingExpiration(currentDate, lifetime: 20)
+        
+        currentDate = currentDate.addingTimeInterval(60)
+        
+        await confirmation { confirmation in
+            service.pushRegistry(pushRegistry,
+                                 didReceiveIncomingPushWith: pushPayload,
+                                 for: .voIP) {
+                confirmation()
+            }
+        }
+        
+        #expect(!callProvider.reportNewIncomingCallWithUpdateCompletionCalled)
+    }
+    
+    @Test
+    func lifetimeIsCapped() async {
+        await confirmation { confirmation in
+            callProvider.reportCallWithEndedAtReasonClosure = { _, _, reason in
+                if reason == .unanswered {
+                    confirmation()
+                } else {
+                    Issue.record("Call should have ended as unanswered")
+                }
+            }
+            
+            #expect(!callProvider.reportNewIncomingCallWithUpdateCompletionCalled)
+            
+            let pushPayload = PKPushPayloadMock().updatingExpiration(currentDate, lifetime: 300)
+            
+            service.pushRegistry(pushRegistry,
+                                 didReceiveIncomingPushWith: pushPayload,
+                                 for: .voIP) { }
+            
+            // Advance past the max timeout but below the 300
+            await testClock.advance(by: .seconds(100))
+        }
+    }
+}
+
+private class PKPushPayloadMock: PKPushPayload {
+    var dict: [AnyHashable: Any] = [:]
+    
+    override init() {
+        dict[ElementCallServiceNotificationKey.roomID.rawValue] = "!room:example.com"
+        dict[ElementCallServiceNotificationKey.roomDisplayName.rawValue] = "welcome"
+        dict[ElementCallServiceNotificationKey.rtcNotifyEventID.rawValue] = "$000"
+        dict[ElementCallServiceNotificationKey.expirationDate.rawValue] = Date(timeIntervalSince1970: 10)
+    }
+    
+    override var dictionaryPayload: [AnyHashable: Any] {
+        dict
+    }
+    
+    func updatingExpiration(_ from: Date, lifetime: TimeInterval) -> Self {
+        dict[ElementCallServiceNotificationKey.expirationDate.rawValue] = from.addingTimeInterval(lifetime)
+        return self
+    }
+    
+    func updateIsVoice(_ isVoice: Bool) -> Self {
+        dict[ElementCallServiceNotificationKey.isVoiceCall.rawValue] = isVoice
+        return self
+    }
+}

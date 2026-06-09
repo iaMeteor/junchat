@@ -1,0 +1,7 @@
+settings:
+  APP_DISPLAY_NAME: 君聊
+  PRODUCTION_APP_NAME: Junchat
+  APP_GROUP_IDENTIFIER: group.com.heyujk.junchat
+  BASE_BUNDLE_IDENTIFIER: com.heyujk.junchat
+  ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: "colors/accent-color"
+  DEVELOPMENT_TEAM: W834S4TA7S

@@ -1,0 +1,6 @@
+"NSCameraUsageDescription" = "要拍攝照片或影片並作為訊息傳送，君聊需要相機權限。";
+"NSFaceIDUsageDescription" = "Face ID 用於存取您的應用程式。";
+"NSLocationAlwaysAndWhenInUseUsageDescription" = "君聊僅在您主動使用位置相關功能時存取位置資訊，用於傳送目前位置或即時位置共享。未使用該功能時不會存取您的定位。";
+"NSLocationWhenInUseUsageDescription" = "君聊僅在您主動使用位置相關功能時存取位置資訊，用於傳送目前位置或查看位置訊息。未使用該功能時不會存取您的定位。";
+"NSMicrophoneUsageDescription" = "要錄製並傳送包含音訊的訊息，君聊需要麥克風權限。";
+"NSPhotoLibraryUsageDescription" = "這讓您可以將圖片與影片儲存至媒體庫中。";

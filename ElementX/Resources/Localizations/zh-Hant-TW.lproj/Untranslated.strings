@@ -1,0 +1,13 @@
+"crypto_history_sharing_confirm_invite_dialog_content" = "你目前還沒有與這些聯絡人聊天。繼續前請確認是否邀請他們加入此聊天室。";
+"crypto_history_sharing_confirm_invite_dialog_title" = "邀請新聯絡人加入此聊天室？";
+"crypto_history_sharing_confirm_start_chat_dialog_content" = "你目前還沒有與此人聊天。繼續前請確認是否邀請對方。";
+"crypto_history_sharing_confirm_start_chat_dialog_title" = "開始與這個新聯絡人聊天？";
+"soft_logout_clear_data_dialog_content" = "要清除此裝置上目前儲存的所有資料嗎？\n重新登入後可存取你的帳號資料和訊息。";
+"soft_logout_clear_data_dialog_title" = "清除資料";
+"soft_logout_clear_data_notice" = "警告：你的個人資料（包括加密金鑰）仍儲存在此裝置上。\n\n如果你已不再使用此裝置，或想登入其他帳號，請清除這些資料。";
+"soft_logout_clear_data_submit" = "清除所有資料";
+"soft_logout_clear_data_title" = "清除個人資料";
+"soft_logout_signin_e2e_warning_notice" = "登入以復原僅儲存在此裝置上的加密金鑰。你需要這些金鑰才能在任意裝置上讀取所有安全訊息。";
+"soft_logout_signin_notice" = "你的家伺服器（%1$s）管理員已將你從帳號 %2$s（%3$s）登出。";
+"soft_logout_signin_title" = "登入";
+"untranslated" = "未翻譯";

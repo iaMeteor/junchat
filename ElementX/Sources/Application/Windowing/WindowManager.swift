@@ -1,0 +1,246 @@
+//
+// Copyright 2025 Element Creations Ltd.
+// Copyright 2023-2025 New Vector Ltd.
+//
+// SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial.
+// Please see LICENSE files in the repository root for full details.
+//
+
+import Combine
+import SwiftUI
+
+class WindowManager: SecureWindowManagerProtocol {
+    private let appDelegate: AppDelegate
+    weak var mainScene: UIWindowScene?
+    weak var mainSession: UISceneSession?
+    weak var delegate: SecureWindowManagerDelegate?
+    
+    private(set) var mainWindow: UIWindow!
+    private(set) var overlayWindow: UIWindow!
+    private(set) var globalSearchWindow: UIWindow!
+    private(set) var alternateWindow: UIWindow!
+    
+    private(set) var openWindowAction: OpenWindowAction!
+    private(set) var dismissWindowAction: DismissWindowAction!
+    
+    var secondaryWindowsEnabled = true {
+        didSet {
+            if secondaryWindowsEnabled == false {
+                closeAllSecondaryWindows()
+            }
+        }
+    }
+        
+    var windows: [UIWindow] {
+        [mainWindow, overlayWindow, globalSearchWindow, alternateWindow]
+    }
+    
+    // periphery:ignore - auto cancels when reassigned
+    /// The task used to switch windows, so that we don't get stuck in the wrong state with a quick switch.
+    @CancellableTask private var switchTask: Task<Void, Error>?
+    /// A duration that allows window switching to wait a couple of frames to avoid a transition through black.
+    private let windowHideDelay = Duration.milliseconds(33)
+    
+    private var coordinators: [SecondaryWindowType: (coordinator: CoordinatorProtocol, flowCoordinator: FlowCoordinatorProtocol?)] = [:]
+    
+    init(appDelegate: AppDelegate) {
+        self.appDelegate = appDelegate
+    }
+    
+    func configure(withScene scene: UIWindowScene, session: UISceneSession) {
+        // This gets called for all opened windows, we're only interested in the
+        // first call, for the main window (works with state restoration too).
+        guard mainWindow == nil else {
+            return
+        }
+        
+        mainScene = scene
+        mainSession = session
+        
+        mainWindow = scene.keyWindow
+        mainWindow.tintColor = .compound.textActionPrimary
+        
+        overlayWindow = PassthroughWindow(windowScene: scene)
+        overlayWindow.tintColor = .compound.textActionPrimary
+        overlayWindow.backgroundColor = .clear
+        overlayWindow.isHidden = false
+        
+        globalSearchWindow = UIWindow(windowScene: scene)
+        globalSearchWindow.tintColor = .compound.textActionPrimary
+        globalSearchWindow.backgroundColor = .clear
+        globalSearchWindow.isHidden = true
+        
+        alternateWindow = UIWindow(windowScene: scene)
+        alternateWindow.tintColor = .compound.textActionPrimary
+        
+        delegate?.windowManagerDidConfigureWindows(self)
+    }
+    
+    func configure(withOpenWinddowAction openWindowAction: OpenWindowAction,
+                   dismissWindowAction: DismissWindowAction) {
+        self.openWindowAction = openWindowAction
+        self.dismissWindowAction = dismissWindowAction
+    }
+    
+    func handleRoute(_ appRoute: AppRoute, windowType: SecondaryWindowType) {
+        if let flowCoordinator = coordinators[windowType]?.flowCoordinator {
+            flowCoordinator.handleAppRoute(appRoute, animated: true)
+        }
+    }
+    
+    func switchToMain() {
+        mainWindow.isHidden = false
+        overlayWindow.isHidden = false
+        
+        mainWindow.makeKey()
+        
+        switchTask = Task {
+            // Delay hiding to make sure the main windows are visible.
+            try await Task.sleep(for: windowHideDelay)
+            
+            alternateWindow.isHidden = true
+        }
+    }
+    
+    func switchToAlternate() {
+        alternateWindow.isHidden = false
+        
+        // We don't know what route the app will use when returning back
+        // to the main window, so end any editing operation now to avoid
+        // e.g. the keyboard being displayed on top of a call sheet.
+        mainWindow.endEditing(true)
+        
+        hideGlobalSearch()
+        
+        // alternateWindow.isHidden = false cannot got inside the Task otherwise the timing
+        // is poor when you lock the phone - you briefly see the main window for a few
+        // frames after you've unlocked the phone and then the placeholder animates in.
+        switchTask = Task {
+            // Delay hiding to make sure the alternate window is visible.
+            try await Task.sleep(for: windowHideDelay)
+            
+            mainWindow.isHidden = true
+            overlayWindow.isHidden = true
+            globalSearchWindow.isHidden = true
+        }
+    }
+    
+    func showGlobalSearch() {
+        guard alternateWindow.isHidden else {
+            return
+        }
+        
+        if let mainSession {
+            let request = UISceneSessionActivationRequest(session: mainSession)
+            UIApplication.shared.activateSceneSession(for: request) { error in
+                MXLog.error("Failed to focus window with error: \(error)")
+            }
+        }
+        
+        globalSearchWindow.isHidden = false
+        globalSearchWindow.makeKeyAndVisible()
+    }
+    
+    func hideGlobalSearch() {
+        guard alternateWindow.isHidden else {
+            return
+        }
+        
+        globalSearchWindow.isHidden = true
+        mainWindow.makeKey()
+    }
+    
+    // MARK: - OrientationManager
+    
+    func setOrientation(_ orientation: UIInterfaceOrientationMask) {
+        mainScene?.requestGeometryUpdate(.iOS(interfaceOrientations: orientation))
+    }
+    
+    func lockOrientation(_ orientation: UIInterfaceOrientationMask) {
+        appDelegate.orientationLock = orientation
+    }
+    
+    // MARK: - Secondary window support
+    
+    func windowForType(_ type: SecondaryWindowType) -> AnyView {
+        guard let coordinator = coordinators[type]?.coordinator else {
+            return AnyView(InstantlyDismissingWindow())
+        }
+        
+        // This behaves strangely and gets called late but cleans up enough
+        // and is self contained enough to be just good .. enough
+        return AnyView(coordinator.toPresentable().onDisappear { [weak self] in
+            self?.coordinators[type] = nil
+        })
+    }
+    
+    func registerCoordinator(_ coordinator: CoordinatorProtocol, flowCoordinator: FlowCoordinatorProtocol?, forWindowType type: SecondaryWindowType) {
+        if secondaryWindowsEnabled == false {
+            MXLog.error("Cannot register coordinator, secondary windows are disabled.")
+            return
+        }
+        
+        coordinators[type] = (coordinator, flowCoordinator)
+        openWindowAction(value: type)
+    }
+    
+    func closeSecondaryWindow(forType type: SecondaryWindowType) {
+        dismissWindowAction(value: type)
+    }
+    
+    func closeAllSecondaryWindows() {
+        for key in coordinators.keys {
+            dismissWindowAction(value: key)
+        }
+        
+        coordinators.removeAll()
+    }
+}
+
+private class PassthroughWindow: UIWindow {
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        if #available(iOS 26, *) {
+            // Passthrough UIWindow using SwiftUI in iOS 26
+            // https://stackoverflow.com/a/79835964/730924
+            guard let rootView = rootViewController?.view else {
+                return nil
+            }
+            
+            // Special handling for glass buttons
+            // ".glass has a layer name of "@1" and and .glassProminent has a layer name of "@2""
+            guard let name = rootView.layer.hitTest(point)?.name, !name.starts(with: "@") else {
+                return rootView
+            }
+            
+            return nil
+        } else {
+            guard let hitView = super.hitTest(point, with: event) else {
+                return nil
+            }
+            
+            guard let rootViewController else {
+                return nil
+            }
+            
+            guard hitView != self else {
+                return nil
+            }
+            
+            // If the returned view is the `UIHostingController`'s view, ignore.
+            return rootViewController.view == hitView ? nil : hitView
+        }
+    }
+}
+
+/// Whenever restoring an app SwiftUI tries to restore its windows as well
+/// which we're generally not prepared for so use this to just close them instead
+private struct InstantlyDismissingWindow: View {
+    @Environment(\.dismissWindow) var dismissWindow
+    
+    var body: some View {
+        Rectangle()
+            .task {
+                dismissWindow()
+            }
+    }
+}
