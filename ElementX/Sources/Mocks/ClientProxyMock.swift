@@ -102,6 +102,7 @@ extension ClientProxyMock {
         junchatContactsReturnValue = .success([])
         junchatHideFromContactsDirectoryReturnValue = .success(false)
         setJunchatHideFromContactsDirectoryReturnValue = .success(())
+        junchatPrivacyModeRoomIDReturnValue = .success(false)
         setJunchatPrivacyModeRoomIDReturnValue = .success(())
         changePasswordOldPasswordNewPasswordLogoutDevicesReturnValue = .success(())
         

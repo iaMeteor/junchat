@@ -375,6 +375,52 @@ final class RoomScreenViewModelTests {
     }
 
     @Test
+    func privacyModeSyncsServerEnabledState() async throws {
+        let appSettings = AppSettings()
+        let clientProxy = ClientProxyMock(.init())
+        clientProxy.junchatPrivacyModeRoomIDReturnValue = .success(true)
+        let roomProxyMock = JoinedRoomProxyMock(.init(id: "MyRoomID", hasOngoingCall: false))
+        let viewModel = RoomScreenViewModel(userSession: UserSessionMock(.init(clientProxy: clientProxy)),
+                                            roomProxy: roomProxyMock,
+                                            initialSelectedPinnedEventID: nil,
+                                            ongoingCallRoomIDPublisher: .init(.init(nil)),
+                                            appSettings: appSettings,
+                                            appHooks: AppHooks(),
+                                            analyticsService: ServiceLocator.shared.analytics,
+                                            userIndicatorController: ServiceLocator.shared.userIndicatorController)
+        self.viewModel = viewModel
+
+        let deferred = deferFulfillment(viewModel.context.$viewState) { $0.isPrivacyModeEnabled }
+        try await deferred.fulfill()
+
+        #expect(appSettings.junchatPrivacyModeRoomIDs.contains("MyRoomID"))
+        #expect(clientProxy.junchatPrivacyModeRoomIDReceivedInvocations == ["MyRoomID"])
+    }
+
+    @Test
+    func privacyModeRepairsLegacyLocalStateOnServer() async throws {
+        let appSettings = AppSettings()
+        appSettings.junchatPrivacyModeRoomIDs = ["MyRoomID"]
+        let clientProxy = ClientProxyMock(.init())
+        clientProxy.junchatPrivacyModeRoomIDReturnValue = .success(false)
+        let roomProxyMock = JoinedRoomProxyMock(.init(id: "MyRoomID", hasOngoingCall: false))
+        let viewModel = RoomScreenViewModel(userSession: UserSessionMock(.init(clientProxy: clientProxy)),
+                                            roomProxy: roomProxyMock,
+                                            initialSelectedPinnedEventID: nil,
+                                            ongoingCallRoomIDPublisher: .init(.init(nil)),
+                                            appSettings: appSettings,
+                                            appHooks: AppHooks(),
+                                            analyticsService: ServiceLocator.shared.analytics,
+                                            userIndicatorController: ServiceLocator.shared.userIndicatorController)
+        self.viewModel = viewModel
+
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(viewModel.state.isPrivacyModeEnabled)
+        #expect(clientProxy.setJunchatPrivacyModeRoomIDReceivedInvocations.contains { $0.enabled && $0.roomID == "MyRoomID" })
+    }
+
+    @Test
     func declineCallInvitationHidesOverlayAndDeclinesIncomingCall() async throws {
         let (declineStream, declineContinuation) = AsyncStream.makeStream(of: Void.self)
         let deferredDecline = deferFulfillment(declineStream) { _ in true }
@@ -426,8 +472,9 @@ final class RoomScreenViewModelTests {
         await waitForConfirmation("Wait for fully read") { confirm in
             let roomProxyMock = JoinedRoomProxyMock(.init(id: "MyRoomID"))
             roomProxyMock.markAsReadReceiptTypeClosure = { readReceiptType in
-                #expect(readReceiptType == .fullyRead)
-                confirm()
+                if readReceiptType == .fullyRead {
+                    confirm()
+                }
                 return .success(())
             }
             let viewModel = RoomScreenViewModel(userSession: UserSessionMock(.init()),
@@ -441,6 +488,18 @@ final class RoomScreenViewModelTests {
             self.viewModel = viewModel
             viewModel.stop()
         }
+    }
+
+    @Test
+    func roomMarkedAsReadOnEntryUsingPublicReadReceipt() async {
+        ServiceLocator.shared.settings.sharePresence = true
+        await assertRoomMarkedAsReadOnEntry(expectedReceiptType: .read)
+    }
+
+    @Test
+    func roomMarkedAsReadOnEntryUsingPrivateReadReceipt() async {
+        ServiceLocator.shared.settings.sharePresence = false
+        await assertRoomMarkedAsReadOnEntry(expectedReceiptType: .readPrivate)
     }
 
     // MARK: - Knock Requests
@@ -606,5 +665,27 @@ final class RoomScreenViewModelTests {
             viewState.roomHistorySharingState == .worldReadable
         }
         try await deferredWorldReadable.fulfill()
+    }
+}
+
+private extension RoomScreenViewModelTests {
+    func assertRoomMarkedAsReadOnEntry(expectedReceiptType: ReceiptType) async {
+        await waitForConfirmation("Wait for room entry read receipt") { confirm in
+            let roomProxyMock = JoinedRoomProxyMock(.init(id: "MyRoomID"))
+            roomProxyMock.markAsReadReceiptTypeClosure = { readReceiptType in
+                #expect(readReceiptType == expectedReceiptType)
+                confirm()
+                return .success(())
+            }
+            let viewModel = RoomScreenViewModel(userSession: UserSessionMock(.init()),
+                                                roomProxy: roomProxyMock,
+                                                initialSelectedPinnedEventID: nil,
+                                                ongoingCallRoomIDPublisher: .init(.init(nil)),
+                                                appSettings: ServiceLocator.shared.settings,
+                                                appHooks: AppHooks(),
+                                                analyticsService: ServiceLocator.shared.analytics,
+                                                userIndicatorController: ServiceLocator.shared.userIndicatorController)
+            self.viewModel = viewModel
+        }
     }
 }

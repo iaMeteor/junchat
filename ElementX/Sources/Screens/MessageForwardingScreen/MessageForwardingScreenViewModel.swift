@@ -16,9 +16,9 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
     private let clientProxy: ClientProxyProtocol
     private let roomSummaryProvider: RoomSummaryProviderProtocol
     private let userIndicatorController: UserIndicatorControllerProtocol
-    
+
     private var actionsSubject: PassthroughSubject<MessageForwardingScreenViewModelAction, Never> = .init()
-    
+
     var actions: AnyPublisher<MessageForwardingScreenViewModelAction, Never> {
         actionsSubject.eraseToAnyPublisher()
     }
@@ -31,16 +31,16 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
         clientProxy = userSession.clientProxy
         self.roomSummaryProvider = roomSummaryProvider
         self.userIndicatorController = userIndicatorController
-        
+
         super.init(initialViewState: MessageForwardingScreenViewState(), mediaProvider: userSession.mediaProvider)
-        
+
         roomSummaryProvider.roomListPublisher
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 self?.updateRooms()
             }
             .store(in: &cancellables)
-        
+
         context.$viewState
             .map(\.bindings.searchQuery)
             .removeDuplicates()
@@ -52,10 +52,10 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
                 }
             }
             .store(in: &cancellables)
-        
+
         updateRooms()
     }
-    
+
     override func process(viewAction: MessageForwardingScreenViewAction) {
         switch viewAction {
         case .cancel:
@@ -70,31 +70,32 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
             updateVisibleRange(edge: .bottom)
         }
     }
-    
+
     func stop() {
         // This is a shared provider so we should reset the filtering when we are done with the view
         roomSummaryProvider.setFilter(.all(filters: []))
     }
-    
+
     // MARK: - Private
-    
+
     private func updateRooms() {
         var rooms = [MessageForwardingRoom]()
-        
+        let sourceRoomIDs = Set(forwardingItem.forwardingItems.map(\.roomID))
+
         for summary in roomSummaryProvider.roomListPublisher.value {
-            if summary.id == forwardingItem.roomID {
+            if sourceRoomIDs.contains(summary.id) {
                 continue
             }
-            
+
             rooms.append(.init(id: summary.id,
                                title: summary.name,
                                description: summary.roomListDescription,
                                avatar: summary.avatar))
         }
-        
+
         state.rooms = rooms
     }
-    
+
     /// The actual range values don't matter as long as they contain the lower
     /// or upper bounds. updateVisibleRange is a hybrid API that powers both
     /// sliding sync visible range update and list paginations
@@ -112,24 +113,26 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
             break
         }
     }
-    
+
     private func forward() async {
         guard let roomID = state.selectedRoomID else {
             fatalError()
         }
-        
+
         guard case let .joined(targetRoomProxy) = await clientProxy.roomForIdentifier(roomID) else {
             MXLog.error("Failed retrieving room to forward to with id: \(roomID)")
             userIndicatorController.submitIndicator(UserIndicator(title: L10n.errorUnknown))
             return
         }
-        
-        if case .failure(let error) = await targetRoomProxy.timeline.sendMessageEventContent(forwardingItem.content) {
-            MXLog.error("Failed forwarding message with error: \(error)")
-            userIndicatorController.submitIndicator(UserIndicator(title: L10n.errorUnknown))
-            return
+
+        for item in forwardingItem.forwardingItems {
+            if case .failure(let error) = await targetRoomProxy.timeline.sendMessageEventContent(item.content) {
+                MXLog.error("Failed forwarding message with error: \(error)")
+                userIndicatorController.submitIndicator(UserIndicator(title: L10n.errorUnknown))
+                return
+            }
         }
-        
+
         // Timelines are cached - the local echo will be visible when fetching the room by its ID.
         actionsSubject.send(.sent(roomID: roomID))
     }

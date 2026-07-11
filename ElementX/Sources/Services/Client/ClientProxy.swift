@@ -1058,6 +1058,43 @@ class ClientProxy: ClientProxyProtocol {
         }
     }
 
+    func junchatPrivacyMode(roomID: String) async -> Result<Bool, ClientProxyError> {
+        do {
+            let session = try client.session()
+            let url = try junchatRoomAccountDataURL(session: session,
+                                                    roomID: roomID,
+                                                    type: Self.junchatPrivacyModeAccountDataType)
+            var request = URLRequest(url: url)
+            request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+            let (data, response) = try await URLSession.shared.dataWithRetry(for: request)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                return .failure(.invalidResponse)
+            }
+
+            if httpResponse.statusCode == 404 {
+                return .success(false)
+            }
+
+            guard 200..<300 ~= httpResponse.statusCode else {
+                MXLog.error("Failed fetching Junchat privacy mode: invalid response \(response)")
+                return .failure(.invalidResponse)
+            }
+
+            let privacyMode = try JSONDecoder().decode(JunchatPrivacyModeAccountData.self, from: data)
+            return .success(privacyMode.enabled)
+        } catch let error as ClientProxyError {
+            return .failure(error)
+        } catch let error as DecodingError {
+            MXLog.error("Failed decoding Junchat privacy mode: \(error)")
+            return .failure(.invalidResponse)
+        } catch {
+            MXLog.error("Failed fetching Junchat privacy mode: \(error)")
+            return .failure(.sdkError(error))
+        }
+    }
+
     func setJunchatPrivacyMode(_ enabled: Bool, roomID: String) async -> Result<Void, ClientProxyError> {
         do {
             let session = try client.session()
@@ -1747,6 +1784,6 @@ private extension CreateRoomAccessType {
     }
 }
 
-private struct JunchatPrivacyModeAccountData: Encodable {
+private struct JunchatPrivacyModeAccountData: Codable {
     let enabled: Bool
 }

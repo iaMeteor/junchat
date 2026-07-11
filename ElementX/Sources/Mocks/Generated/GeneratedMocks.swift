@@ -5902,6 +5902,74 @@ class ClientProxyMock: ClientProxyProtocol, @unchecked Sendable {
             return setJunchatHideFromContactsDirectoryReturnValue
         }
     }
+    //MARK: - junchatPrivacyMode
+
+    var junchatPrivacyModeRoomIDUnderlyingCallsCount = 0
+    var junchatPrivacyModeRoomIDCallsCount: Int {
+        get {
+            if Thread.isMainThread {
+                return junchatPrivacyModeRoomIDUnderlyingCallsCount
+            } else {
+                var returnValue: Int? = nil
+                DispatchQueue.main.sync {
+                    returnValue = junchatPrivacyModeRoomIDUnderlyingCallsCount
+                }
+
+                return returnValue!
+            }
+        }
+        set {
+            if Thread.isMainThread {
+                junchatPrivacyModeRoomIDUnderlyingCallsCount = newValue
+            } else {
+                DispatchQueue.main.sync {
+                    junchatPrivacyModeRoomIDUnderlyingCallsCount = newValue
+                }
+            }
+        }
+    }
+    var junchatPrivacyModeRoomIDCalled: Bool {
+        return junchatPrivacyModeRoomIDCallsCount > 0
+    }
+    var junchatPrivacyModeRoomIDReceivedRoomID: String?
+    var junchatPrivacyModeRoomIDReceivedInvocations: [String] = []
+
+    var junchatPrivacyModeRoomIDUnderlyingReturnValue: Result<Bool, ClientProxyError>!
+    var junchatPrivacyModeRoomIDReturnValue: Result<Bool, ClientProxyError>! {
+        get {
+            if Thread.isMainThread {
+                return junchatPrivacyModeRoomIDUnderlyingReturnValue
+            } else {
+                var returnValue: Result<Bool, ClientProxyError>? = nil
+                DispatchQueue.main.sync {
+                    returnValue = junchatPrivacyModeRoomIDUnderlyingReturnValue
+                }
+
+                return returnValue!
+            }
+        }
+        set {
+            if Thread.isMainThread {
+                junchatPrivacyModeRoomIDUnderlyingReturnValue = newValue
+            } else {
+                DispatchQueue.main.sync {
+                    junchatPrivacyModeRoomIDUnderlyingReturnValue = newValue
+                }
+            }
+        }
+    }
+    var junchatPrivacyModeRoomIDClosure: ((String) async -> Result<Bool, ClientProxyError>)?
+
+    func junchatPrivacyMode(roomID: String) async -> Result<Bool, ClientProxyError> {
+        junchatPrivacyModeRoomIDCallsCount += 1
+        junchatPrivacyModeRoomIDReceivedRoomID = roomID
+        junchatPrivacyModeRoomIDReceivedInvocations.append(roomID)
+        if let junchatPrivacyModeRoomIDClosure = junchatPrivacyModeRoomIDClosure {
+            return await junchatPrivacyModeRoomIDClosure(roomID)
+        } else {
+            return junchatPrivacyModeRoomIDReturnValue
+        }
+    }
     //MARK: - setJunchatPrivacyMode
 
     var setJunchatPrivacyModeRoomIDUnderlyingCallsCount = 0

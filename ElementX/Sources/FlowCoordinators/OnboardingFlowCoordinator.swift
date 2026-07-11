@@ -128,8 +128,7 @@ class OnboardingFlowCoordinator: FlowCoordinatorProtocol {
             return false
         }
         
-        // We want to make sure onboarding finishes but also every time the user becomes unverified (e.g. account reset)
-        return !appSettings.hasRunIdentityConfirmationOnboarding || userSession.sessionSecurityStatePublisher.value.verificationState == .unverified
+        return !appSettings.hasRunIdentityConfirmationOnboarding && userSession.sessionSecurityStatePublisher.value.verificationState == .unverified
     }
     
     private var requiresAppLockSetup: Bool {

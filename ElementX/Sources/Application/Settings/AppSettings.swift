@@ -439,8 +439,8 @@ final class AppSettings {
 
     // MARK: - Security
 
-    /// JunChat keeps Matrix encryption enabled, but doesn't block login behind Element's cross-device verification onboarding.
-    let shouldRunIdentityConfirmationOnboarding = false
+    /// JunChat keeps Matrix encryption enabled and offers cross-device verification onboarding until the user hides it.
+    let shouldRunIdentityConfirmationOnboarding = true
     /// The app must be locked with a PIN code as part of the authentication flow.
     let appLockIsMandatory = false
     /// The amount of time the app can remain in the background for without requesting the PIN/TouchID/FaceID.

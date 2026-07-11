@@ -309,6 +309,49 @@ struct CallScreenJunchatTests {
     }
 
     @Test
+    func voiceCallsApplyInitialNativeEarpieceForBuiltInRoutes() {
+        #expect(CallAudioRoutePolicy.shouldApplyInitialVoiceOutputDevice(voiceOnly: true,
+                                                                         selectedOutput: .nativeEarpiece,
+                                                                         hasAppliedInitialVoiceOutputDevice: false,
+                                                                         forcePreferInitialEarpiece: false,
+                                                                         portType: .builtInSpeaker))
+        #expect(CallAudioRoutePolicy.shouldApplyInitialVoiceOutputDevice(voiceOnly: true,
+                                                                         selectedOutput: .nativeEarpiece,
+                                                                         hasAppliedInitialVoiceOutputDevice: false,
+                                                                         forcePreferInitialEarpiece: false,
+                                                                         portType: .builtInReceiver))
+    }
+
+    @Test
+    func initialNativeEarpiecePolicyHonorsUserAndExternalRoutes() {
+        #expect(!CallAudioRoutePolicy.shouldApplyInitialVoiceOutputDevice(voiceOnly: true,
+                                                                          selectedOutput: .nativeSpeaker,
+                                                                          hasAppliedInitialVoiceOutputDevice: false,
+                                                                          forcePreferInitialEarpiece: true,
+                                                                          portType: .builtInSpeaker))
+        #expect(!CallAudioRoutePolicy.shouldApplyInitialVoiceOutputDevice(voiceOnly: false,
+                                                                          selectedOutput: .nativeEarpiece,
+                                                                          hasAppliedInitialVoiceOutputDevice: false,
+                                                                          forcePreferInitialEarpiece: true,
+                                                                          portType: .builtInSpeaker))
+        #expect(!CallAudioRoutePolicy.shouldApplyInitialVoiceOutputDevice(voiceOnly: true,
+                                                                          selectedOutput: .nativeEarpiece,
+                                                                          hasAppliedInitialVoiceOutputDevice: false,
+                                                                          forcePreferInitialEarpiece: true,
+                                                                          portType: .headphones))
+        #expect(!CallAudioRoutePolicy.shouldApplyInitialVoiceOutputDevice(voiceOnly: true,
+                                                                          selectedOutput: .nativeEarpiece,
+                                                                          hasAppliedInitialVoiceOutputDevice: true,
+                                                                          forcePreferInitialEarpiece: false,
+                                                                          portType: .builtInReceiver))
+        #expect(CallAudioRoutePolicy.shouldApplyInitialVoiceOutputDevice(voiceOnly: true,
+                                                                         selectedOutput: .nativeEarpiece,
+                                                                         hasAppliedInitialVoiceOutputDevice: true,
+                                                                         forcePreferInitialEarpiece: true,
+                                                                         portType: .builtInReceiver))
+    }
+
+    @Test
     @MainActor
     func callEndedActionDismissesAndPlaysEndedToneOnce() async throws {
         let widgetActions = PassthroughSubject<ElementCallWidgetDriverAction, Never>()
@@ -487,6 +530,94 @@ struct CallScreenJunchatTests {
     }
 
     @Test
+    @MainActor
+    func becomingActiveReassertsCurrentAudioEnabledStateToElementCall() async throws {
+        let widgetActions = PassthroughSubject<ElementCallWidgetDriverAction, Never>()
+        let widgetDriver = ElementCallWidgetDriverMock()
+        widgetDriver.underlyingWidgetID = "widget"
+        widgetDriver.underlyingMessagePublisher = .init()
+        widgetDriver.underlyingActions = widgetActions.eraseToAnyPublisher()
+        widgetDriver.startBaseURLClientIDColorSchemeVoiceOnlyRageshakeURLAnalyticsConfigurationReturnValue = .success(URL.userDirectory)
+        widgetDriver.handleMessageReturnValue = .success(true)
+
+        let roomProxy = JoinedRoomProxyMock(.init(id: "room-id", name: "Call Room"))
+        roomProxy.elementCallWidgetDriverDeviceIDReturnValue = widgetDriver
+
+        let clientProxy = ClientProxyMock(.init(deviceID: "device-id"))
+        let viewModel = CallScreenViewModel(elementCallService: ElementCallServiceMock(.init()),
+                                            configuration: .init(roomProxy: roomProxy,
+                                                                 clientProxy: clientProxy,
+                                                                 clientID: "com.heyujk.junchat",
+                                                                 elementCallBaseURL: URL.homeDirectory,
+                                                                 elementCallBaseURLOverride: nil,
+                                                                 voiceOnly: true,
+                                                                 colorScheme: .dark),
+                                            allowPictureInPicture: false,
+                                            appHooks: AppHooks(),
+                                            appSettings: AppSettings(),
+                                            analyticsService: AnalyticsService(client: AnalyticsClientMock(), appSettings: AppSettings()),
+                                            callConnectedTonePlayer: {},
+                                            callEndedTonePlayer: {})
+
+        var evaluatedJavaScript = [String]()
+        viewModel.context.javaScriptEvaluator = { script in
+            evaluatedJavaScript.append(script)
+            return "ok"
+        }
+
+        widgetActions.send(.mediaStateChanged(audioEnabled: false, videoEnabled: true))
+        NotificationCenter.default.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(evaluatedJavaScript.contains {
+            $0.contains(#""action":"io.element.device_mute""#) &&
+                $0.contains(#""audio_enabled":false"#)
+        })
+    }
+
+    @Test
+    @MainActor
+    func remoteMediaConnectedRetriesPictureInPictureWhileAppIsInactive() async throws {
+        let widgetDriver = ElementCallWidgetDriverMock()
+        widgetDriver.underlyingWidgetID = "widget"
+        widgetDriver.underlyingMessagePublisher = .init()
+        widgetDriver.underlyingActions = Empty().eraseToAnyPublisher()
+        widgetDriver.startBaseURLClientIDColorSchemeVoiceOnlyRageshakeURLAnalyticsConfigurationReturnValue = .success(URL.userDirectory)
+        widgetDriver.handleMessageReturnValue = .success(true)
+
+        let roomProxy = JoinedRoomProxyMock(.init(id: "room-id", name: "Call Room"))
+        roomProxy.elementCallWidgetDriverDeviceIDReturnValue = widgetDriver
+
+        let clientProxy = ClientProxyMock(.init(deviceID: "device-id"))
+        let viewModel = CallScreenViewModel(elementCallService: ElementCallServiceMock(.init()),
+                                            configuration: .init(roomProxy: roomProxy,
+                                                                 clientProxy: clientProxy,
+                                                                 clientID: "com.heyujk.junchat",
+                                                                 elementCallBaseURL: URL.homeDirectory,
+                                                                 elementCallBaseURLOverride: nil,
+                                                                 voiceOnly: true,
+                                                                 colorScheme: .dark),
+                                            allowPictureInPicture: true,
+                                            appHooks: AppHooks(),
+                                            appSettings: AppSettings(),
+                                            analyticsService: AnalyticsService(client: AnalyticsClientMock(), appSettings: AppSettings()),
+                                            callConnectedTonePlayer: {},
+                                            callEndedTonePlayer: {},
+                                            applicationStateProvider: { .background })
+
+        var pictureInPictureRequests = 0
+        viewModel.context.requestPictureInPictureHandler = {
+            pictureInPictureRequests += 1
+            return .success(())
+        }
+
+        viewModel.process(viewAction: .widgetAction(message: #"{"api":"junchat","action":"call_connected"}"#))
+        try await Task.sleep(for: .milliseconds(600))
+
+        #expect(pictureInPictureRequests > 0)
+    }
+
+    @Test
     func widgetHangupMessagesAreCallEndingActions() throws {
         let data = try #require(#"{"api":"fromWidget","action":"im.vector.hangup","widget_id":"widget"}"#.data(using: .utf8))
         let message = try JSONDecoder().decode(ElementCallWidgetMessage.self, from: data)
@@ -538,6 +669,20 @@ struct CallScreenJunchatTests {
         let javaScript = CallScreenViewModel.junchatAudioOutputJavaScript(portType: .builtInSpeaker,
                                                                          uid: "Speaker",
                                                                          portName: "iPhone Speaker",
+                                                                         preferInitialEarpiece: true)
+
+        #expect(javaScript.contains("window.controls.setAvailableAudioDevices"))
+        #expect(javaScript.contains("isSpeaker: true"))
+        #expect(javaScript.contains("forEarpiece: true"))
+        #expect(!javaScript.contains("isEarpiece: true"))
+        #expect(javaScript.contains("window.controls.setAudioDevice(\"earpiece-id\")"))
+    }
+
+    @Test
+    func voiceCallsDefaultToNativeEarpieceWhenBuiltInReceiverIsCurrentRoute() {
+        let javaScript = CallScreenViewModel.junchatAudioOutputJavaScript(portType: .builtInReceiver,
+                                                                         uid: "Receiver",
+                                                                         portName: "iPhone Receiver",
                                                                          preferInitialEarpiece: true)
 
         #expect(javaScript.contains("window.controls.setAvailableAudioDevices"))

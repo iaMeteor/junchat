@@ -64,6 +64,7 @@ enum TimelineViewAction {
     case toggleBulkRedactionSelection(itemID: TimelineItemIdentifier)
     case cancelBulkRedactionSelection
     case confirmBulkRedactionSelection
+    case forwardBulkRedactionSelection
 
     case tappedOnSenderDetails(sender: TimelineItemSender)
     case displayReactionSummary(itemID: TimelineItemIdentifier, key: String)

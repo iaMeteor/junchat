@@ -15,8 +15,6 @@ class ContactsScreenViewModel: ContactsScreenViewModelType, ContactsScreenViewMo
     private let contactsService: ContactsServiceProtocol
     private let userIndicatorController: UserIndicatorControllerProtocol
     
-    private var hasLoadedContacts = false
-    
     private let actionsSubject: PassthroughSubject<ContactsScreenViewModelAction, Never> = .init()
     var actions: AnyPublisher<ContactsScreenViewModelAction, Never> {
         actionsSubject.eraseToAnyPublisher()
@@ -34,11 +32,8 @@ class ContactsScreenViewModel: ContactsScreenViewModelType, ContactsScreenViewMo
     
     override func process(viewAction: ContactsScreenViewAction) {
         switch viewAction {
-        case .task:
-            guard !hasLoadedContacts else { return }
-            hasLoadedContacts = true
-            loadContacts()
-        case .refresh:
+        case .task, .refresh:
+            guard !state.isLoading else { return }
             loadContacts()
         case .selectContact(let contact):
             openDirectRoom(for: contact)

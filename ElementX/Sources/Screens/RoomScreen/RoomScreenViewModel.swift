@@ -84,6 +84,7 @@ class RoomScreenViewModel: RoomScreenViewModelType, RoomScreenViewModelProtocol 
         setupSubscriptions(ongoingCallRoomIDPublisher: ongoingCallRoomIDPublisher)
 
         Task {
+            await markRoomAsReadOnEntry()
             await updateVerificationBadge()
         }
     }
@@ -171,6 +172,13 @@ class RoomScreenViewModel: RoomScreenViewModelType, RoomScreenViewModelProtocol 
 
     // MARK: - Private
 
+    private func markRoomAsReadOnEntry() async {
+        let receiptType: ReceiptType = appSettings.sharePresence ? .read : .readPrivate
+        if case .failure(let error) = await roomProxy.markAsRead(receiptType: receiptType) {
+            MXLog.error("Failed marking room \(roomProxy.id) as read on entry with error: \(error)")
+        }
+    }
+
     private func setupSubscriptions(ongoingCallRoomIDPublisher: CurrentValuePublisher<String?, Never>) {
         appSettings.$roomThreadListEnabled
             .weakAssign(to: \.state.roomThreadListEnabled, on: self)
@@ -196,6 +204,10 @@ class RoomScreenViewModel: RoomScreenViewModelType, RoomScreenViewModelProtocol 
                 state.isPrivacyModeEnabled = emergencyPrivacyModeEnabled || roomIDs.contains(roomProxy.id)
             }
             .store(in: &cancellables)
+
+        Task { [weak self] in
+            await self?.syncJunchatPrivacyModeState()
+        }
 
         roomProxy.infoPublisher
             .receive(on: DispatchQueue.main)
@@ -405,6 +417,25 @@ class RoomScreenViewModel: RoomScreenViewModelType, RoomScreenViewModelProtocol 
             case .failure:
                 userIndicatorController.submitIndicator(.init(id: Self.errorIndicatorIdentifier, type: .toast, title: L10n.errorUnknown))
             }
+        }
+    }
+
+    private func syncJunchatPrivacyModeState() async {
+        switch await clientProxy.junchatPrivacyMode(roomID: roomProxy.id) {
+        case .success(true):
+            await MainActor.run {
+                setLocalPrivacyModeEnabled(true)
+            }
+        case .success(false):
+            if appSettings.junchatPrivacyModeRoomIDs.contains(roomProxy.id) {
+                if case .success = await clientProxy.setJunchatPrivacyMode(true, roomID: roomProxy.id) {
+                    await MainActor.run {
+                        setLocalPrivacyModeEnabled(true)
+                    }
+                }
+            }
+        case .failure:
+            break
         }
     }
 

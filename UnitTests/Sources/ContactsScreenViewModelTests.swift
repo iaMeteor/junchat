@@ -13,75 +13,102 @@ struct ContactsScreenViewModelTests {
     private var clientProxy: ClientProxyMock
     private var contactsService: ContactsServiceFake
     private var viewModel: ContactsScreenViewModel
-    
+
     private var context: ContactsScreenViewModel.Context {
         viewModel.context
     }
-    
+
     init() {
         clientProxy = .init(.init(userID: "@me:junchat.yyzs120.cn"))
         contactsService = ContactsServiceFake(result: .success([
             .init(userID: "@alice:junchat.yyzs120.cn", displayName: "Alice"),
             .init(userID: "@bob:junchat.yyzs120.cn", displayName: "Bob")
         ]))
-        
+
         viewModel = ContactsScreenViewModel(userSession: UserSessionMock(.init(clientProxy: clientProxy)),
                                             contactsService: contactsService,
                                             userIndicatorController: UserIndicatorControllerMock())
     }
-    
+
     @Test
     func loadingContactsShowsDisplayNames() async throws {
         let deferred = deferFulfillment(context.$viewState) { viewState in
             !viewState.isLoading && viewState.contacts.map(\.displayName) == ["Alice", "Bob"]
         }
-        
+
         context.send(viewAction: .task)
         try await deferred.fulfill()
-        
+
         #expect(contactsService.contactsCallsCount == 1)
     }
-    
+
+    @Test
+    mutating func taskRefreshesPreviouslyLoadedContacts() async throws {
+        let firstLoad = deferFulfillment(context.$viewState) { viewState in
+            !viewState.isLoading && viewState.contacts.map(\.userID) == [
+                "@alice:junchat.yyzs120.cn",
+                "@bob:junchat.yyzs120.cn"
+            ]
+        }
+
+        context.send(viewAction: .task)
+        try await firstLoad.fulfill()
+
+        contactsService.result = .success([
+            .init(userID: "@alice:junchat.yyzs120.cn", displayName: "Alice"),
+            .init(userID: "@bob:junchat.yyzs120.cn", displayName: "Bob"),
+            .init(userID: "@charlie:junchat.yyzs120.cn", displayName: "Charlie")
+        ])
+        let secondLoad = deferFulfillment(context.$viewState) { viewState in
+            !viewState.isLoading && viewState.contacts.map(\.userID).contains("@charlie:junchat.yyzs120.cn")
+        }
+
+        context.send(viewAction: .task)
+        try await secondLoad.fulfill()
+
+        #expect(contactsService.contactsCallsCount == 2)
+    }
+
     @Test
     mutating func loadingContactsFailureShowsAlert() async throws {
         contactsService.result = .failure(.failedFetchingContacts)
-        
+
         let deferred = deferFulfillment(context.$viewState) { viewState in
             viewState.bindings.alertInfo?.id == .failedLoadingContacts
         }
-        
+
         context.send(viewAction: .task)
         try await deferred.fulfill()
     }
-    
+
     @Test
     func selectingContactWithExistingDirectRoomShowsRoom() async throws {
         let contact = UserProfileProxy(userID: "@alice:junchat.yyzs120.cn", displayName: "Alice")
         clientProxy.directRoomForUserIDReturnValue = .success("!existing:junchat.yyzs120.cn")
-        
+
         let deferred = deferFulfillment(viewModel.actions) { action in
             action == .showRoom(roomID: "!existing:junchat.yyzs120.cn")
         }
-        
+
         context.send(viewAction: .selectContact(contact))
         try await deferred.fulfill()
-        
+
         #expect(clientProxy.directRoomForUserIDReceivedUserID == contact.userID)
     }
-    
+
     @Test
     func selectingContactWithoutDirectRoomCreatesRoom() async throws {
         let contact = UserProfileProxy(userID: "@bob:junchat.yyzs120.cn", displayName: "Bob")
         clientProxy.directRoomForUserIDReturnValue = .success(nil)
         clientProxy.createDirectRoomWithExpectedRoomNameReturnValue = .success("!new:junchat.yyzs120.cn")
-        
+
         let deferred = deferFulfillment(viewModel.actions) { action in
             action == .showRoom(roomID: "!new:junchat.yyzs120.cn")
         }
-        
+
         context.send(viewAction: .selectContact(contact))
         try await deferred.fulfill()
-        
+
         #expect(clientProxy.createDirectRoomWithExpectedRoomNameReceivedArguments?.userID == contact.userID)
         #expect(clientProxy.createDirectRoomWithExpectedRoomNameReceivedArguments?.expectedRoomName == contact.displayName)
     }
@@ -90,11 +117,11 @@ struct ContactsScreenViewModelTests {
 private final class ContactsServiceFake: ContactsServiceProtocol {
     var result: Result<[UserProfileProxy], ContactsServiceError>
     var contactsCallsCount = 0
-    
+
     init(result: Result<[UserProfileProxy], ContactsServiceError>) {
         self.result = result
     }
-    
+
     func contacts() async -> Result<[UserProfileProxy], ContactsServiceError> {
         contactsCallsCount += 1
         return result

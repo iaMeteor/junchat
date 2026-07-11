@@ -116,22 +116,13 @@ struct UserSessionFlowCoordinatorTests {
     }
 
     @Test
-    func onboardingDoesNotRequireIdentityConfirmationForJunChat() {
-        let appSettings = AppSettings()
-        appSettings.analyticsConsentState = .optedOut
-        appSettings.hasRunNotificationPermissionsOnboarding = true
-        appSettings.hasRunIdentityConfirmationOnboarding = false
-
-        let userSession = UserSessionMock(.init())
-        userSession.sessionSecurityStatePublisher = CurrentValueSubject<SessionSecurityState, Never>(.init(verificationState: .unverified, recoveryState: .enabled)).asCurrentValuePublisher()
-
-        let onboardingFlowCoordinator = OnboardingFlowCoordinator(isNewLogin: false,
-                                                                  appLockService: AppLockServiceMock(),
-                                                                  navigationStackCoordinator: NavigationStackCoordinator(),
-                                                                  flowParameters: makeCommonFlowParameters(userSession: userSession,
-                                                                                                           appSettings: appSettings))
-
-        #expect(!onboardingFlowCoordinator.shouldStart)
+    func onboardingRequiresIdentityConfirmationUntilPermanentlyHidden() {
+        #expect(makeOnboardingFlowCoordinator(verificationState: .unverified,
+                                             hasHiddenIdentityConfirmation: false).shouldStart)
+        #expect(!makeOnboardingFlowCoordinator(verificationState: .unverified,
+                                              hasHiddenIdentityConfirmation: true).shouldStart)
+        #expect(!makeOnboardingFlowCoordinator(verificationState: .verified,
+                                              hasHiddenIdentityConfirmation: false).shouldStart)
     }
 
     @Test
@@ -457,5 +448,23 @@ struct UserSessionFlowCoordinatorTests {
                              userIndicatorController: UserIndicatorControllerMock(),
                              notificationManager: NotificationManagerMock(),
                              stateMachineFactory: PublishedStateMachineFactory())
+    }
+
+    private func makeOnboardingFlowCoordinator(verificationState: SessionVerificationState,
+                                               hasHiddenIdentityConfirmation: Bool) -> OnboardingFlowCoordinator {
+        let appSettings = AppSettings()
+        appSettings.analyticsConsentState = .optedOut
+        appSettings.hasRunNotificationPermissionsOnboarding = true
+        appSettings.hasRunIdentityConfirmationOnboarding = hasHiddenIdentityConfirmation
+
+        let userSession = UserSessionMock(.init())
+        userSession.sessionSecurityStatePublisher = CurrentValueSubject<SessionSecurityState, Never>(.init(verificationState: verificationState,
+                                                                                                            recoveryState: .enabled)).asCurrentValuePublisher()
+
+        return OnboardingFlowCoordinator(isNewLogin: false,
+                                         appLockService: AppLockServiceMock(),
+                                         navigationStackCoordinator: NavigationStackCoordinator(),
+                                         flowParameters: makeCommonFlowParameters(userSession: userSession,
+                                                                                  appSettings: appSettings))
     }
 }

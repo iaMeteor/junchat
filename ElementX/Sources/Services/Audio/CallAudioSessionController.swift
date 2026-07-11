@@ -60,11 +60,13 @@ final class CallAudioSessionController {
               AVAudioSession.InterruptionType(rawValue: typeValue) == .ended else {
             return
         }
+        // WebKit owns the active WebRTC session; lifecycle recovery is handled by CallScreenViewModel.
     }
 
     func handleMediaServicesReset() {
         guard hasPreparedForCall else {
             return
         }
+        // WebKit owns the active WebRTC session; lifecycle recovery is handled by CallScreenViewModel.
     }
 }

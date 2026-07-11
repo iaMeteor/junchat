@@ -576,7 +576,7 @@ final class TimelineViewModelTests {
     }
 
     @Test
-    func privacyModeMessageIsRedactedAfterLifetime() async throws {
+    func privacyModeMessageIsNotRedactedLocallyAfterLifetime() async throws {
         let appSettings = AppSettings()
         appSettings.junchatPrivacyModeRoomIDs = ["MockRoomIdentifier"]
         let timelineController = MockTimelineController(timelineItems: [])
@@ -591,8 +591,8 @@ final class TimelineViewModelTests {
 
         try await Task.sleep(for: .milliseconds(100))
 
-        #expect(timelineController.redactCalled)
-        #expect(timelineController.redactedEventOrTransactionID == .eventID("mock-sent-message-1"))
+        #expect(!timelineController.redactCalled)
+        #expect(viewModel.state.privacyControlledTimelineItemIDs.isEmpty)
         _ = viewModel
     }
 
@@ -640,6 +640,39 @@ final class TimelineViewModelTests {
         try await Task.sleep(for: .milliseconds(50))
 
         #expect(Set(timelineController.redactedEventOrTransactionIDs) == [.eventID("bulk-1"), .eventID("bulk-2")])
+        #expect(!viewModel.state.bulkRedactionSelectionState.isActive)
+        _ = viewModel
+    }
+
+    @Test
+    func bulkRedactionSelectionForwardsSelectedMessages() async throws {
+        let items = [
+            TextRoomTimelineItem(eventID: "forward-1", sender: "alice"),
+            TextRoomTimelineItem(eventID: "forward-2", sender: "alice")
+        ]
+        let timelineController = MockTimelineController(timelineItems: items)
+        let viewModel = makeViewModel(timelineController: timelineController)
+
+        viewModel.process(viewAction: .handleTimelineItemMenuAction(itemID: items[0].id, action: .selectMessages))
+        #expect(viewModel.state.bulkRedactionSelectionState.selectedIDs == [.eventID("forward-1")])
+        #expect(viewModel.state.bulkRedactionSelectionState.canForwardSelectedMessages)
+        #expect(!viewModel.state.bulkRedactionSelectionState.canRedactSelectedMessages)
+
+        viewModel.process(viewAction: .toggleBulkRedactionSelection(itemID: items[1].id))
+        #expect(viewModel.state.bulkRedactionSelectionState.selectedIDs == [.eventID("forward-1"), .eventID("forward-2")])
+
+        let deferred = deferFulfillment(viewModel.actions) { action in
+            switch action {
+            case .displayMessageForwarding(let forwardingItem):
+                return forwardingItem.forwardingItems.map(\.id) == items.map(\.id)
+            default:
+                return false
+            }
+        }
+
+        viewModel.process(viewAction: .forwardBulkRedactionSelection)
+        try await deferred.fulfill()
+
         #expect(!viewModel.state.bulkRedactionSelectionState.isActive)
         _ = viewModel
     }

@@ -46,13 +46,35 @@ struct MessageForwardingItem: Hashable {
     let roomID: String
     /// The item's content to be forwarded.
     let content: RoomMessageEventContentWithoutRelation
-    
-    static func == (lhs: MessageForwardingItem, rhs: MessageForwardingItem) -> Bool {
-        lhs.id == rhs.id && lhs.roomID == rhs.roomID
+    /// Additional items forwarded in the same operation.
+    private let additionalItems: [MessageForwardingItem]
+
+    init(id: TimelineItemIdentifier,
+         roomID: String,
+         content: RoomMessageEventContentWithoutRelation,
+         additionalItems: [MessageForwardingItem] = []) {
+        self.id = id
+        self.roomID = roomID
+        self.content = content
+        self.additionalItems = additionalItems
     }
-    
+
+    var forwardingItems: [MessageForwardingItem] {
+        let singleItem = MessageForwardingItem(id: id, roomID: roomID, content: content)
+        return [singleItem] + additionalItems.flatMap(\.forwardingItems)
+    }
+
+    func addingForwardingItems(_ items: [MessageForwardingItem]) -> MessageForwardingItem {
+        MessageForwardingItem(id: id, roomID: roomID, content: content, additionalItems: additionalItems + items)
+    }
+
+    static func == (lhs: MessageForwardingItem, rhs: MessageForwardingItem) -> Bool {
+        lhs.id == rhs.id && lhs.roomID == rhs.roomID && lhs.additionalItems == rhs.additionalItems
+    }
+
     func hash(into hasher: inout Hasher) {
         hasher.combine(id)
         hasher.combine(roomID)
+        hasher.combine(additionalItems)
     }
 }

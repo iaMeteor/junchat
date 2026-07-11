@@ -11,7 +11,7 @@ import Foundation
 enum IdentityConfirmationScreenViewModelAction {
     case otherDevice
     case recoveryKey
-    /// Only possible in debug builds.
+    /// Permanently hides this onboarding prompt.
     case skip
     case reset
     case logoutConfirmed
@@ -40,7 +40,7 @@ enum IdentityConfirmationScreenAlertType {
 enum IdentityConfirmationScreenViewAction {
     case otherDevice
     case recoveryKey
-    /// Only possible in debug builds.
+    /// Permanently hides this onboarding prompt.
     case skip
     case reset
     case logout

@@ -21,7 +21,7 @@ struct TimelineItemMenuActionProvider {
     let areThreadsEnabled: Bool
     let timelineKind: TimelineKind
     let emojiProvider: EmojiProviderProtocol
-    
+
     // swiftlint:disable:next cyclomatic_complexity
     func makeActions() -> TimelineItemMenuActions? {
         guard let item = timelineItem as? EventBasedTimelineItemProtocol else {
@@ -37,14 +37,14 @@ struct TimelineItemMenuActionProvider {
         if let encryptedItem = timelineItem as? EncryptedRoomTimelineItem {
             return makeEncryptedItemActions(encryptedItem)
         }
-        
+
         var actions: [TimelineItemMenuAction] = []
         var secondaryActions: [TimelineItemMenuAction] = []
-        
+
         if timelineKind == .pinned || timelineKind == .media(.mediaFilesScreen) || timelineKind == .media(.pinnedEventsScreen) {
             actions.append(.viewInRoomTimeline)
         }
-        
+
         if canRedactItem(item), let poll = item.pollIfAvailable, !poll.hasEnded, let eventID = item.id.eventID {
             actions.append(.endPoll(pollStartID: eventID))
         }
@@ -57,16 +57,16 @@ struct TimelineItemMenuActionProvider {
             } else {
                 actions.append(.reply(isThread: false))
             }
-            
+
             if areThreadsEnabled, !timelineKind.isThread {
                 actions.append(.replyInThread)
             }
         }
-        
+
         if item.isForwardable {
             actions.append(.forward(itemID: item.id))
         }
-        
+
         if item.isEditable, canCurrentUserSendMessage {
             if item.supportsMediaCaption {
                 if item.hasMediaCaption {
@@ -80,18 +80,18 @@ struct TimelineItemMenuActionProvider {
                 actions.append(.edit)
             }
         }
-        
+
         if item.isRemoteMessage {
             actions.append(.copyPermalink)
         }
-        
+
         if canCurrentUserPin, let eventID = item.id.eventID {
             actions.append(pinnedEventIDs.contains(eventID) ? .unpin : .pin)
         }
 
         if item.isCopyable {
             actions.append(.copy)
-            
+
             if !ProcessInfo.processInfo.isiOSAppOnMac {
                 // As of macOS 26.2, the sheet isn't presented, but it is easy enough
                 // to select some text and right click on Mac anyway so hide this one.
@@ -100,24 +100,27 @@ struct TimelineItemMenuActionProvider {
         } else if item.hasMediaCaption {
             actions.append(.copyCaption)
         }
-        
+
         if item.isEditable, item.hasMediaCaption {
             actions.append(.removeCaption)
         }
-        
+
         if isViewSourceEnabled {
             actions.append(.viewSource)
         }
-        
+
         if !item.isOutgoing {
             secondaryActions.append(.report)
         }
-        
-        if canRedactItem(item) {
+
+        if canRedactItem(item) || item.isForwardable {
             secondaryActions.append(.selectMessages)
+        }
+
+        if canRedactItem(item) {
             secondaryActions.append(.redact)
         }
-        
+
         switch timelineKind {
         case .pinned:
             actions = actions.filter(\.canAppearInPinnedEventsTimeline)
@@ -130,35 +133,35 @@ struct TimelineItemMenuActionProvider {
         case .live, .detached, .thread:
             break // viewInRoomTimeline is the only non-room item and was added conditionally.
         }
-        
+
         if item.hasFailedToSend {
             actions = actions.filter(\.canAppearInFailedEcho)
             secondaryActions = secondaryActions.filter(\.canAppearInFailedEcho)
         }
-        
+
         if item.isRedacted {
             actions = actions.filter(\.canAppearInRedacted)
             secondaryActions = secondaryActions.filter(\.canAppearInRedacted)
         }
-        
+
         let isReactable = timelineKind == .live || timelineKind == .detached || timelineKind.isThread ? item.isReactable : false
 
         return .init(isReactable: isReactable, actions: actions, secondaryActions: secondaryActions, emojiProvider: emojiProvider)
     }
-    
+
     private func makeEncryptedItemActions(_ encryptedItem: EncryptedRoomTimelineItem) -> TimelineItemMenuActions? {
         var actions: [TimelineItemMenuAction] = [.copyPermalink]
 
         if isViewSourceEnabled {
             actions.append(.viewSource)
         }
-                
+
         return .init(isReactable: false,
                      actions: actions,
                      secondaryActions: [],
                      emojiProvider: emojiProvider)
     }
-    
+
     private func canRedactItem(_ item: EventBasedTimelineItemProtocol) -> Bool {
         item.isOutgoing ? canCurrentUserRedactSelf : canCurrentUserRedactOthers
     }

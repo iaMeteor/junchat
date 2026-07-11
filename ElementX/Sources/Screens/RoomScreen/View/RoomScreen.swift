@@ -236,17 +236,23 @@ struct RoomScreen: View {
                 .font(.compound.bodyMDSemibold)
                 .foregroundStyle(.compound.textPrimary)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            
+
             Button("取消") {
                 timelineContext.send(viewAction: .cancelBulkRedactionSelection)
             }
             .buttonStyle(.compound(.tertiary, size: .medium))
-            
+
+            Button("转发") {
+                timelineContext.send(viewAction: .forwardBulkRedactionSelection)
+            }
+            .buttonStyle(.compound(.tertiary, size: .medium))
+            .disabled(!timelineContext.viewState.bulkRedactionSelectionState.canForwardSelectedMessages)
+
             Button("删除", role: .destructive) {
                 isBulkRedactionConfirmationPresented = true
             }
             .buttonStyle(.compound(.tertiary, size: .medium))
-            .disabled(!timelineContext.viewState.bulkRedactionSelectionState.isActive)
+            .disabled(!timelineContext.viewState.bulkRedactionSelectionState.canRedactSelectedMessages)
         }
         .padding(.horizontal, 16)
         .padding(.top, 10)

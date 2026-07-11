@@ -90,6 +90,7 @@ targets:
         NSLocationAlwaysAndWhenInUseUsageDescription: 君聊仅在你主动使用位置相关功能时访问位置信息，用于发送当前位置或实时位置共享。未使用该功能时不会访问你的定位。
         NSLocationWhenInUseUsageDescription: 君聊仅在你主动使用位置相关功能时访问位置信息，用于发送当前位置或查看位置消息。未使用该功能时不会访问你的定位。
         UIBackgroundModes: [
+          audio,
           fetch,
           processing,
           voip
@@ -208,6 +209,10 @@ targets:
       basedOnDependencyAnalysis: false
       shell: /bin/sh
       script: |
+        if [ "${JUNCHAT_SKIP_SWIFTLINT:-}" = "1" ]; then
+            echo "warning: SwiftLint skipped for this local Junchat build"
+            exit 0
+        fi
         export PATH="$PATH:/opt/homebrew/bin"
         if which swiftlint >/dev/null; then
             swiftlint

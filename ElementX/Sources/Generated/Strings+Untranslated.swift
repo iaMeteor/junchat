@@ -18,6 +18,8 @@ internal enum UntranslatedL10n {
   internal static var cryptoHistorySharingConfirmStartChatDialogContent: String { return UntranslatedL10n.tr("Untranslated", "crypto_history_sharing_confirm_start_chat_dialog_content") }
   /// Start a chat with this new contact?
   internal static var cryptoHistorySharingConfirmStartChatDialogTitle: String { return UntranslatedL10n.tr("Untranslated", "crypto_history_sharing_confirm_start_chat_dialog_title") }
+  /// Don’t show again
+  internal static var identityConfirmationDontShowAgain: String { return UntranslatedL10n.tr("Untranslated", "identity_confirmation_dont_show_again") }
   /// Clear all data currently stored on this device?
   /// Sign in again to access your account data and messages.
   internal static var softLogoutClearDataDialogContent: String { return UntranslatedL10n.tr("Untranslated", "soft_logout_clear_data_dialog_content") }

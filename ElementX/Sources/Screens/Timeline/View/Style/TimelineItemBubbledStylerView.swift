@@ -13,7 +13,7 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
     @EnvironmentObject private var context: TimelineViewModel.Context
     @Environment(\.timelineGroupStyle) private var timelineGroupStyle
     @Environment(\.focussedEventID) private var focussedEventID
-    
+
     let timelineItem: EventBasedTimelineItemProtocol
     let adjustedDeliveryStatus: TimelineItemDeliveryStatus?
     @ViewBuilder let content: () -> Content
@@ -38,10 +38,14 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
         context.viewState.privacyControlledTimelineItemIDs.contains(timelineItem.id.uniqueID)
     }
 
-    private var bulkRedactionID: TimelineItemIdentifier.EventOrTransactionID? {
-        TimelineBulkRedactionEligibility.selectableRedactionID(for: timelineItem,
-                                                               canCurrentUserRedactSelf: context.viewState.canCurrentUserRedactSelf,
-                                                               canCurrentUserRedactOthers: context.viewState.canCurrentUserRedactOthers)
+    private var messageSelectionCapabilities: TimelineMessageSelectionCapabilities? {
+        TimelineMessageSelectionEligibility.capabilities(for: timelineItem,
+                                                         canCurrentUserRedactSelf: context.viewState.canCurrentUserRedactSelf,
+                                                         canCurrentUserRedactOthers: context.viewState.canCurrentUserRedactOthers)
+    }
+
+    private var messageSelectionID: TimelineItemIdentifier.EventOrTransactionID? {
+        messageSelectionCapabilities?.id
     }
 
     private var isBulkRedactionSelectionActive: Bool {
@@ -49,12 +53,12 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
     }
 
     private var isBulkRedactionSelected: Bool {
-        guard let bulkRedactionID else {
+        guard let messageSelectionID else {
             return false
         }
-        return context.viewState.bulkRedactionSelectionState.isSelected(bulkRedactionID)
+        return context.viewState.bulkRedactionSelectionState.isSelected(messageSelectionID)
     }
-    
+
     /// The base padding applied to bubbles on either side.
     ///
     /// **Note:** This is on top of the insets applied to the cells by the table view.
@@ -64,13 +68,13 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
         guard !timelineItem.isOutgoing, !isDirectOneToOneRoom else { return 0 }
         return 8
     }
-    
+
     var body: some View {
         HStack(spacing: 0) {
             if isBulkRedactionSelectionActive {
                 bulkRedactionSelectionButton
             }
-            
+
             ZStack(alignment: .trailingFirstTextBaseline) {
                 VStack(alignment: alignment, spacing: -12) {
                     if !timelineItem.isOutgoing, !isDirectOneToOneRoom {
@@ -104,7 +108,7 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
             }
             .contentShape(Rectangle())
             .onTapGesture {
-                guard isBulkRedactionSelectionActive, bulkRedactionID != nil else {
+                guard isBulkRedactionSelectionActive, messageSelectionID != nil else {
                     return
                 }
                 context.send(viewAction: .toggleBulkRedactionSelection(itemID: timelineItem.id))
@@ -113,7 +117,7 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
         .padding(EdgeInsets(top: 1, leading: 8, bottom: 1, trailing: 8))
         .highlightedTimelineItem(isFocussed)
     }
-    
+
     @ViewBuilder
     private var header: some View {
         if shouldShowSenderDetails {
@@ -123,7 +127,7 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
                     Text(timelineItem.sender.displayName ?? timelineItem.sender.id)
                         .font(.compound.bodySMSemibold)
                         .foregroundColor(.compound.decorativeColor(for: timelineItem.sender.id).text)
-                    
+
                     if timelineItem.sender.displayName != nil, timelineItem.sender.isDisplayNameAmbiguous {
                         Text(timelineItem.sender.id)
                             .font(.compound.bodyXS)
@@ -141,7 +145,7 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
             .padding(.top, 8)
         }
     }
-    
+
     private var messageBubbleWithReactions: some View {
         // Figma overlaps reactions by 3
         VStack(alignment: alignment, spacing: -3) {
@@ -149,7 +153,7 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
                 .timelineItemAccessibility(timelineItem) {
                     context.send(viewAction: .displayTimelineItemMenu(itemID: timelineItem.id))
                 }
-            
+
             // Do not display reactions in the pinned events timeline
             if context.viewState.timelineKind != .pinned,
                !timelineItem.properties.reactions.isEmpty {
@@ -160,7 +164,7 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
                     // Workaround to stop the message long press stealing the touch from the reaction buttons
                     .onTapGesture { }
             }
-            
+
             if context.viewState.areThreadsEnabled,
                !context.viewState.timelineKind.isThread,
                let threadSummary = timelineItem.properties.threadSummary {
@@ -171,7 +175,7 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
             }
         }
     }
-    
+
     @ViewBuilder
     var messageBubbleWithActions: some View {
         if isBulkRedactionSelectionActive {
@@ -220,7 +224,7 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
 
     private var bulkRedactionSelectionButton: some View {
         Button {
-            guard bulkRedactionID != nil else {
+            guard messageSelectionID != nil else {
                 return
             }
             context.send(viewAction: .toggleBulkRedactionSelection(itemID: timelineItem.id))
@@ -233,7 +237,7 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
                             .fill(isBulkRedactionSelected ? Color.compound.bgActionPrimaryRest : Color.compound.bgCanvasDefault)
                     }
                     .frame(width: 22, height: 22)
-                
+
                 if isBulkRedactionSelected {
                     Image(systemName: "checkmark")
                         .font(.system(size: 11, weight: .bold))
@@ -241,12 +245,12 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
                 }
             }
             .frame(width: 42)
-            .opacity(bulkRedactionID == nil ? 0.35 : 1)
+            .opacity(messageSelectionID == nil ? 0.35 : 1)
         }
         .buttonStyle(.plain)
-        .disabled(bulkRedactionID == nil)
+        .disabled(messageSelectionID == nil)
     }
-    
+
     var messageBubble: some View {
         contentWithReply
             .timelineItemSendInfo(timelineItem: timelineItem, adjustedDeliveryStatus: adjustedDeliveryStatus, context: context)
@@ -255,7 +259,7 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
                               color: timelineItem.bubbleBackgroundColor)
             .privacyControlledIndicator(isVisible: isPrivacyControlled, isOutgoing: timelineItem.isOutgoing)
     }
-    
+
     var contentWithReply: some View {
         TimelineBubbleLayout(spacing: 8) {
             if !context.viewState.timelineKind.isThread, timelineItem.properties.isThreaded {
@@ -263,11 +267,11 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
                     .padding(.leading, 4)
                     .timelineBubbleLayoutSize(.natural)
             }
-            
+
             if let replyDetails = timelineItem.properties.replyDetails {
                 // The rendered reply bubble with a greedy width. The custom layout prevents
                 // the infinite width from increasing the overall width of the view.
-                
+
                 TimelineReplyView(placement: .timeline, timelineItemReplyDetails: replyDetails, maxWidth: .infinity)
                     .timelineBubbleLayoutSize(.bubbleWidth(mode: .rendering))
                     .onTapGesture {
@@ -275,28 +279,28 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
                             context.send(viewAction: .focusOnEventID(replyDetails.eventID))
                         }
                     }
-                
+
                 // Add a fixed width reply bubble that is used for layout calculations but won't be rendered.
                 TimelineReplyView(placement: .timeline, timelineItemReplyDetails: replyDetails)
                     .timelineBubbleLayoutSize(.bubbleWidth(mode: .layout))
                     .hidden()
             }
-            
+
             content()
                 .timelineBubbleLayoutSize(.natural)
                 .cornerRadius(timelineItem.contentCornerRadius)
         }
     }
-    
+
     private var messageBubbleTopPadding: CGFloat {
         guard timelineItem.isOutgoing || isDirectOneToOneRoom else { return 0 }
         return timelineGroupStyle == .single || timelineGroupStyle == .first ? 8 : 0
     }
-    
+
     private var alignment: HorizontalAlignment {
         timelineItem.isOutgoing ? .trailing : .leading
     }
-    
+
     private var shouldShowSenderDetails: Bool {
         timelineGroupStyle.shouldShowSenderDetails
     }
@@ -306,7 +310,7 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
 private extension EventBasedTimelineItemProtocol {
     var bubbleBackgroundColor: Color? {
         let defaultColor: Color = isOutgoing ? .compound._bgBubbleOutgoing : .compound._bgBubbleIncoming
-        
+
         switch self {
         case is ImageRoomTimelineItem, is VideoRoomTimelineItem:
             // In case a reply detail or a thread decorator is present we render the color and the padding
@@ -342,7 +346,7 @@ private extension EventBasedTimelineItemProtocol {
             return defaultInsets
         }
     }
-    
+
     var contentCornerRadius: CGFloat {
         switch self {
         case is ImageRoomTimelineItem, is VideoRoomTimelineItem, is LocationRoomTimelineItem, is LiveLocationRoomTimelineItem:
@@ -364,7 +368,7 @@ private extension EdgeInsets {
 private struct PinnedIndicatorViewModifier: ViewModifier {
     let isPinned: Bool
     let isOutgoing: Bool
-    
+
     func body(content: Content) -> some View {
         if isPinned {
             HStack(alignment: .top, spacing: 8) {
@@ -381,7 +385,7 @@ private struct PinnedIndicatorViewModifier: ViewModifier {
             content
         }
     }
-    
+
     private var pinnedIndicator: some View {
         CompoundIcon(\.pinSolid, size: .xSmall, relativeTo: .compound.bodyMD)
             .foregroundStyle(Color.compound.iconTertiary)
@@ -443,7 +447,7 @@ struct TimelineItemBubbledStylerView_Previews: PreviewProvider, TestablePreview 
     static let viewModel: TimelineViewModel = {
         let appSettings = AppSettings()
         appSettings.threadsEnabled = true
-        
+
         let roomProxy = JoinedRoomProxyMock(.init())
         return TimelineViewModel(roomProxy: roomProxy,
                                  focussedEventID: nil,
@@ -458,11 +462,11 @@ struct TimelineItemBubbledStylerView_Previews: PreviewProvider, TestablePreview 
                                  linkMetadataProvider: LinkMetadataProvider(),
                                  timelineControllerFactory: TimelineControllerFactoryMock(.init()))
     }()
-    
+
     static let viewModelWithPins: TimelineViewModel = {
         let appSettings = AppSettings()
         appSettings.threadsEnabled = true
-        
+
         let roomProxy = JoinedRoomProxyMock(.init(name: "Preview Room", pinnedEventIDs: ["pinned"]))
         return TimelineViewModel(roomProxy: roomProxy,
                                  focussedEventID: nil,
@@ -508,7 +512,7 @@ struct TimelineItemBubbledStylerView_Previews: PreviewProvider, TestablePreview 
             .previewLayout(.fixed(width: 390, height: 1150))
             .padding(.bottom, 20)
     }
-    
+
     static var mockTimeline: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
@@ -520,7 +524,7 @@ struct TimelineItemBubbledStylerView_Previews: PreviewProvider, TestablePreview 
         .environmentObject(viewModel.context)
         .environment(\.timelineContext, viewModel.context)
     }
-    
+
     static var replies: some View {
         VStack(spacing: 0) {
             RoomTimelineItemView(viewState: .init(item: TextRoomTimelineItem(id: .randomEvent,
@@ -534,7 +538,7 @@ struct TimelineItemBubbledStylerView_Previews: PreviewProvider, TestablePreview 
                                                                                                                      eventID: "123",
                                                                                                                      eventContent: .message(.text(.init(body: "Short")))))),
                                                   groupStyle: .single))
-            
+
             let properties = RoomTimelineItemProperties(replyDetails: .loaded(sender: .init(id: "", displayName: "Alice"),
                                                                               eventID: "123",
                                                                               eventContent: .message(.text(.init(body: "A long message that should be on more than 2 lines and so will be clipped by the layout.")))))
@@ -551,7 +555,7 @@ struct TimelineItemBubbledStylerView_Previews: PreviewProvider, TestablePreview 
         .environmentObject(viewModel.context)
         .environment(\.timelineContext, viewModel.context)
     }
-    
+
     static var threadDecorator: some View {
         ScrollView {
             MockTimelineContent(isThreaded: true)
@@ -559,20 +563,20 @@ struct TimelineItemBubbledStylerView_Previews: PreviewProvider, TestablePreview 
         .environmentObject(viewModel.context)
         .environment(\.timelineContext, viewModel.context)
     }
-    
+
     static var threadSummary: some View {
         ScrollView {
             let threadSummary = TimelineItemThreadSummary.loaded(senderID: "@alice:matrix.org",
                                                                  sender: .init(id: "@alice:matrix.org", displayName: "Alice"),
                                                                  latestEventContent: .message(.text(.init(body: "This is a very long, multi-lined, threaded message"))),
                                                                  numberOfReplies: 42)
-            
+
             MockTimelineContent(threadSummary: threadSummary)
         }
         .environmentObject(viewModelWithPins.context)
         .environment(\.timelineContext, viewModel.context)
     }
-      
+
     static var pinned: some View {
         ScrollView {
             MockTimelineContent(isPinned: true)
@@ -580,7 +584,7 @@ struct TimelineItemBubbledStylerView_Previews: PreviewProvider, TestablePreview 
         .environmentObject(viewModelWithPins.context)
         .environment(\.timelineContext, viewModel.context)
     }
-    
+
     static var encryptionAuthenticity: some View {
         VStack(spacing: 0) {
             RoomTimelineItemView(viewState: .init(item: TextRoomTimelineItem(id: .randomEvent,
@@ -592,7 +596,7 @@ struct TimelineItemBubbledStylerView_Previews: PreviewProvider, TestablePreview 
                                                                              content: .init(body: "A long message that should be on multiple lines."),
                                                                              properties: RoomTimelineItemProperties(encryptionAuthenticity: .unsignedDevice(color: .red))),
                                                   groupStyle: .single))
-            
+
             RoomTimelineItemView(viewState: .init(item: TextRoomTimelineItem(id: .randomEvent,
                                                                              timestamp: .mock,
                                                                              isOutgoing: true,
@@ -603,7 +607,7 @@ struct TimelineItemBubbledStylerView_Previews: PreviewProvider, TestablePreview 
                                                                              properties: RoomTimelineItemProperties(isEdited: true,
                                                                                                                     encryptionAuthenticity: .unsignedDevice(color: .red))),
                                                   groupStyle: .single))
-            
+
             RoomTimelineItemView(viewState: .init(item: TextRoomTimelineItem(id: .randomEvent,
                                                                              timestamp: .mock,
                                                                              isOutgoing: false,
@@ -613,7 +617,7 @@ struct TimelineItemBubbledStylerView_Previews: PreviewProvider, TestablePreview 
                                                                              content: .init(body: "Short message"),
                                                                              properties: RoomTimelineItemProperties(encryptionAuthenticity: .unknownDevice(color: .red))),
                                                   groupStyle: .first))
-            
+
             RoomTimelineItemView(viewState: .init(item: TextRoomTimelineItem(id: .randomEvent,
                                                                              timestamp: .mock,
                                                                              isOutgoing: false,
@@ -623,7 +627,7 @@ struct TimelineItemBubbledStylerView_Previews: PreviewProvider, TestablePreview 
                                                                              content: .init(body: "Message goes Here"),
                                                                              properties: RoomTimelineItemProperties(encryptionAuthenticity: .notGuaranteed(color: .gray))),
                                                   groupStyle: .last))
-            
+
             ImageRoomTimelineView(timelineItem: ImageRoomTimelineItem(id: .randomEvent,
                                                                       timestamp: .mock,
                                                                       isOutgoing: false,
@@ -633,9 +637,8 @@ struct TimelineItemBubbledStylerView_Previews: PreviewProvider, TestablePreview 
                                                                       content: .init(filename: "other.png",
                                                                                      imageInfo: .mockImage,
                                                                                      thumbnailInfo: nil),
-                                                                      
                                                                       properties: RoomTimelineItemProperties(encryptionAuthenticity: .notGuaranteed(color: .gray))))
-            
+
             VoiceMessageRoomTimelineView(timelineItem: .init(id: .randomEvent,
                                                              timestamp: .mock,
                                                              isOutgoing: true,
@@ -658,7 +661,7 @@ struct TimelineItemBubbledStylerView_Previews: PreviewProvider, TestablePreview 
         .environmentObject(viewModel.context)
         .environment(\.timelineContext, viewModel.context)
     }
-    
+
     static var encryptionForwarder: some View {
         VStack(spacing: 0) {
             RoomTimelineItemView(viewState: .init(item: TextRoomTimelineItem(id: .randomEvent,
@@ -670,7 +673,7 @@ struct TimelineItemBubbledStylerView_Previews: PreviewProvider, TestablePreview 
                                                                              content: .init(body: "A long message that should be on multiple lines."),
                                                                              properties: RoomTimelineItemProperties(isEdited: true, encryptionForwarder: .test)),
                                                   groupStyle: .single))
-            
+
             RoomTimelineItemView(viewState: .init(item: TextRoomTimelineItem(id: .randomEvent,
                                                                              timestamp: .mock,
                                                                              isOutgoing: true,
@@ -680,7 +683,7 @@ struct TimelineItemBubbledStylerView_Previews: PreviewProvider, TestablePreview 
                                                                              content: .init(body: "A long message that should be on multiple lines."),
                                                                              properties: RoomTimelineItemProperties(encryptionForwarder: .test)),
                                                   groupStyle: .single))
-            
+
             RoomTimelineItemView(viewState: .init(item: TextRoomTimelineItem(id: .randomEvent,
                                                                              timestamp: .mock,
                                                                              isOutgoing: false,
@@ -690,7 +693,7 @@ struct TimelineItemBubbledStylerView_Previews: PreviewProvider, TestablePreview 
                                                                              content: .init(body: "Short message"),
                                                                              properties: RoomTimelineItemProperties(encryptionForwarder: .test)),
                                                   groupStyle: .first))
-            
+
             RoomTimelineItemView(viewState: .init(item: TextRoomTimelineItem(id: .randomEvent,
                                                                              timestamp: .mock,
                                                                              isOutgoing: false,
@@ -700,7 +703,7 @@ struct TimelineItemBubbledStylerView_Previews: PreviewProvider, TestablePreview 
                                                                              content: .init(body: "Message goes Here"),
                                                                              properties: RoomTimelineItemProperties(encryptionForwarder: .test)),
                                                   groupStyle: .last))
-            
+
             ImageRoomTimelineView(timelineItem: ImageRoomTimelineItem(id: .randomEvent,
                                                                       timestamp: .mock,
                                                                       isOutgoing: false,
@@ -711,7 +714,7 @@ struct TimelineItemBubbledStylerView_Previews: PreviewProvider, TestablePreview 
                                                                                      imageInfo: .mockImage,
                                                                                      thumbnailInfo: nil),
                                                                       properties: RoomTimelineItemProperties(encryptionForwarder: .test)))
-            
+
             VoiceMessageRoomTimelineView(timelineItem: .init(id: .randomEvent,
                                                              timestamp: .mock,
                                                              isOutgoing: true,
@@ -740,7 +743,7 @@ private struct MockTimelineContent: View {
     var isThreaded = false
     var isPinned = false
     var threadSummary: TimelineItemThreadSummary?
-    
+
     var body: some View {
         RoomTimelineItemView(viewState: .init(item: TextRoomTimelineItem(id: makeItemIdentifier(),
                                                                          timestamp: .mock,
@@ -769,7 +772,7 @@ private struct MockTimelineContent: View {
                                                   properties: .init(replyDetails: replyDetails,
                                                                     isThreaded: isThreaded,
                                                                     threadSummary: threadSummary)))
-        
+
         FileRoomTimelineView(timelineItem: .init(id: makeItemIdentifier(),
                                                  timestamp: .mock,
                                                  isOutgoing: false,
@@ -785,7 +788,7 @@ private struct MockTimelineContent: View {
                                                  properties: .init(replyDetails: replyDetails,
                                                                    isThreaded: isThreaded,
                                                                    threadSummary: threadSummary)))
-        
+
         ImageRoomTimelineView(timelineItem: .init(id: makeItemIdentifier(),
                                                   timestamp: .mock,
                                                   isOutgoing: true,
@@ -798,7 +801,7 @@ private struct MockTimelineContent: View {
                                                   properties: .init(replyDetails: replyDetails,
                                                                     isThreaded: isThreaded,
                                                                     threadSummary: threadSummary)))
-        
+
         LocationRoomTimelineView(timelineItem: .init(id: makeItemIdentifier(),
                                                      timestamp: .mock,
                                                      isOutgoing: false,
@@ -811,7 +814,7 @@ private struct MockTimelineContent: View {
                                                      properties: .init(replyDetails: replyDetails,
                                                                        isThreaded: isThreaded,
                                                                        threadSummary: threadSummary)))
-        
+
         VoiceMessageRoomTimelineView(timelineItem: .init(id: makeItemIdentifier(),
                                                          timestamp: .mock,
                                                          isOutgoing: true,
@@ -832,11 +835,11 @@ private struct MockTimelineContent: View {
                                                                    duration: 10,
                                                                    waveform: EstimatedWaveform.mockWaveform))
     }
-    
+
     func makeItemIdentifier() -> TimelineItemIdentifier {
         isPinned ? .event(uniqueID: .init(""), eventOrTransactionID: .eventID("pinned")) : .randomEvent
     }
-    
+
     var replyDetails: TimelineItemReplyDetails? {
         isThreaded ? .loaded(sender: .init(id: "", displayName: "Alice"),
                              eventID: "123",

@@ -127,6 +127,10 @@ final class ElementCallWidgetDriver: WidgetCapabilitiesProvider, ElementCallWidg
         self.deviceID = deviceID
     }
     
+    static func skipLobbyOverride(voiceOnly: Bool, isDirect: Bool) -> Bool? {
+        voiceOnly && !isDirect ? true : nil
+    }
+
     func start(baseURL: URL,
                clientID: String,
                colorScheme: ColorScheme,
@@ -139,9 +143,11 @@ final class ElementCallWidgetDriver: WidgetCapabilitiesProvider, ElementCallWidg
         
         async let useEncryption = (try? room.latestEncryptionState() == .encrypted) ?? false
         async let intent = room.joinCallIntent(voiceOnly: voiceOnly)
+        async let isDirect = room.isDirect()
         
         let widgetSettings: WidgetSettings
         do {
+            let skipLobby = await Self.skipLobbyOverride(voiceOnly: voiceOnly, isDirect: isDirect)
             widgetSettings = try await newVirtualElementCallWidget(props: .init(elementCallUrl: baseURL.absoluteString,
                                                                                 widgetId: widgetID,
                                                                                 parentUrl: nil,
@@ -155,7 +161,8 @@ final class ElementCallWidgetDriver: WidgetCapabilitiesProvider, ElementCallWidg
                                                                                 sentryDsn: analyticsConfiguration?.sentryDSN,
                                                                                 
                                                                                 sentryEnvironment: nil),
-                                                                   config: .init(intent: intent))
+                                                                   config: .init(intent: intent,
+                                                                                 skipLobby: skipLobby))
         } catch {
             MXLog.error("Failed to build widget settings: \(error)")
             return .failure(.failedBuildingWidgetSettings)

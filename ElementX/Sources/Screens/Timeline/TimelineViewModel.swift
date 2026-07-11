@@ -198,6 +198,8 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
             state.bulkRedactionSelectionState = TimelineBulkRedactionSelectionState()
         case .confirmBulkRedactionSelection:
             confirmBulkRedactionSelection()
+        case .forwardBulkRedactionSelection:
+            forwardBulkRedactionSelection()
         case .tappedOnSenderDetails(let sender):
             handleTappedOnSenderDetails(sender: sender)
         case .displayEmojiPicker(let itemID):
@@ -669,29 +671,35 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
     }
 
     private func startBulkRedactionSelection(itemID: TimelineItemIdentifier) {
-        guard let eventOrTransactionID = selectableBulkRedactionID(itemID: itemID) else {
+        guard let capabilities = selectableMessageSelectionCapabilities(itemID: itemID) else {
             return
         }
-        state.bulkRedactionSelectionState = TimelineBulkRedactionSelectionState(selectedIDs: [eventOrTransactionID])
+        var selectionState = TimelineBulkRedactionSelectionState()
+        selectionState.insert(capabilities)
+        state.bulkRedactionSelectionState = selectionState
     }
 
     private func toggleBulkRedactionSelection(itemID: TimelineItemIdentifier) {
-        guard let eventOrTransactionID = selectableBulkRedactionID(itemID: itemID),
+        guard let capabilities = selectableMessageSelectionCapabilities(itemID: itemID),
               state.bulkRedactionSelectionState.isActive else {
             return
         }
-        
-        if state.bulkRedactionSelectionState.selectedIDs.contains(eventOrTransactionID) {
-            state.bulkRedactionSelectionState.selectedIDs.remove(eventOrTransactionID)
+
+        if state.bulkRedactionSelectionState.selectedIDs.contains(capabilities.id) {
+            state.bulkRedactionSelectionState.remove(capabilities.id)
         } else {
-            state.bulkRedactionSelectionState.selectedIDs.insert(eventOrTransactionID)
+            state.bulkRedactionSelectionState.insert(capabilities)
         }
     }
 
     private func confirmBulkRedactionSelection() {
-        let selectedIDs = state.bulkRedactionSelectionState.selectedIDs
+        let selectionState = state.bulkRedactionSelectionState
+        guard selectionState.canRedactSelectedMessages else {
+            return
+        }
+        let selectedIDs = selectionState.selectedIDs.intersection(selectionState.redactionIDs)
         state.bulkRedactionSelectionState = TimelineBulkRedactionSelectionState()
-        
+
         Task {
             for eventOrTransactionID in selectedIDs {
                 await timelineController.redact(eventOrTransactionID)
@@ -699,15 +707,61 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
         }
     }
 
+    private func forwardBulkRedactionSelection() {
+        let selectionState = state.bulkRedactionSelectionState
+        guard selectionState.canForwardSelectedMessages else {
+            return
+        }
+        let selectedIDs = selectionState.selectedIDs
+        state.bulkRedactionSelectionState = TimelineBulkRedactionSelectionState()
+
+        Task {
+            let forwardingItems = await selectedForwardingItems(selectedIDs: selectedIDs)
+            guard let firstItem = forwardingItems.first else { return }
+
+            let forwardingItem = firstItem.addingForwardingItems(Array(forwardingItems.dropFirst()))
+            actionsSubject.send(.displayMessageForwarding(forwardingItem: forwardingItem))
+        }
+    }
+
+    private func selectedForwardingItems(selectedIDs: Set<TimelineItemIdentifier.EventOrTransactionID>) async -> [MessageForwardingItem] {
+        var forwardingItems = [MessageForwardingItem]()
+
+        for timelineItem in timelineController.timelineItems {
+            guard let eventTimelineItem = timelineItem as? EventBasedTimelineItemProtocol,
+                  let eventOrTransactionID = eventTimelineItem.id.eventOrTransactionID,
+                  selectedIDs.contains(eventOrTransactionID),
+                  eventTimelineItem.isForwardable,
+                  let forwardingItem = await makeForwardingItem(for: eventTimelineItem.id) else {
+                continue
+            }
+
+            forwardingItems.append(forwardingItem)
+        }
+
+        return forwardingItems
+    }
+
     private func selectableBulkRedactionID(itemID: TimelineItemIdentifier) -> TimelineItemIdentifier.EventOrTransactionID? {
         guard let timelineItem = timelineController.timelineItems.firstUsingStableID(itemID),
               let eventTimelineItem = timelineItem as? EventBasedTimelineItemProtocol else {
             return nil
         }
-        
+
         return TimelineBulkRedactionEligibility.selectableRedactionID(for: eventTimelineItem,
                                                                       canCurrentUserRedactSelf: state.canCurrentUserRedactSelf,
                                                                       canCurrentUserRedactOthers: state.canCurrentUserRedactOthers)
+    }
+
+    private func selectableMessageSelectionCapabilities(itemID: TimelineItemIdentifier) -> TimelineMessageSelectionCapabilities? {
+        guard let timelineItem = timelineController.timelineItems.firstUsingStableID(itemID),
+              let eventTimelineItem = timelineItem as? EventBasedTimelineItemProtocol else {
+            return nil
+        }
+
+        return TimelineMessageSelectionEligibility.capabilities(for: eventTimelineItem,
+                                                                canCurrentUserRedactSelf: state.canCurrentUserRedactSelf,
+                                                                canCurrentUserRedactOthers: state.canCurrentUserRedactOthers)
     }
 
     private func sendReadReceiptIfNeeded(for lastVisibleItemID: TimelineItemIdentifier) async {
@@ -824,7 +878,7 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
         }
 
         if shouldRedactSentMessage && isPrivacyModeEnabled {
-            schedulePrivacyRedaction(for: message)
+            trackPrivacyControlledMessage(for: message)
         }
 
         scrollToBottom()
@@ -834,7 +888,7 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
         appSettings.junchatEmergencyPrivacyModeEnabled || appSettings.junchatPrivacyModeRoomIDs.contains(timelineController.roomID)
     }
 
-    private func schedulePrivacyRedaction(for message: String) {
+    private func trackPrivacyControlledMessage(for message: String) {
         pendingPrivacyMessageBodies.append(message)
         refreshPrivacyControlledTimelineItemIDs(from: timelineController.timelineItems)
 
@@ -843,24 +897,11 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
             guard !Task.isCancelled else {
                 return
             }
-            await self?.redactLatestPrivacyMessage(body: message)
+            await MainActor.run {
+                self?.removePendingPrivacyMessage(body: message)
+                self?.refreshPrivacyControlledTimelineItemIDs(from: self?.timelineController.timelineItems ?? [])
+            }
         }
-    }
-
-    private func redactLatestPrivacyMessage(body: String) async {
-        defer {
-            removePendingPrivacyMessage(body: body)
-            refreshPrivacyControlledTimelineItemIDs(from: timelineController.timelineItems)
-        }
-
-        guard let timelineItem = timelineController.timelineItems.reversed()
-            .compactMap({ $0 as? EventBasedTimelineItemProtocol })
-            .first(where: { $0.isOutgoing && !$0.isRedacted && $0.body == body }),
-            let eventOrTransactionID = timelineItem.id.eventOrTransactionID else {
-            return
-        }
-
-        await timelineController.redact(eventOrTransactionID)
     }
 
     private func removePendingPrivacyMessage(body: String) {

@@ -9,8 +9,10 @@ import Compound
 import SwiftUI
 
 struct ContactsScreen: View {
+    @Environment(\.scenePhase) private var scenePhase
+
     @ObservedObject var context: ContactsScreenViewModel.Context
-    
+
     var body: some View {
         content
             .compoundList()
@@ -23,8 +25,12 @@ struct ContactsScreen: View {
             .refreshable {
                 context.send(viewAction: .refresh)
             }
+            .onChange(of: scenePhase) { _, newPhase in
+                guard newPhase == .active else { return }
+                context.send(viewAction: .refresh)
+            }
     }
-    
+
     @ViewBuilder
     private var content: some View {
         if context.viewState.isLoading {
@@ -53,7 +59,7 @@ struct ContactsScreen: View {
             .scrollIndicators(.visible)
         }
     }
-    
+
     private func avatar(for contact: UserProfileProxy) -> some View {
         LoadableAvatarImage(url: contact.avatarURL,
                             name: contact.displayName,
@@ -62,7 +68,7 @@ struct ContactsScreen: View {
                             mediaProvider: context.mediaProvider)
             .accessibilityHidden(true)
     }
-    
+
     private func displayTitle(for contact: UserProfileProxy) -> String {
         guard let displayName = contact.displayName?.trimmingCharacters(in: .whitespacesAndNewlines),
               !displayName.isEmpty else {
@@ -72,7 +78,7 @@ struct ContactsScreen: View {
                 .first
                 .map(String.init) ?? contact.userID
         }
-        
+
         return displayName
     }
 }
@@ -84,7 +90,7 @@ struct ContactsScreen_Previews: PreviewProvider, TestablePreview {
     static let viewModel = ContactsScreenViewModel(userSession: UserSessionMock(.init(clientProxy: clientProxy)),
                                                    contactsService: ContactsService(clientProxy: clientProxy),
                                                    userIndicatorController: UserIndicatorControllerMock())
-    
+
     static var previews: some View {
         ElementNavigationStack {
             ContactsScreen(context: viewModel.context)

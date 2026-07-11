@@ -39,4 +39,19 @@ struct RoomTests {
         callIntent = await room.joinCallIntent()
         #expect(callIntent == .joinExisting)
     }
+
+    @Test
+    func groupVoiceCallSkipsLobby() {
+        #expect(ElementCallWidgetDriver.skipLobbyOverride(voiceOnly: true, isDirect: false) == true)
+    }
+
+    @Test
+    func directVoiceCallKeepsIntentPreset() {
+        #expect(ElementCallWidgetDriver.skipLobbyOverride(voiceOnly: true, isDirect: true) == nil)
+    }
+
+    @Test
+    func groupVideoCallKeepsIntentPreset() {
+        #expect(ElementCallWidgetDriver.skipLobbyOverride(voiceOnly: false, isDirect: false) == nil)
+    }
 }

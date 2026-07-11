@@ -17,45 +17,45 @@ struct MessageForwardingScreenViewModelTests {
                                                content: .init(noHandle: .init()))
     var viewModel: MessageForwardingScreenViewModelProtocol!
     var context: MessageForwardingScreenViewModelType.Context!
-    
+
     init() {
         let clientProxy = ClientProxyMock(.init())
         clientProxy.roomForIdentifierClosure = { .joined(JoinedRoomProxyMock(.init(id: $0))) }
-        
+
         viewModel = MessageForwardingScreenViewModel(forwardingItem: forwardingItem,
                                                      userSession: UserSessionMock(.init(clientProxy: clientProxy)),
                                                      roomSummaryProvider: RoomSummaryProviderMock(.init(state: .loaded(.mockRooms))),
                                                      userIndicatorController: UserIndicatorControllerMock())
         context = viewModel.context
     }
-    
+
     @Test
     func initialState() {
         #expect(context.viewState.rooms.first { $0.id == forwardingItem.roomID } == nil, "The source room ID shouldn't be shown")
     }
-    
+
     @Test
     mutating func roomSelection() {
         context.send(viewAction: .selectRoom(roomID: "2"))
         #expect(context.viewState.selectedRoomID == "2")
     }
-    
+
     @Test
     mutating func searching() async throws {
         let deferred = deferFulfillment(context.$viewState) { state in
             state.rooms.count == 1
         }
-        
+
         context.searchQuery = "Second"
-        
+
         try await deferred.fulfill()
     }
-    
+
     @Test
     mutating func forwarding() async throws {
         context.send(viewAction: .selectRoom(roomID: "2"))
         #expect(context.viewState.selectedRoomID == "2")
-        
+
         let deferred = deferFulfillment(viewModel.actions) { action in
             switch action {
             case .sent(let roomID):
@@ -64,9 +64,42 @@ struct MessageForwardingScreenViewModelTests {
                 return false
             }
         }
-        
+
         context.send(viewAction: .send)
-        
+
         try await deferred.fulfill()
+    }
+
+    @Test
+    func forwardingMultipleItems() async throws {
+        let secondForwardingItem = MessageForwardingItem(id: .event(uniqueID: .init("t2"), eventOrTransactionID: .eventID("t2")),
+                                                         roomID: "1",
+                                                         content: .init(noHandle: .init()))
+        let targetTimeline = TimelineProxyMock(.init())
+        let targetRoom = JoinedRoomProxyMock(.init(id: "2"))
+        targetRoom.timeline = targetTimeline
+
+        let clientProxy = ClientProxyMock(.init())
+        clientProxy.roomForIdentifierClosure = { _ in .joined(targetRoom) }
+        let viewModel = MessageForwardingScreenViewModel(forwardingItem: forwardingItem.addingForwardingItems([secondForwardingItem]),
+                                                         userSession: UserSessionMock(.init(clientProxy: clientProxy)),
+                                                         roomSummaryProvider: RoomSummaryProviderMock(.init(state: .loaded(.mockRooms))),
+                                                         userIndicatorController: UserIndicatorControllerMock())
+        let context = viewModel.context
+        context.send(viewAction: .selectRoom(roomID: "2"))
+
+        let deferred = deferFulfillment(viewModel.actions) { action in
+            switch action {
+            case .sent(let roomID):
+                return roomID == "2"
+            default:
+                return false
+            }
+        }
+
+        context.send(viewAction: .send)
+        try await deferred.fulfill()
+
+        #expect(targetTimeline.sendMessageEventContentCallsCount == 2)
     }
 }

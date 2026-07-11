@@ -255,6 +255,7 @@ protocol ClientProxyProtocol: AnyObject {
     func junchatContacts() async -> Result<[UserProfileProxy], ClientProxyError>
     func junchatHideFromContactsDirectory() async -> Result<Bool, ClientProxyError>
     func setJunchatHideFromContactsDirectory(_ hidden: Bool) async -> Result<Void, ClientProxyError>
+    func junchatPrivacyMode(roomID: String) async -> Result<Bool, ClientProxyError>
     func setJunchatPrivacyMode(_ enabled: Bool, roomID: String) async -> Result<Void, ClientProxyError>
     func disableOwnAccountForEmergencyPIN() async -> Result<Void, ClientProxyError>
     func changePassword(oldPassword: String, newPassword: String, logoutDevices: Bool) async -> Result<Void, ClientProxyError>
