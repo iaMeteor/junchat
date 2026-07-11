@@ -173,6 +173,7 @@
 		1950A80CD198BED283DFC2CE /* ClientProxy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18F2958E6D247AE2516BEEE8 /* ClientProxy.swift */; };
 		197441F1EF23A5DABACCA79F /* StickerRoomTimelineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5338450E6783A576B5C16DD /* StickerRoomTimelineView.swift */; };
 		19946B8EEE158356EB5E1107 /* LocationShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9406BD5F99685C5ABDEDD93 /* LocationShareSheet.swift */; };
+		19A143CB56F734295C068650 /* JunchatServerEnvironmentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF665453493E8350DC856D67 /* JunchatServerEnvironmentTests.swift */; };
 		19DED23340D0855B59693ED2 /* VoiceMessageRecorderProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = D45C9EAA86423D7D3126DE4F /* VoiceMessageRecorderProtocol.swift */; };
 		19DF5600A7F547B22DD7872A /* CompletionSuggestionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A12D3D8138F1B71AFA7C858 /* CompletionSuggestionService.swift */; };
 		19FE025AE9BA2959B6589B0D /* RoomMemberDetailsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CC575D1895FA62591451A93 /* RoomMemberDetailsScreen.swift */; };
@@ -250,6 +251,7 @@
 		273AB64B9A26B61C51858867 /* AsyncSequence.swift in Sources */ = {isa = PBXBuildFile; fileRef = A73A07BAEDD74C48795A996A /* AsyncSequence.swift */; };
 		2748E5574A1031DD05E54FDA /* KnockRequestCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44B71F6D9062E8EB8929BB97 /* KnockRequestCell.swift */; };
 		274CE3C986841D15FD530BF5 /* ShimmerModifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97CE98208321C4D66E363612 /* ShimmerModifier.swift */; };
+		27598CF83F4E4A9C93BA0051 /* JunchatServerEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 361756662C32A44E3D5A1501 /* JunchatServerEnvironment.swift */; };
 		275EDE8849A2AC1D9309ED7C /* TemplateScreenViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B43456E73F8A2D52B69B9FB9 /* TemplateScreenViewModel.swift */; };
 		277FD4394EAFF323DA34997E /* HorizontalHighlightGradient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F4F0AB250EFA7B71FB2BDB2 /* HorizontalHighlightGradient.swift */; };
 		2797C9D9BA642370F1C85D78 /* Untranslated.stringsdict in Resources */ = {isa = PBXBuildFile; fileRef = F75DF9500D69A3AAF8339E69 /* Untranslated.stringsdict */; };
@@ -312,6 +314,7 @@
 		311868F5E65BA61AFA6CCC2C /* CompoundHook.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B89D6C760E8CAE29CA28FB1 /* CompoundHook.swift */; };
 		3118D9ABFD4BE5A3492FF88A /* ElementCallConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC437C491EA6996513B1CEAB /* ElementCallConfiguration.swift */; };
 		31CCF3159E5CE1C05AE5781B /* HTMLFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27A5FBB74981BF8EFFDAE90D /* HTMLFixtures.swift */; };
+		31D664F9477D3488D4C9F82A /* JunchatServerEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 361756662C32A44E3D5A1501 /* JunchatServerEnvironment.swift */; };
 		31DE6B7FD15E1C6E43885717 /* RoomRole.swift in Sources */ = {isa = PBXBuildFile; fileRef = 578AF9CE60816069536C0953 /* RoomRole.swift */; };
 		32B7891D937377A59606EDFC /* UserFlowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21DD8599815136EFF5B73F38 /* UserFlowTests.swift */; };
 		32F47002A331817F0E6BD7EB /* RoomMembershipDetailsProxyProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1434D5169F0EE319E226DA7F /* RoomMembershipDetailsProxyProtocol.swift */; };
@@ -669,6 +672,7 @@
 		6CBC544A7CC4DDDBDED4D0A6 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = 4B1F71AC585827E6C416C15A /* AppIcon.icon */; };
 		6CD61FAF03E8986523C2ABB8 /* StartChatScreenCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3005886F00029F058DB62BE /* StartChatScreenCoordinator.swift */; };
 		6CDD9285D2B54DBA2A463CAA /* junchat-call-soft-pulse.caf in Resources */ = {isa = PBXBuildFile; fileRef = 5599EDF015D556FADF30B7A0 /* junchat-call-soft-pulse.caf */; };
+		6D849A57C62BEAF595AFDC14 /* JunchatServerEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 361756662C32A44E3D5A1501 /* JunchatServerEnvironment.swift */; };
 		6DC8E43BA04AC2AC4EB2EB97 /* AnalyticsPromptScreenModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18486B87745B1811E7FBD3D2 /* AnalyticsPromptScreenModels.swift */; };
 		6E03A710799E6C65C0AB36BC /* TargetConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = B5D829FD8958376614504B18 /* TargetConfiguration.swift */; };
 		6E0C68918BEC5D27A4830BA6 /* PlaybackSpeedButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = BDBB8E5436E1BE0D6814BB7D /* PlaybackSpeedButton.swift */; };
@@ -1985,6 +1989,7 @@
 		358528B29FA72ACFD0D9644B /* SpacesScreenCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpacesScreenCoordinator.swift; sourceTree = "<group>"; };
 		35A057BA9BE0F079784CD061 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		35AFCF4C05DEED04E3DB1A16 /* de */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = de; path = de.lproj/Localizable.strings; sourceTree = "<group>"; };
+		361756662C32A44E3D5A1501 /* JunchatServerEnvironment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JunchatServerEnvironment.swift; sourceTree = "<group>"; };
 		36DA824791172B9821EACBED /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		36FD673E24FBFCFDF398716A /* RoomMemberProxyMock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomMemberProxyMock.swift; sourceTree = "<group>"; };
 		3747C96188856006F784BF49 /* ko */ = {isa = PBXFileReference; lastKnownFileType = text.plist.stringsdict; name = ko; path = ko.lproj/Localizable.stringsdict; sourceTree = "<group>"; };
@@ -2764,6 +2769,7 @@
 		BB6ED50FE104992419310EEB /* NotificationHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationHandler.swift; sourceTree = "<group>"; };
 		BB8BC4C791D0E88CFCF4E5DF /* ServerSelectionScreenCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerSelectionScreenCoordinator.swift; sourceTree = "<group>"; };
 		BBEC57C204D77908E355EF42 /* AudioRecorderProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRecorderProtocol.swift; sourceTree = "<group>"; };
+		BC17BD158499F18A132A2508 /* Canary.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Canary.xcconfig; sourceTree = "<group>"; };
 		BC2E7CEE6E9314FD69FE0ED9 /* ThreadTimelineScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThreadTimelineScreen.swift; sourceTree = "<group>"; };
 		BC51BF90469412ABDE658CDD /* portrait_test_image.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = portrait_test_image.jpg; sourceTree = "<group>"; };
 		BC8AA23D4F37CC26564F63C5 /* LayoutMocks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutMocks.swift; sourceTree = "<group>"; };
@@ -3145,6 +3151,7 @@
 		FE3AB4D399D39FBD78119011 /* AuthenticationStartScreenModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthenticationStartScreenModels.swift; sourceTree = "<group>"; };
 		FE5CD2993048222B64C45006 /* SDKListener.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SDKListener.swift; sourceTree = "<group>"; };
 		FEC4B431B0117BDEE697DB4A /* ComposerDisabledView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerDisabledView.swift; sourceTree = "<group>"; };
+		FF665453493E8350DC856D67 /* JunchatServerEnvironmentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JunchatServerEnvironmentTests.swift; sourceTree = "<group>"; };
 		FF720BA68256297680980481 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/InfoPlist.strings"; sourceTree = "<group>"; };
 		FFECCE59967018204876D0A5 /* LocationMarkerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationMarkerView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -3377,6 +3384,7 @@
 				F059D68C4F65EEB56160D643 /* Contacts */,
 				92E99C57D7F92ED16F73282C /* ElementCall */,
 				39557ADF21345E18F3865B9E /* Emojis */,
+				7649D106C37025AD13FE3EAE /* Environment */,
 				CA555F7C7CA382ACACF0D82B /* Keychain */,
 				DCF22D1E268F1A36EC3431E4 /* LinkMetadata */,
 				90FD376E9373246E4925CE95 /* Location */,
@@ -3415,6 +3423,7 @@
 		0B7746360C4753B5A014838F /* SupportingFiles */ = {
 			isa = PBXGroup;
 			children = (
+				BC17BD158499F18A132A2508 /* Canary.xcconfig */,
 				3D4DD336905C72F95EAF34B7 /* ElementX-Bridging-Header.h */,
 				9C5E81214D27A6B898FC397D /* ElementX.entitlements */,
 				81B17DB1BC3B0C62AF84D230 /* Info.plist */,
@@ -5093,6 +5102,7 @@
 				845DDBDE5A0887E73D38B826 /* InviteUsersViewModelTests.swift */,
 				DE5127D6EA05B2E45D0A7D59 /* JoinRoomScreenViewModelTests.swift */,
 				3AAE1C11B9EF94C753448D42 /* JunchatMapProviderTests.swift */,
+				FF665453493E8350DC856D67 /* JunchatServerEnvironmentTests.swift */,
 				004A433268B95DE050D303AF /* JunchatTetrisGameTests.swift */,
 				FDB9C37196A4C79F24CE80C6 /* KeychainControllerTests.swift */,
 				C9AC2CC94FA06F728883B694 /* KnockRequestsListScreenViewModelTests.swift */,
@@ -5232,6 +5242,14 @@
 				D977D4E565C06D3F41C8F8FC /* Virtual */,
 			);
 			path = Items;
+			sourceTree = "<group>";
+		};
+		7649D106C37025AD13FE3EAE /* Environment */ = {
+			isa = PBXGroup;
+			children = (
+				361756662C32A44E3D5A1501 /* JunchatServerEnvironment.swift */,
+			);
+			path = Environment;
 			sourceTree = "<group>";
 		};
 		7803E03F759061C948D66B7E /* AppLock */ = {
@@ -8039,6 +8057,7 @@
 				31CCF3159E5CE1C05AE5781B /* HTMLFixtures.swift in Sources */,
 				59F940FCBE6BC343AECEF75E /* ImageCache.swift in Sources */,
 				EBE13FAB4E29738AC41BD3E5 /* InfoPlistReader.swift in Sources */,
+				31D664F9477D3488D4C9F82A /* JunchatServerEnvironment.swift in Sources */,
 				8691186F9B99BCDDB7CACDD8 /* KeychainController.swift in Sources */,
 				A440D4BC02088482EC633A88 /* KeychainControllerProtocol.swift in Sources */,
 				FB0A9D06FC9122E37992D962 /* LayoutDirection.swift in Sources */,
@@ -8152,6 +8171,7 @@
 				A216C83ADCF32BA5EF8A6FBC /* InviteUsersViewModelTests.swift in Sources */,
 				7C0E29E0279866C62EC67A28 /* JoinRoomScreenViewModelTests.swift in Sources */,
 				C16A16C9D6733131B8505FAE /* JunchatMapProviderTests.swift in Sources */,
+				19A143CB56F734295C068650 /* JunchatServerEnvironmentTests.swift in Sources */,
 				B3513365C11F2D8AD08FD9EF /* JunchatTetrisGameTests.swift in Sources */,
 				EEC40663922856C65D1E0DF5 /* KeychainControllerTests.swift in Sources */,
 				BA48D6AFF6421D199148C0A1 /* KnockRequestsListScreenViewModelTests.swift in Sources */,
@@ -8280,6 +8300,7 @@
 				C022284E2774A5E1EF683B4D /* FileManager.swift in Sources */,
 				16A5D1749A32B91203495EF7 /* FrequentlyUsedEmoji.swift in Sources */,
 				05FF0CD80EDAB3A7C0D4700A /* InfoPlistReader.swift in Sources */,
+				27598CF83F4E4A9C93BA0051 /* JunchatServerEnvironment.swift in Sources */,
 				FC31493979ED1FDF7D5EA3F9 /* KeychainController.swift in Sources */,
 				5618ED25F092DF5712003829 /* KeychainControllerProtocol.swift in Sources */,
 				DA10C99BA43A0F1E732F6274 /* LogLevel.swift in Sources */,
@@ -8710,6 +8731,7 @@
 				D60192D7DFBF1F46AB3767D4 /* JunchatMapKitMapView.swift in Sources */,
 				A3FE793EDF5ABA839898F258 /* JunchatMapProvider.swift in Sources */,
 				BB814FB8ACF92803794D20F7 /* JunchatPasswordChangeRequest.swift in Sources */,
+				6D849A57C62BEAF595AFDC14 /* JunchatServerEnvironment.swift in Sources */,
 				CCDE84AAA48BAE9E25633C21 /* JunchatShareCard.swift in Sources */,
 				3345668A80500D2032D1184A /* JunchatSupportScreen.swift in Sources */,
 				7B32B32D8853A0E49FDE9D51 /* JunchatSupportScreenCoordinator.swift in Sources */,
@@ -9715,6 +9737,112 @@
 /* End PBXVariantGroup section */
 
 /* Begin XCBuildConfiguration section */
+		06181BA18FCBD9360F9F7732 /* Canary */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				APP_DISPLAY_NAME = "君聊";
+				APP_GROUP_IDENTIFIER = group.com.heyujk.junchat;
+				APP_NAME = Junchat;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = "colors/accent-color";
+				BASE_BUNDLE_IDENTIFIER = com.heyujk.junchat;
+				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 37;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = W834S4TA7S;
+				ENABLE_BITCODE = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
+				JUNCHAT_ASSOCIATED_DOMAIN = junchat.yyzs120.cn;
+				JUNCHAT_BACKGROUND_APP_REFRESH_TASK_IDENTIFIER = com.heyujk.junchat.background.refresh;
+				JUNCHAT_DIAGNOSTICS_ENDPOINT = "https://junchat.yyzs120.cn/junchat-errors/api/events";
+				JUNCHAT_LIVEKIT_JWT_URL = "https://junchat.yyzs120.cn/livekit/jwt";
+				JUNCHAT_MATRIX_ACCOUNT_PROVIDER = junchat.yyzs120.cn;
+				JUNCHAT_OIDC_REDIRECT_URL = "https://junchat.yyzs120.cn/oidc/login";
+				JUNCHAT_PUSH_GATEWAY_BASE_URL = "https://sygnal-junchat.yyzs120.cn";
+				JUNCHAT_RAGESHAKE_ENABLED = YES;
+				JUNCHAT_URL_SCHEME = matrix;
+				KEYCHAIN_ACCESS_GROUP_IDENTIFIER = "$(DEVELOPMENT_TEAM).$(BASE_BUNDLE_IDENTIFIER)";
+				MACOSX_DEPLOYMENT_TARGET = 14.5;
+				MARKETING_VERSION = 1.8.2;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCTION_APP_NAME = Junchat;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Canary;
+		};
+		099F9ECD8F981248EB45B51C /* Canary */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+			};
+			name = Canary;
+		};
+		264CAA693DF01D43A2B2A5BD /* Canary */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_NAME = MatrixRustSDKMocks;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Canary;
+		};
 		2DFF6BC8513E455947420CEA /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -9770,6 +9898,86 @@
 				TEST_TARGET_NAME = ElementX;
 			};
 			name = Debug;
+		};
+		3C8DA768C3ADB50D120D5152 /* Canary */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				INFOPLIST_FILE = AccessibilityTests/SupportingFiles/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "${BASE_BUNDLE_IDENTIFIER}.accessibility.tests";
+				PRODUCT_NAME = AccessibilityTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = ElementX;
+			};
+			name = Canary;
+		};
+		43E9CE3FBE07B2ABB427A3CC /* Canary */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = BC17BD158499F18A132A2508 /* Canary.xcconfig */;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = NSE/SupportingFiles/NSE.entitlements;
+				CURRENT_PROJECT_VERSION = "$(CURRENT_PROJECT_VERSION)";
+				DEVELOPMENT_TEAM = "$(DEVELOPMENT_TEAM)";
+				INFOPLIST_FILE = NSE/SupportingFiles/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = "$(MARKETING_VERSION)";
+				OTHER_SWIFT_FLAGS = (
+					"-DIS_NSE",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "${BASE_BUNDLE_IDENTIFIER}.nse";
+				PRODUCT_DISPLAY_NAME = "$(APP_DISPLAY_NAME)";
+				PRODUCT_NAME = NSE;
+				SDKROOT = iphoneos;
+				SWIFT_OBJC_INTERFACE_HEADER_NAME = "GeneratedInterface-Swift.h";
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Canary;
+		};
+		49FE4EC32D844D3A4EBE3BB7 /* Canary */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				INFOPLIST_FILE = UITests/SupportingFiles/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "${BASE_BUNDLE_IDENTIFIER}.ui.tests";
+				PRODUCT_NAME = UITests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = ElementX;
+			};
+			name = Canary;
+		};
+		4C3D3B6A616C0A7223266B0A /* Canary */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				INFOPLIST_FILE = IntegrationTests/SupportingFiles/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "${BASE_BUNDLE_IDENTIFIER}.integration.tests";
+				PRODUCT_NAME = IntegrationTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = ElementX;
+			};
+			name = Canary;
 		};
 		4CB921EC997F763064B8E436 /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -9866,6 +10074,24 @@
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
+		};
+		65027034855B4BDCE4610BBE /* Canary */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				INFOPLIST_FILE = PreviewTests/SupportingFiles/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "${BASE_BUNDLE_IDENTIFIER}.preview.tests";
+				PRODUCT_NAME = PreviewTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/$(APP_NAME).app/$(APP_NAME)";
+			};
+			name = Canary;
 		};
 		6897D5BC19A2EA6ABD57DE7E /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -9994,6 +10220,15 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
+				JUNCHAT_ASSOCIATED_DOMAIN = junchat.yyzs120.cn;
+				JUNCHAT_BACKGROUND_APP_REFRESH_TASK_IDENTIFIER = com.heyujk.junchat.background.refresh;
+				JUNCHAT_DIAGNOSTICS_ENDPOINT = "https://junchat.yyzs120.cn/junchat-errors/api/events";
+				JUNCHAT_LIVEKIT_JWT_URL = "https://junchat.yyzs120.cn/livekit/jwt";
+				JUNCHAT_MATRIX_ACCOUNT_PROVIDER = junchat.yyzs120.cn;
+				JUNCHAT_OIDC_REDIRECT_URL = "https://junchat.yyzs120.cn/oidc/login";
+				JUNCHAT_PUSH_GATEWAY_BASE_URL = "https://sygnal-junchat.yyzs120.cn";
+				JUNCHAT_RAGESHAKE_ENABLED = YES;
+				JUNCHAT_URL_SCHEME = matrix;
 				KEYCHAIN_ACCESS_GROUP_IDENTIFIER = "$(DEVELOPMENT_TEAM).$(BASE_BUNDLE_IDENTIFIER)";
 				MACOSX_DEPLOYMENT_TARGET = 14.5;
 				MARKETING_VERSION = 1.8.2;
@@ -10070,6 +10305,15 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
+				JUNCHAT_ASSOCIATED_DOMAIN = junchat.yyzs120.cn;
+				JUNCHAT_BACKGROUND_APP_REFRESH_TASK_IDENTIFIER = com.heyujk.junchat.background.refresh;
+				JUNCHAT_DIAGNOSTICS_ENDPOINT = "https://junchat.yyzs120.cn/junchat-errors/api/events";
+				JUNCHAT_LIVEKIT_JWT_URL = "https://junchat.yyzs120.cn/livekit/jwt";
+				JUNCHAT_MATRIX_ACCOUNT_PROVIDER = junchat.yyzs120.cn;
+				JUNCHAT_OIDC_REDIRECT_URL = "https://junchat.yyzs120.cn/oidc/login";
+				JUNCHAT_PUSH_GATEWAY_BASE_URL = "https://sygnal-junchat.yyzs120.cn";
+				JUNCHAT_RAGESHAKE_ENABLED = YES;
+				JUNCHAT_URL_SCHEME = matrix;
 				KEYCHAIN_ACCESS_GROUP_IDENTIFIER = "$(DEVELOPMENT_TEAM).$(BASE_BUNDLE_IDENTIFIER)";
 				MACOSX_DEPLOYMENT_TARGET = 14.5;
 				MARKETING_VERSION = 1.8.2;
@@ -10124,6 +10368,40 @@
 				TEST_TARGET_NAME = ElementX;
 			};
 			name = Debug;
+		};
+		A06C742DE1B8C15F3489C0FF /* Canary */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = BC17BD158499F18A132A2508 /* Canary.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = ElementX/SupportingFiles/ElementX.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CURRENT_PROJECT_VERSION = "$(CURRENT_PROJECT_VERSION)";
+				DEVELOPMENT_ASSET_PATHS = DevelopmentAssets/Media;
+				DEVELOPMENT_TEAM = "$(DEVELOPMENT_TEAM)";
+				INFOPLIST_FILE = ElementX/SupportingFiles/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = "$(MARKETING_VERSION)";
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+				);
+				OTHER_SWIFT_FLAGS = (
+					"-DIS_MAIN_APP",
+				);
+				PILLS_UT_TYPE_IDENTIFIER = "$(BASE_BUNDLE_IDENTIFIER).pills";
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BASE_BUNDLE_IDENTIFIER)";
+				PRODUCT_MODULE_NAME = ElementX;
+				PRODUCT_NAME = "$(APP_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_OBJC_BRIDGING_HEADER = "ElementX/SupportingFiles/ElementX-Bridging-Header.h";
+				SWIFT_OBJC_INTERFACE_HEADER_NAME = "GeneratedInterface-Swift.h";
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Canary;
 		};
 		A1ACA222659F60BAAFB9976B /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -10195,6 +10473,28 @@
 			};
 			name = Release;
 		};
+		D9DADA5F0704CFAC135359CC /* Canary */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = BC17BD158499F18A132A2508 /* Canary.xcconfig */;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = ShareExtension/SupportingFiles/ShareExtension.entitlements;
+				CURRENT_PROJECT_VERSION = "$(CURRENT_PROJECT_VERSION)";
+				DEVELOPMENT_TEAM = "$(DEVELOPMENT_TEAM)";
+				INFOPLIST_FILE = ShareExtension/SupportingFiles/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = "$(MARKETING_VERSION)";
+				PRODUCT_BUNDLE_IDENTIFIER = "${BASE_BUNDLE_IDENTIFIER}.shareextension";
+				PRODUCT_DISPLAY_NAME = "$(APP_DISPLAY_NAME)";
+				PRODUCT_NAME = ShareExtension;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Canary;
+		};
 		E57C898C511BBC8215673DEF /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -10215,6 +10515,24 @@
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
+		};
+		EE249228510D955307175AA2 /* Canary */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				INFOPLIST_FILE = UnitTests/SupportingFiles/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "${BASE_BUNDLE_IDENTIFIER}.unit.tests";
+				PRODUCT_NAME = UnitTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/$(APP_NAME).app/$(APP_NAME)";
+			};
+			name = Canary;
 		};
 		F0A74453D306F668178A859E /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -10258,101 +10576,112 @@
 		4272AFBE93EEF7B03D9B9ECD /* Build configuration list for PBXNativeTarget "MatrixRustSDKMocks" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
+				264CAA693DF01D43A2B2A5BD /* Canary */,
 				53B6D5892165E771A8489F9D /* Debug */,
 				2DFF6BC8513E455947420CEA /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Debug;
+			defaultConfigurationName = Canary;
 		};
 		79663128986C62EFAC289176 /* Build configuration list for PBXNativeTarget "UnitTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
+				EE249228510D955307175AA2 /* Canary */,
 				6EE786F14472D5CCF8DD0980 /* Debug */,
 				86C938520E216F41879961DF /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Debug;
+			defaultConfigurationName = Canary;
 		};
 		7AE41FCCF9D1352E2770D1F9 /* Build configuration list for PBXProject "ElementX" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
+				06181BA18FCBD9360F9F7732 /* Canary */,
 				7B3CFB954614306BF6CFFE97 /* Debug */,
 				7A90A3EBE1ABAB9EAE0952F0 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Debug;
+			defaultConfigurationName = Canary;
 		};
 		8FFA8C81E8F740B7AC0183EC /* Build configuration list for PBXNativeTarget "AccessibilityTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
+				3C8DA768C3ADB50D120D5152 /* Canary */,
 				33096BC465A038B6B6D76B7A /* Debug */,
 				2F9917BC52CB6F9FFACE9D64 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Debug;
+			defaultConfigurationName = Canary;
 		};
 		A60414DDC2A95B206C91D4A4 /* Build configuration list for PBXNativeTarget "ShareExtension" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
+				D9DADA5F0704CFAC135359CC /* Canary */,
 				7620CDAB1B38B30431DA8878 /* Debug */,
 				E57C898C511BBC8215673DEF /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Debug;
+			defaultConfigurationName = Canary;
 		};
 		B15427F8699AD5A5FC75C17E /* Build configuration list for PBXNativeTarget "ElementX" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
+				A06C742DE1B8C15F3489C0FF /* Canary */,
 				6897D5BC19A2EA6ABD57DE7E /* Debug */,
 				62E1B7866DF0ED442C39A83B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Debug;
+			defaultConfigurationName = Canary;
 		};
 		B7DCEF0CC298791B0EC4CA84 /* Build configuration list for PBXNativeTarget "IntegrationTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
+				4C3D3B6A616C0A7223266B0A /* Canary */,
 				AAE81BF8DCDB30B237B10C3E /* Debug */,
 				F0A74453D306F668178A859E /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Debug;
+			defaultConfigurationName = Canary;
 		};
 		C0090A197E33AEC1E7CD03FD /* Build configuration list for PBXAggregateTarget "Periphery" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
+				099F9ECD8F981248EB45B51C /* Canary */,
 				584E20C1DA5831E0694FE350 /* Debug */,
 				D31A0743D3A01F7671ABD26E /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Debug;
+			defaultConfigurationName = Canary;
 		};
 		CBD61DB8FBC472BAA66A0CBD /* Build configuration list for PBXNativeTarget "NSE" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
+				43E9CE3FBE07B2ABB427A3CC /* Canary */,
 				A46EFA0820A3F5A3A0C74CFE /* Debug */,
 				4CB921EC997F763064B8E436 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Debug;
+			defaultConfigurationName = Canary;
 		};
 		DA320DCEE4CFFAF3A564D280 /* Build configuration list for PBXNativeTarget "PreviewTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
+				65027034855B4BDCE4610BBE /* Canary */,
 				5206AC013E4214ADC89F8C3C /* Debug */,
 				FA443F049643C8C3F0066E59 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Debug;
+			defaultConfigurationName = Canary;
 		};
 		F1B67CF63C1231AEB14D70E6 /* Build configuration list for PBXNativeTarget "UITests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
+				49FE4EC32D844D3A4EBE3BB7 /* Canary */,
 				933B10FDD7A1E378AB35B76E /* Debug */,
 				A1ACA222659F60BAAFB9976B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Debug;
+			defaultConfigurationName = Canary;
 		};
 /* End XCConfigurationList section */
 

@@ -1,0 +1,13 @@
+APP_DISPLAY_NAME = 君聊 Canary
+APP_GROUP_IDENTIFIER = group.com.heyujk.junchat.canary
+BASE_BUNDLE_IDENTIFIER = com.heyujk.junchat.canary
+JUNCHAT_URL_SCHEME = matrix-canary
+JUNCHAT_ASSOCIATED_DOMAIN = canary.junchat.yyzs120.cn
+JUNCHAT_MATRIX_ACCOUNT_PROVIDER = canary.junchat.yyzs120.cn
+JUNCHAT_OIDC_REDIRECT_URL = https:/$()/canary.junchat.yyzs120.cn/oidc/login
+JUNCHAT_PUSH_GATEWAY_BASE_URL = https:/$()/canary.junchat.yyzs120.cn/push
+JUNCHAT_DIAGNOSTICS_ENDPOINT = https:/$()/canary.junchat.yyzs120.cn/diagnostics/api/events
+JUNCHAT_RAGESHAKE_ENABLED = NO
+JUNCHAT_BACKGROUND_APP_REFRESH_TASK_IDENTIFIER = com.heyujk.junchat.canary.background.refresh
+JUNCHAT_LIVEKIT_JWT_URL = https:/$()/canary.junchat.yyzs120.cn/livekit/jwt
+SWIFT_ACTIVE_COMPILATION_CONDITIONS = $(inherited) JUNCHAT_CANARY

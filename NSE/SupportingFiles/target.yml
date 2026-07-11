@@ -31,6 +31,9 @@ targets:
     type: app-extension
     platform: iOS
 
+    configFiles:
+      Canary: ../../ElementX/SupportingFiles/Canary.xcconfig
+
     dependencies:
       - package: MatrixRustSDK
       - package: KeychainAccess
@@ -50,6 +53,13 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         appGroupIdentifier: $(APP_GROUP_IDENTIFIER)
         baseBundleIdentifier: $(BASE_BUNDLE_IDENTIFIER)
+        JunchatMatrixAccountProvider: $(JUNCHAT_MATRIX_ACCOUNT_PROVIDER)
+        JunchatOIDCRedirectURL: $(JUNCHAT_OIDC_REDIRECT_URL)
+        JunchatPushGatewayBaseURL: $(JUNCHAT_PUSH_GATEWAY_BASE_URL)
+        JunchatDiagnosticsEndpoint: $(JUNCHAT_DIAGNOSTICS_ENDPOINT)
+        JunchatRageshakeEnabled: $(JUNCHAT_RAGESHAKE_ENABLED)
+        JunchatBackgroundAppRefreshTaskIdentifier: $(JUNCHAT_BACKGROUND_APP_REFRESH_TASK_IDENTIFIER)
+        JunchatLiveKitJWTURL: $(JUNCHAT_LIVEKIT_JWT_URL)
         keychainAccessGroupIdentifier: $(KEYCHAIN_ACCESS_GROUP_IDENTIFIER)
         productionAppName: $(PRODUCTION_APP_NAME)
         NSExtension:
@@ -85,6 +95,7 @@ targets:
     - path: ../../ElementX/Sources/AppHooks/Hooks/RemoteSettingsHook.swift
     - path: ../../Secrets/Secrets.swift
     - path: ../../ElementX/Sources/Application/Settings
+    - path: ../../ElementX/Sources/Services/Environment/JunchatServerEnvironment.swift
     - path: ../../ElementX/Sources/Application/TargetConfiguration.swift
     - path: ../../ElementX/Sources/Generated/Assets.swift
     - path: ../../ElementX/Sources/Generated/Strings.swift

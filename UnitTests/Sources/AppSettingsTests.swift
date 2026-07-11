@@ -124,6 +124,27 @@ struct AppSettingsTests {
         
         #expect(soundName?.rawValue == "junchat-call-soft-bell.caf")
     }
+
+    @Test
+    func serverValuesUseInjectedEnvironment() throws {
+        let environment = try #require(JunchatServerEnvironment(infoDictionary: [
+            "JunchatMatrixAccountProvider": "canary.junchat.yyzs120.cn",
+            "JunchatOIDCRedirectURL": "https://canary.junchat.yyzs120.cn/oidc/login",
+            "JunchatPushGatewayBaseURL": "https://canary.junchat.yyzs120.cn/push",
+            "JunchatDiagnosticsEndpoint": "https://canary.junchat.yyzs120.cn/diagnostics/api/events",
+            "JunchatRageshakeEnabled": "NO",
+            "JunchatBackgroundAppRefreshTaskIdentifier": "com.heyujk.junchat.canary.background.refresh",
+            "JunchatLiveKitJWTURL": "https://canary.junchat.yyzs120.cn/livekit/jwt"
+        ]))
+
+        let settings = AppSettings(serverEnvironment: environment)
+
+        #expect(settings.accountProviders == ["canary.junchat.yyzs120.cn"])
+        #expect(settings.oidcRedirectURL == URL(string: "https://canary.junchat.yyzs120.cn/oidc/login"))
+        #expect(settings.pushGatewayBaseURL == URL(string: "https://canary.junchat.yyzs120.cn/push"))
+        #expect(settings.backgroundAppRefreshTaskIdentifier == "com.heyujk.junchat.canary.background.refresh")
+        #expect(settings.bugReportRageshakeURL.publisher.value == RageshakeConfiguration.disabled)
+    }
     
     @Test
     func apnsEnvironmentReadsDevelopmentProvisioningProfile() {

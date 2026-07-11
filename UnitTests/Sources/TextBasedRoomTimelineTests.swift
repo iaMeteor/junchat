@@ -169,6 +169,16 @@ struct CallScreenJunchatTests {
     }
 
     @Test
+    func elementCallBootstrapUsesInjectedLiveKitEndpoint() throws {
+        let canaryURL = try #require(URL(string: "https://canary.junchat.yyzs120.cn/livekit/jwt"))
+
+        let script = CallScreen.junchatElementCallBootstrapScript(language: "zh-Hans", liveKitJWTURL: canaryURL)
+
+        #expect(script.contains("livekit_service_url: \"\(canaryURL.absoluteString)\""))
+        #expect(!script.contains("livekit_service_url: \"https://junchat.yyzs120.cn/livekit/jwt\""))
+    }
+
+    @Test
     func elementCallBootstrapReportsRemoteMediaTrackForConnectedTone() {
         let script = CallScreen.junchatElementCallBootstrapScript(language: "zh-Hans")
 

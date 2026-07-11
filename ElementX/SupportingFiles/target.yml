@@ -36,11 +36,51 @@ schemes:
       testPlans:
         - path: ../../UnitTests/SupportingFiles/UnitTests.xctestplan
           defaultPlan: true
+  ElementX Canary:
+    analyze:
+      config: Canary
+    archive:
+      config: Canary
+    build:
+      targets:
+        ElementX:
+          - running
+          - testing
+          - profiling
+          - analyzing
+          - archiving
+        NSE:
+          - running
+          - testing
+          - profiling
+          - analyzing
+          - archiving
+        ShareExtension:
+          - running
+          - testing
+          - profiling
+          - analyzing
+          - archiving
+    profile:
+      config: Canary
+    run:
+      config: Canary
+    test:
+      config: Debug
+      gatherCoverageData: true
+      coverageTargets:
+        - ElementX
+      testPlans:
+        - path: ../../UnitTests/SupportingFiles/UnitTests.xctestplan
+          defaultPlan: true
 
 targets:
   ElementX:
     type: application
     platform: iOS
+
+    configFiles:
+      Canary: Canary.xcconfig
 
     info:
       path: Info.plist
@@ -61,7 +101,7 @@ targets:
             CFBundleURLName: "Application",
             CFBundleURLSchemes: [
               $(BASE_BUNDLE_IDENTIFIER), # The app's own scheme for custom routes
-              "matrix" # Matrix URI scheme for permalinks
+              $(JUNCHAT_URL_SCHEME) # Matrix URI scheme for permalinks
             ]
           }
         ]
@@ -76,6 +116,13 @@ targets:
         ]
         appGroupIdentifier: $(APP_GROUP_IDENTIFIER)
         baseBundleIdentifier: $(BASE_BUNDLE_IDENTIFIER)
+        JunchatMatrixAccountProvider: $(JUNCHAT_MATRIX_ACCOUNT_PROVIDER)
+        JunchatOIDCRedirectURL: $(JUNCHAT_OIDC_REDIRECT_URL)
+        JunchatPushGatewayBaseURL: $(JUNCHAT_PUSH_GATEWAY_BASE_URL)
+        JunchatDiagnosticsEndpoint: $(JUNCHAT_DIAGNOSTICS_ENDPOINT)
+        JunchatRageshakeEnabled: $(JUNCHAT_RAGESHAKE_ENABLED)
+        JunchatBackgroundAppRefreshTaskIdentifier: $(JUNCHAT_BACKGROUND_APP_REFRESH_TASK_IDENTIFIER)
+        JunchatLiveKitJWTURL: $(JUNCHAT_LIVEKIT_JWT_URL)
         keychainAccessGroupIdentifier: $(KEYCHAIN_ACCESS_GROUP_IDENTIFIER)
         productionAppName: $(PRODUCTION_APP_NAME)
         ITSAppUsesNonExemptEncryption: false
@@ -96,7 +143,7 @@ targets:
           voip
         ]
         BGTaskSchedulerPermittedIdentifiers: [
-          com.heyujk.junchat.background.refresh
+          $(JUNCHAT_BACKGROUND_APP_REFRESH_TASK_IDENTIFIER)
         ]
         UTExportedTypeDeclarations:
         - UTTypeConformsTo: [public.text]
@@ -114,10 +161,10 @@ targets:
       properties:
         aps-environment: development
         com.apple.developer.associated-domains:
-        - applinks:junchat.yyzs120.cn
+        - applinks:$(JUNCHAT_ASSOCIATED_DOMAIN)
         - applinks:matrix.to
         # - applinks:localhost?mode=developer # developer mode only works with https (but self-signed is fine).
-        - webcredentials:junchat.yyzs120.cn
+        - webcredentials:$(JUNCHAT_ASSOCIATED_DOMAIN)
         com.apple.developer.usernotifications.communication: true
         com.apple.security.app-sandbox: true
         com.apple.security.application-groups:

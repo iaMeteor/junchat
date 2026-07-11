@@ -144,7 +144,7 @@ enum MXLog {
         }
         
         logEvent(file: (file as NSString).lastPathComponent, line: UInt32(line), level: level.rustLogLevel, target: currentTarget, message: "\(message)")
-        #if IS_MAIN_APP
+        #if IS_MAIN_APP && !JUNCHAT_CANARY
         if level == .error {
             JunchatErrorReporter.captureError(message, file: file, function: function, line: line)
         }
@@ -153,8 +153,15 @@ enum MXLog {
 }
 
 #if IS_MAIN_APP
+#if JUNCHAT_CANARY
 enum JunchatErrorReporter {
-    private static let endpoint = URL(string: "https://junchat.yyzs120.cn/junchat-errors/api/events")! // swiftlint:disable:this force_unwrapping
+    static func install() {
+        // Canary diagnostics require a separately provisioned credential.
+    }
+}
+#else
+enum JunchatErrorReporter {
+    private static let endpoint = JunchatServerEnvironment.current.diagnosticsEndpoint
     private static let ingestToken = "635d21e7ea07a7e7241f92fb9b86bbbeab1f1434d542fbd1"
     private static let queue = DispatchQueue(label: "cn.yyzs120.junchat.error-reporter")
     private static let duplicateWindow: TimeInterval = 60
@@ -349,4 +356,5 @@ enum JunchatErrorReporter {
             lower.contains("key")
     }
 }
+#endif
 #endif

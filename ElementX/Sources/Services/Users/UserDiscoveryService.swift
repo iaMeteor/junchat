@@ -9,14 +9,12 @@
 import Foundation
 
 final class UserDiscoveryService: UserDiscoveryServiceProtocol {
-    private static let fallbackHomeserver = "junchat.yyzs120.cn"
-    
     private let clientProxy: ClientProxyProtocol
     private let localHomeserver: String
     
-    init(clientProxy: ClientProxyProtocol) {
+    init(clientProxy: ClientProxyProtocol, serverEnvironment: JunchatServerEnvironment = .current) {
         self.clientProxy = clientProxy
-        localHomeserver = Self.homeserver(from: clientProxy.userID) ?? Self.fallbackHomeserver
+        localHomeserver = Self.homeserver(from: clientProxy.userID) ?? serverEnvironment.matrixAccountProvider
     }
 
     func searchProfiles(with searchQuery: String) async -> Result<[UserProfileProxy], UserDiscoveryErrorType> {

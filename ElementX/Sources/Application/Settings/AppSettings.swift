@@ -215,6 +215,8 @@ enum JunchatMessageNotificationSound: String, CaseIterable, Codable, Identifiabl
 
 /// Store Element specific app settings.
 final class AppSettings {
+    let serverEnvironment: JunchatServerEnvironment
+
     private enum UserDefaultsKeys: String {
         case lastVersionLaunched
         case seenInvites
@@ -314,7 +316,21 @@ final class AppSettings {
         store = userDefaults
     }
 
-    init() {
+    init(serverEnvironment: JunchatServerEnvironment = .current) {
+        self.serverEnvironment = serverEnvironment
+        accountProviders = [serverEnvironment.matrixAccountProvider]
+        backgroundAppRefreshTaskIdentifier = serverEnvironment.backgroundAppRefreshTaskIdentifier
+        oidcRedirectURL = serverEnvironment.oidcRedirectURL
+        pushGatewayBaseURL = serverEnvironment.pushGatewayBaseURL
+        let rageshakeConfiguration: RageshakeConfiguration
+        if serverEnvironment.rageshakeEnabled,
+           let rageshakeURLString = Secrets.rageshakeURL,
+           let rageshakeURL = URL(string: rageshakeURLString) {
+            rageshakeConfiguration = .url(rageshakeURL)
+        } else {
+            rageshakeConfiguration = .disabled
+        }
+        bugReportRageshakeURL = .init(rageshakeConfiguration)
         notificationSoundName.applyRemoteValue(.init(messageNotificationSoundName))
     }
 
@@ -384,14 +400,14 @@ final class AppSettings {
     ///
     /// Account provider is the friendly term for the server name. It should not contain an `https` prefix and should
     /// match the last part of the user ID. For example `example.com` and not `https://matrix.example.com`.
-    private(set) var accountProviders = ["junchat.yyzs120.cn"]
+    private(set) var accountProviders: [String]
     /// Whether or not the user is allowed to manually enter their own account provider or must select from one of `defaultAccountProviders`.
     private(set) var allowOtherAccountProviders = false
     /// Whether the components surrounding the app brand/logo should be hidden or not
     private(set) var hideBrandChrome = false
 
     /// The task identifier used for background app refresh. Also used in main target's the Info.plist
-    let backgroundAppRefreshTaskIdentifier = "com.heyujk.junchat.background.refresh"
+    let backgroundAppRefreshTaskIdentifier: String
 
     /// A URL where users can go read more about the app.
     private(set) var websiteURL: URL = "https://junchat.yyzs120.cn"
@@ -456,7 +472,7 @@ final class AppSettings {
     /// Any pre-defined static client registrations for OIDC issuers.
     let oidcStaticRegistrations: [URL: String] = [:]
     /// The redirect URL used for OIDC. This no longer uses universal links so we don't need the bundle ID to avoid conflicts between Element X, Nightly and PR builds.
-    private(set) var oidcRedirectURL: URL = "https://junchat.yyzs120.cn/oidc/login"
+    private(set) var oidcRedirectURL: URL
 
     private(set) lazy var oidcConfiguration = OIDCConfiguration(clientName: InfoPlistReader.main.bundleDisplayName,
                                                                 redirectURI: oidcRedirectURL,
@@ -485,7 +501,7 @@ final class AppSettings {
         return InfoPlistReader.main.baseBundleIdentifier + suffix
     }
 
-    private(set) var pushGatewayBaseURL: URL = "https://sygnal-junchat.yyzs120.cn"
+    private(set) var pushGatewayBaseURL: URL
     var pushGatewayNotifyEndpoint: URL {
         pushGatewayBaseURL.appending(path: "_matrix/push/v1/notify")
     }
@@ -559,7 +575,7 @@ final class AppSettings {
 
     // MARK: - Bug report
 
-    let bugReportRageshakeURL: RemotePreference<RageshakeConfiguration> = .init(Secrets.rageshakeURL.map { .url(URL(string: $0)!) } ?? .disabled) // swiftlint:disable:this force_unwrapping
+    let bugReportRageshakeURL: RemotePreference<RageshakeConfiguration>
     let bugReportSentryURL: URL? = nil
     let bugReportSentryRustURL: URL? = nil
     /// The name allocated by the bug report server

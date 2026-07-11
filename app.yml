@@ -5,3 +5,12 @@ settings:
   BASE_BUNDLE_IDENTIFIER: com.heyujk.junchat
   ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: "colors/accent-color"
   DEVELOPMENT_TEAM: W834S4TA7S
+  JUNCHAT_URL_SCHEME: matrix
+  JUNCHAT_ASSOCIATED_DOMAIN: junchat.yyzs120.cn
+  JUNCHAT_MATRIX_ACCOUNT_PROVIDER: junchat.yyzs120.cn
+  JUNCHAT_OIDC_REDIRECT_URL: https://junchat.yyzs120.cn/oidc/login
+  JUNCHAT_PUSH_GATEWAY_BASE_URL: https://sygnal-junchat.yyzs120.cn
+  JUNCHAT_DIAGNOSTICS_ENDPOINT: https://junchat.yyzs120.cn/junchat-errors/api/events
+  JUNCHAT_RAGESHAKE_ENABLED: YES
+  JUNCHAT_BACKGROUND_APP_REFRESH_TASK_IDENTIFIER: com.heyujk.junchat.background.refresh
+  JUNCHAT_LIVEKIT_JWT_URL: https://junchat.yyzs120.cn/livekit/jwt

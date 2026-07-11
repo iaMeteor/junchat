@@ -16,8 +16,9 @@ import WebKit
 struct CallScreen: View {
     @ObservedObject var context: CallScreenViewModel.Context
 
-    static func junchatElementCallBootstrapScript(language: String = Bundle.junchatElementCallLanguage) -> String {
-        CallView.Coordinator.junchatLiveKitBootstrapScript(language: language)
+    static func junchatElementCallBootstrapScript(language: String = Bundle.junchatElementCallLanguage,
+                                                  liveKitJWTURL: URL = JunchatServerEnvironment.current.liveKitJWTURL) -> String {
+        CallView.Coordinator.junchatLiveKitBootstrapScript(language: language, liveKitJWTURL: liveKitJWTURL)
     }
 
     var body: some View {
@@ -90,13 +91,14 @@ private struct CallView: UIViewRepresentable {
 
         private var url: URL!
 
-        fileprivate static func junchatLiveKitBootstrapScript(language: String = Bundle.junchatElementCallLanguage) -> String {
+        fileprivate static func junchatLiveKitBootstrapScript(language: String = Bundle.junchatElementCallLanguage,
+                                                              liveKitJWTURL: URL = JunchatServerEnvironment.current.liveKitJWTURL) -> String {
             """
         (() => {
             const junchatLanguage = "\(language)";
             const junchatConfig = {
                 livekit: {
-                    livekit_service_url: "https://junchat.yyzs120.cn/livekit/jwt"
+                    livekit_service_url: "\(liveKitJWTURL.absoluteString)"
                 },
                 matrix_rtc_session: {
                     wait_for_key_rotation_ms: 5000,

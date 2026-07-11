@@ -20,6 +20,20 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>JunchatBackgroundAppRefreshTaskIdentifier</key>
+	<string>$(JUNCHAT_BACKGROUND_APP_REFRESH_TASK_IDENTIFIER)</string>
+	<key>JunchatDiagnosticsEndpoint</key>
+	<string>$(JUNCHAT_DIAGNOSTICS_ENDPOINT)</string>
+	<key>JunchatLiveKitJWTURL</key>
+	<string>$(JUNCHAT_LIVEKIT_JWT_URL)</string>
+	<key>JunchatMatrixAccountProvider</key>
+	<string>$(JUNCHAT_MATRIX_ACCOUNT_PROVIDER)</string>
+	<key>JunchatOIDCRedirectURL</key>
+	<string>$(JUNCHAT_OIDC_REDIRECT_URL)</string>
+	<key>JunchatPushGatewayBaseURL</key>
+	<string>$(JUNCHAT_PUSH_GATEWAY_BASE_URL)</string>
+	<key>JunchatRageshakeEnabled</key>
+	<string>$(JUNCHAT_RAGESHAKE_ENABLED)</string>
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionPointIdentifier</key>

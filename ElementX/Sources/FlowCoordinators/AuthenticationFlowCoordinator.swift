@@ -110,7 +110,7 @@ class AuthenticationFlowCoordinator: FlowCoordinatorProtocol {
     weak var delegate: AuthenticationFlowCoordinatorDelegate?
     
     private var isJunchatInternalLogin: Bool {
-        !appSettings.allowOtherAccountProviders && appSettings.accountProviders == ["junchat.yyzs120.cn"]
+        !appSettings.allowOtherAccountProviders && appSettings.accountProviders == [appSettings.serverEnvironment.matrixAccountProvider]
     }
     
     init(authenticationService: AuthenticationServiceProtocol,
