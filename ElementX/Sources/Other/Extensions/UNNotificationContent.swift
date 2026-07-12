@@ -6,6 +6,7 @@
 // Please see LICENSE files in the repository root for full details.
 //
 
+import CoreFoundation
 import Foundation
 import UserNotifications
 
@@ -32,6 +33,36 @@ extension UNNotificationContent {
     
     var unreadCount: Int? {
         userInfo[NotificationConstants.UserInfoKey.unreadCount] as? Int
+    }
+    
+    var badgeForDelivery: NSNumber? {
+        if userInfo[NotificationConstants.UserInfoKey.badgeContract] as? String == NotificationConstants.BadgeContract.identifier,
+           let badgeTotal = Self.validBadgeNumber(userInfo[NotificationConstants.UserInfoKey.badgeTotal]) {
+            return badgeTotal
+        }
+        
+        if let badge = Self.validBadgeNumber(badge) {
+            return badge
+        }
+        
+        return unreadCount as NSNumber?
+    }
+    
+    private static func validBadgeNumber(_ value: Any?) -> NSNumber? {
+        guard let number = value as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID(),
+              number.doubleValue.isFinite else {
+            return nil
+        }
+        
+        let integerValue = number.int64Value
+        guard integerValue >= 0,
+              integerValue <= NotificationConstants.BadgeContract.maximumSafeInteger,
+              number.compare(NSNumber(value: integerValue)) == .orderedSame else {
+            return nil
+        }
+        
+        return number
     }
 }
 

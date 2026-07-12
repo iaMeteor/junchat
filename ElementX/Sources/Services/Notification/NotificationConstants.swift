@@ -14,8 +14,15 @@ enum NotificationConstants {
         static let eventIdentifier = "event_id"
         static let threadRootEventIdentifier = "thread_root_event_id"
         static let unreadCount = "unread_count"
+        static let badgeContract = "badge_contract"
+        static let badgeTotal = "badge_total"
         static let pusherNotificationClientIdentifier = "pusher_notification_client_identifier"
         static let receiverIdentifier = "receiver_id"
+    }
+
+    enum BadgeContract {
+        static let identifier = "junchat.notification-badge/v1"
+        static let maximumSafeInteger: Int64 = 9_007_199_254_740_991
     }
 
     enum Category {

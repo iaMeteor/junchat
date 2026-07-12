@@ -1,0 +1,387 @@
+{
+  "schema": "junchat.notification-badge-fixtures/v1",
+  "schema_version": 1,
+  "badge_contract": "junchat.notification-badge/v1",
+  "cases": [
+    {
+      "id": "message-after-stale-read",
+      "notification": {
+        "event_id": "$message-after-stale-read",
+        "room_id": "!badge-room:example.test",
+        "counts": {
+          "unread": 1,
+          "missed_calls": 0
+        }
+      },
+      "expected": {
+        "normalized_payload": {
+          "event_id": "$message-after-stale-read",
+          "room_id": "!badge-room:example.test",
+          "unread": 1,
+          "missed_calls": 0,
+          "badge_contract": "junchat.notification-badge/v1",
+          "badge_total": 1
+        },
+        "gateway_delivery": "event",
+        "client": {
+          "badge_action": "set",
+          "badge_total": 1,
+          "adds_components": false,
+          "nse_timeout_action": "use_preserved_badge_total"
+        }
+      }
+    },
+    {
+      "id": "invite",
+      "notification": {
+        "event_id": "$invite",
+        "room_id": "!invite-room:example.test",
+        "type": "m.room.member",
+        "membership": "invite",
+        "counts": {
+          "unread": 1
+        }
+      },
+      "expected": {
+        "normalized_payload": {
+          "event_id": "$invite",
+          "room_id": "!invite-room:example.test",
+          "unread": 1,
+          "badge_contract": "junchat.notification-badge/v1",
+          "badge_total": 1
+        },
+        "gateway_delivery": "event",
+        "client": {
+          "badge_action": "set",
+          "badge_total": 1,
+          "adds_components": false,
+          "nse_timeout_action": "use_preserved_badge_total"
+        }
+      }
+    },
+    {
+      "id": "missed-call",
+      "notification": {
+        "event_id": "$missed-call",
+        "room_id": "!call-room:example.test",
+        "type": "m.call.invite",
+        "counts": {
+          "missed_calls": 1
+        }
+      },
+      "expected": {
+        "normalized_payload": {
+          "event_id": "$missed-call",
+          "room_id": "!call-room:example.test",
+          "unread": null,
+          "missed_calls": 1,
+          "badge_contract": "junchat.notification-badge/v1",
+          "badge_total": 1
+        },
+        "gateway_delivery": "event",
+        "client": {
+          "badge_action": "set",
+          "badge_total": 1,
+          "adds_components": false,
+          "nse_timeout_action": "use_preserved_badge_total"
+        }
+      }
+    },
+    {
+      "id": "authoritative-zero",
+      "notification": {
+        "counts": {
+          "badge_total": 0
+        }
+      },
+      "expected": {
+        "normalized_payload": {
+          "event_id": null,
+          "room_id": null,
+          "unread": null,
+          "badge_contract": "junchat.notification-badge/v1",
+          "badge_total": 0
+        },
+        "gateway_delivery": "count_only",
+        "client": {
+          "badge_action": "set",
+          "badge_total": 0,
+          "adds_components": false,
+          "nse_timeout_action": "use_preserved_badge_total"
+        }
+      }
+    },
+    {
+      "id": "explicit-total-wins",
+      "notification": {
+        "event_id": "$explicit-total",
+        "room_id": "!badge-room:example.test",
+        "counts": {
+          "unread": 8,
+          "missed_calls": 2,
+          "badge_total": 4
+        }
+      },
+      "expected": {
+        "normalized_payload": {
+          "event_id": "$explicit-total",
+          "room_id": "!badge-room:example.test",
+          "unread": 8,
+          "missed_calls": 2,
+          "badge_contract": "junchat.notification-badge/v1",
+          "badge_total": 4
+        },
+        "gateway_delivery": "event",
+        "client": {
+          "badge_action": "set",
+          "badge_total": 4,
+          "adds_components": false,
+          "nse_timeout_action": "use_preserved_badge_total"
+        }
+      }
+    },
+    {
+      "id": "gateway-fallback-count-only",
+      "notification": {
+        "counts": {
+          "unread": 3,
+          "missed_calls": 2
+        }
+      },
+      "expected": {
+        "normalized_payload": {
+          "event_id": null,
+          "room_id": null,
+          "unread": 3,
+          "missed_calls": 2,
+          "badge_contract": "junchat.notification-badge/v1",
+          "badge_total": 5
+        },
+        "gateway_delivery": "count_only",
+        "client": {
+          "badge_action": "set",
+          "badge_total": 5,
+          "adds_components": false,
+          "nse_timeout_action": "use_preserved_badge_total"
+        }
+      }
+    },
+    {
+      "id": "nse-timeout-preserved-total",
+      "notification": {
+        "event_id": "$nse-timeout",
+        "room_id": "!badge-room:example.test",
+        "counts": {
+          "unread": 5,
+          "missed_calls": 1,
+          "badge_total": 6
+        }
+      },
+      "expected": {
+        "normalized_payload": {
+          "event_id": "$nse-timeout",
+          "room_id": "!badge-room:example.test",
+          "unread": 5,
+          "missed_calls": 1,
+          "badge_contract": "junchat.notification-badge/v1",
+          "badge_total": 6
+        },
+        "gateway_delivery": "event",
+        "client": {
+          "badge_action": "set",
+          "badge_total": 6,
+          "adds_components": false,
+          "nse_timeout_action": "use_preserved_badge_total"
+        }
+      }
+    },
+    {
+      "id": "absent-counts",
+      "notification": {
+        "event_id": "$absent-counts",
+        "room_id": "!badge-room:example.test"
+      },
+      "expected": {
+        "normalized_payload": {
+          "event_id": "$absent-counts",
+          "room_id": "!badge-room:example.test",
+          "unread": null
+        },
+        "gateway_delivery": "event",
+        "client": {
+          "badge_action": "preserve",
+          "badge_total": null,
+          "adds_components": false,
+          "nse_timeout_action": "preserve_existing_badge"
+        }
+      }
+    },
+    {
+      "id": "malformed-component",
+      "notification": {
+        "event_id": "$malformed-component",
+        "room_id": "!badge-room:example.test",
+        "counts": {
+          "unread": "3",
+          "badge_total": 3
+        }
+      },
+      "expected": {
+        "normalized_payload": {
+          "event_id": "$malformed-component",
+          "room_id": "!badge-room:example.test",
+          "unread": null
+        },
+        "gateway_delivery": "event",
+        "client": {
+          "badge_action": "preserve",
+          "badge_total": null,
+          "adds_components": false,
+          "nse_timeout_action": "preserve_existing_badge"
+        }
+      }
+    },
+    {
+      "id": "negative-component",
+      "notification": {
+        "counts": {
+          "unread": 2,
+          "missed_calls": -1
+        }
+      },
+      "expected": {
+        "normalized_payload": {
+          "event_id": null,
+          "room_id": null,
+          "unread": 2,
+          "missed_calls": -1
+        },
+        "gateway_delivery": "count_only",
+        "client": {
+          "badge_action": "preserve",
+          "badge_total": null,
+          "adds_components": false,
+          "nse_timeout_action": "preserve_existing_badge"
+        }
+      }
+    },
+    {
+      "id": "unsafe-component",
+      "notification": {
+        "counts": {
+          "unread": 9007199254740992
+        }
+      },
+      "expected": {
+        "normalized_payload": {
+          "event_id": null,
+          "room_id": null,
+          "unread": 9007199254740992
+        },
+        "gateway_delivery": "count_only",
+        "client": {
+          "badge_action": "preserve",
+          "badge_total": null,
+          "adds_components": false,
+          "nse_timeout_action": "preserve_existing_badge"
+        }
+      }
+    },
+    {
+      "id": "malformed-total-with-legacy-components",
+      "notification": {
+        "counts": {
+          "unread": 4,
+          "missed_calls": 1,
+          "badge_total": "5"
+        }
+      },
+      "expected": {
+        "normalized_payload": {
+          "event_id": null,
+          "room_id": null,
+          "unread": 4,
+          "missed_calls": 1
+        },
+        "gateway_delivery": "count_only",
+        "client": {
+          "badge_action": "preserve",
+          "badge_total": null,
+          "adds_components": false,
+          "nse_timeout_action": "preserve_existing_badge"
+        }
+      }
+    },
+    {
+      "id": "negative-total-with-legacy-components",
+      "notification": {
+        "counts": {
+          "unread": 6,
+          "missed_calls": 2,
+          "badge_total": -1
+        }
+      },
+      "expected": {
+        "normalized_payload": {
+          "event_id": null,
+          "room_id": null,
+          "unread": 6,
+          "missed_calls": 2
+        },
+        "gateway_delivery": "count_only",
+        "client": {
+          "badge_action": "preserve",
+          "badge_total": null,
+          "adds_components": false,
+          "nse_timeout_action": "preserve_existing_badge"
+        }
+      }
+    },
+    {
+      "id": "invalid-total-only",
+      "notification": {
+        "counts": {
+          "badge_total": 9007199254740992
+        }
+      },
+      "expected": {
+        "normalized_payload": {
+          "event_id": null,
+          "room_id": null,
+          "unread": null
+        },
+        "gateway_delivery": "drop",
+        "client": {
+          "badge_action": "preserve",
+          "badge_total": null,
+          "adds_components": false,
+          "nse_timeout_action": "preserve_existing_badge"
+        }
+      }
+    },
+    {
+      "id": "overflow",
+      "notification": {
+        "counts": {
+          "unread": 9007199254740991,
+          "missed_calls": 1
+        }
+      },
+      "expected": {
+        "normalized_payload": {
+          "event_id": null,
+          "room_id": null,
+          "unread": 9007199254740991,
+          "missed_calls": 1
+        },
+        "gateway_delivery": "count_only",
+        "client": {
+          "badge_action": "preserve",
+          "badge_total": null,
+          "adds_components": false,
+          "nse_timeout_action": "preserve_existing_badge"
+        }
+      }
+    }
+  ]
+}

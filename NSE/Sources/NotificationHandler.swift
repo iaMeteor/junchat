@@ -53,8 +53,7 @@ class NotificationHandler {
     func processEvent(_ eventID: String, roomID: String) async {
         MXLog.info("\(tag) Processing event: \(eventID) in room: \(roomID)")
         
-        // Copy over the unread information to the notification badge
-        notificationContent.badge = notificationContent.unreadCount as NSNumber?
+        notificationContent.badge = notificationContent.badgeForDelivery
         MXLog.info("\(tag) New badge value: \(notificationContent.badge?.stringValue ?? "nil")")
         
         guard let notificationItemProxy = await userSession.notificationItemProxy(roomID: roomID, eventID: eventID) else {
@@ -98,7 +97,7 @@ class NotificationHandler {
         MXLog.info("\(tag) Discarding notification")
         
         let content = UNMutableNotificationContent()
-        content.badge = notificationContent.unreadCount as NSNumber?
+        content.badge = notificationContent.badgeForDelivery
         MXLog.info("\(tag) New badge value: \(content.badge?.stringValue ?? "nil")")
         
         contentHandler(content)
