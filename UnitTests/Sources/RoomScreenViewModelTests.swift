@@ -491,15 +491,59 @@ final class RoomScreenViewModelTests {
     }
 
     @Test
-    func roomMarkedAsReadOnEntryUsingPublicReadReceipt() async {
-        ServiceLocator.shared.settings.sharePresence = true
-        await assertRoomMarkedAsReadOnEntry(expectedReceiptType: .read)
+    func roomEntryDoesNotMarkAsReadBeforeTimelineVisibility() async throws {
+        let roomProxyMock = JoinedRoomProxyMock(.init(id: "MyRoomID"))
+        let viewModel = RoomScreenViewModel(userSession: UserSessionMock(.init()),
+                                            roomProxy: roomProxyMock,
+                                            initialSelectedPinnedEventID: nil,
+                                            ongoingCallRoomIDPublisher: .init(.init(nil)),
+                                            appSettings: ServiceLocator.shared.settings,
+                                            appHooks: AppHooks(),
+                                            analyticsService: ServiceLocator.shared.analytics,
+                                            userIndicatorController: ServiceLocator.shared.userIndicatorController)
+        self.viewModel = viewModel
+
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(!roomProxyMock.markAsReadReceiptTypeCalled)
     }
 
     @Test
-    func roomMarkedAsReadOnEntryUsingPrivateReadReceipt() async {
-        ServiceLocator.shared.settings.sharePresence = false
-        await assertRoomMarkedAsReadOnEntry(expectedReceiptType: .readPrivate)
+    func verificationBadgeRefreshDoesNotWaitForReadReceipt() async throws {
+        let clientProxyMock = ClientProxyMock(.init())
+        clientProxyMock.userIdentityForFallBackToServerReturnValue = .success(UserIdentityProxyMock(configuration: .init(verificationState: .verified)))
+
+        let (releaseStream, releaseContinuation) = AsyncStream.makeStream(of: Void.self)
+        defer {
+            releaseContinuation.yield()
+            releaseContinuation.finish()
+        }
+
+        let roomProxyMock = JoinedRoomProxyMock(.init(id: "MyRoomID",
+                                                      isDirect: true,
+                                                      hasOngoingCall: false,
+                                                      members: [.mockMe, .mockAlice]))
+        roomProxyMock.markAsReadReceiptTypeClosure = { _ in
+            _ = await releaseStream.first { _ in true }
+            return .success(())
+        }
+        let viewModel = RoomScreenViewModel(userSession: UserSessionMock(.init(clientProxy: clientProxyMock)),
+                                            roomProxy: roomProxyMock,
+                                            initialSelectedPinnedEventID: nil,
+                                            ongoingCallRoomIDPublisher: .init(.init(nil)),
+                                            appSettings: ServiceLocator.shared.settings,
+                                            appHooks: AppHooks(),
+                                            analyticsService: ServiceLocator.shared.analytics,
+                                            userIndicatorController: ServiceLocator.shared.userIndicatorController)
+        self.viewModel = viewModel
+
+        let deferred = deferFulfillment(viewModel.context.$viewState) { viewState in
+            viewState.dmRecipientVerificationState == .verified
+        }
+        try await deferred.fulfill()
+
+        #expect(clientProxyMock.userIdentityForFallBackToServerCalled)
+        #expect(!roomProxyMock.markAsReadReceiptTypeCalled)
     }
 
     // MARK: - Knock Requests
@@ -665,27 +709,5 @@ final class RoomScreenViewModelTests {
             viewState.roomHistorySharingState == .worldReadable
         }
         try await deferredWorldReadable.fulfill()
-    }
-}
-
-private extension RoomScreenViewModelTests {
-    func assertRoomMarkedAsReadOnEntry(expectedReceiptType: ReceiptType) async {
-        await waitForConfirmation("Wait for room entry read receipt") { confirm in
-            let roomProxyMock = JoinedRoomProxyMock(.init(id: "MyRoomID"))
-            roomProxyMock.markAsReadReceiptTypeClosure = { readReceiptType in
-                #expect(readReceiptType == expectedReceiptType)
-                confirm()
-                return .success(())
-            }
-            let viewModel = RoomScreenViewModel(userSession: UserSessionMock(.init()),
-                                                roomProxy: roomProxyMock,
-                                                initialSelectedPinnedEventID: nil,
-                                                ongoingCallRoomIDPublisher: .init(.init(nil)),
-                                                appSettings: ServiceLocator.shared.settings,
-                                                appHooks: AppHooks(),
-                                                analyticsService: ServiceLocator.shared.analytics,
-                                                userIndicatorController: ServiceLocator.shared.userIndicatorController)
-            self.viewModel = viewModel
-        }
     }
 }

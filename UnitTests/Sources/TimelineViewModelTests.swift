@@ -249,6 +249,28 @@ final class TimelineViewModelTests {
     // MARK: - Read Receipts
 
     @Test
+    func visibleReadReceiptSelectorSkipsVirtualAndLocalOnlyItems() {
+        let remoteItemID = TimelineItemIdentifier.event(uniqueID: .init("remote"), eventOrTransactionID: .eventID("event"))
+        let visibleItemIDs: [TimelineItemIdentifier] = [
+            .virtual(uniqueID: .init("virtual")),
+            .event(uniqueID: .init("local"), eventOrTransactionID: .transactionID("transaction")),
+            remoteItemID
+        ]
+
+        #expect(TimelineTableViewController.readReceiptItemIdentifier(in: visibleItemIDs) == remoteItemID)
+    }
+
+    @Test
+    func visibleReadReceiptSelectorReturnsNilWithoutRemoteEvents() {
+        let visibleItemIDs: [TimelineItemIdentifier] = [
+            .virtual(uniqueID: .init("virtual")),
+            .event(uniqueID: .init("local"), eventOrTransactionID: .transactionID("transaction"))
+        ]
+
+        #expect(TimelineTableViewController.readReceiptItemIdentifier(in: visibleItemIDs) == nil)
+    }
+
+    @Test
     func sendReadReceipt() async throws {
         // Given a room with only text items in the timeline
         let items = [TextRoomTimelineItem(eventID: "t1"),
@@ -265,6 +287,16 @@ final class TimelineViewModelTests {
         let arguments = timelineProxy.sendReadReceiptForTypeReceivedArguments
         #expect(arguments?.eventID == "t3")
         #expect(arguments?.type == .read)
+    }
+
+    @Test
+    func sendPublicReadReceiptWhenSharingPresence() async throws {
+        try await assertReadReceiptType(sharePresence: true, expectedReceiptType: .read)
+    }
+
+    @Test
+    func sendPrivateReadReceiptWhenNotSharingPresence() async throws {
+        try await assertReadReceiptType(sharePresence: false, expectedReceiptType: .readPrivate)
     }
 
     @Test
@@ -289,11 +321,14 @@ final class TimelineViewModelTests {
         let items: [RoomTimelineItemProtocol] = [TextRoomTimelineItem(eventID: "t1"),
                                                  TextRoomTimelineItem(eventID: "t2"),
                                                  SeparatorRoomTimelineItem(uniqueID: .init("v3"))]
-        let (viewModel, _, _, _) = readReceiptsConfiguration(with: items)
+        let (viewModel, _, timelineProxy, _) = readReceiptsConfiguration(with: items)
 
         // When sending a read receipt for the last item.
         try viewModel.context.send(viewAction: .sendReadReceiptIfNeeded(#require(items.last?.id)))
         try await Task.sleep(for: .milliseconds(100))
+
+        // Then nothing should be sent.
+        #expect(timelineProxy.sendReadReceiptForTypeCalled == false)
     }
 
     // swiftlint:disable:next large_tuple
@@ -325,6 +360,28 @@ final class TimelineViewModelTests {
                                           linkMetadataProvider: LinkMetadataProvider(),
                                           timelineControllerFactory: TimelineControllerFactoryMock(.init()))
         return (viewModel, roomProxy, timelineProxy, timelineController)
+    }
+
+    private func assertReadReceiptType(sharePresence: Bool, expectedReceiptType: ReceiptType) async throws {
+        ServiceLocator.shared.settings.sharePresence = sharePresence
+        let roomProxy = JoinedRoomProxyMock(.init(name: ""))
+        let timelineProxy = TimelineProxyMock(.init())
+        let timelineItemProvider = try #require(timelineProxy.timelineItemProvider as? TimelineItemProviderMock)
+        timelineItemProvider.kind = .live
+        timelineItemProvider.underlyingUpdatePublisher = Empty().eraseToAnyPublisher()
+        roomProxy.timeline = timelineProxy
+        let timelineController = TimelineController(roomProxy: roomProxy,
+                                                    timelineProxy: timelineProxy,
+                                                    initialFocussedEventID: nil,
+                                                    timelineItemFactory: RoomTimelineItemFactoryStub(),
+                                                    mediaProvider: MediaProviderMock(),
+                                                    appSettings: ServiceLocator.shared.settings)
+
+        await timelineController.sendReadReceipt(for: .event(uniqueID: .init("remote"), eventOrTransactionID: .eventID("event")))
+
+        let arguments = try #require(timelineProxy.sendReadReceiptForTypeReceivedArguments)
+        #expect(arguments.eventID == "event")
+        #expect(arguments.type == expectedReceiptType)
     }
 
     @Test
@@ -697,6 +754,16 @@ final class TimelineViewModelTests {
                           linkMetadataProvider: LinkMetadataProvider(),
                           timelineControllerFactory: TimelineControllerFactoryMock(.init()),
                           privacyMessageLifetime: privacyMessageLifetime)
+    }
+}
+
+private struct RoomTimelineItemFactoryStub: RoomTimelineItemFactoryProtocol {
+    func buildTimelineItem(for eventItemProxy: EventTimelineItemProxy, isDM: Bool) -> RoomTimelineItemProtocol? {
+        nil
+    }
+
+    func buildTimelineItemReply(_ details: InReplyToDetails) -> TimelineItemReply {
+        fatalError("Not used by read receipt tests.")
     }
 }
 

@@ -60,8 +60,6 @@ class TimelineTableViewController: UIViewController {
             if timelineItemsDictionary.isEmpty {
                 paginatePublisher.send()
             }
-            
-            sendLastVisibleItemReadReceipt()
         }
     }
     
@@ -257,12 +255,16 @@ class TimelineTableViewController: UIViewController {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         
-        sendLastVisibleItemReadReceipt()
-        
         guard !hasAppearedOnce else { return }
         tableView.contentOffset.y = -1
         hasAppearedOnce = true
         paginatePublisher.send()
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+
+        sendLastVisibleItemReadReceipt()
     }
     
     override func viewWillLayoutSubviews() {
@@ -370,7 +372,11 @@ class TimelineTableViewController: UIViewController {
             nil
         }
         
-        dataSource.apply(snapshot, animatingDifferences: animated)
+        dataSource.apply(snapshot, animatingDifferences: animated) { [weak self] in
+            guard let self else { return }
+            tableView.layoutIfNeeded()
+            sendLastVisibleItemReadReceipt()
+        }
         
         if let focussedEvent, focussedEvent.appearance != .hasAppeared {
             scrollToItem(eventID: focussedEvent.eventID, animated: focussedEvent.appearance == .animated)
@@ -448,13 +454,16 @@ class TimelineTableViewController: UIViewController {
         }
         
         // These are already in reverse order because the table view is flipped
-        for indexPath in visibleIndexPaths {
-            if let visibleItemUniqueID = dataSource?.itemIdentifier(for: indexPath),
-               let visibleItemID = timelineItemsDictionary[visibleItemUniqueID]?.identifier {
-                coordinator.send(viewAction: .sendReadReceiptIfNeeded(visibleItemID))
-                return
-            }
+        let visibleItemIDs: [TimelineItemIdentifier] = visibleIndexPaths.compactMap { indexPath in
+            guard let visibleItemUniqueID = dataSource?.itemIdentifier(for: indexPath) else { return nil }
+            return timelineItemsDictionary[visibleItemUniqueID]?.identifier
         }
+        guard let visibleItemID = Self.readReceiptItemIdentifier(in: visibleItemIDs) else { return }
+        coordinator.send(viewAction: .sendReadReceiptIfNeeded(visibleItemID))
+    }
+
+    static func readReceiptItemIdentifier(in visibleItemIdentifiers: [TimelineItemIdentifier]) -> TimelineItemIdentifier? {
+        visibleItemIdentifiers.first { $0.eventID != nil }
     }
 }
 

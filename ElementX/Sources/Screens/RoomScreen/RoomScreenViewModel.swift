@@ -83,10 +83,7 @@ class RoomScreenViewModel: RoomScreenViewModelType, RoomScreenViewModelProtocol 
         updateRoomInfo(roomProxy.infoPublisher.value)
         setupSubscriptions(ongoingCallRoomIDPublisher: ongoingCallRoomIDPublisher)
 
-        Task {
-            await markRoomAsReadOnEntry()
-            await updateVerificationBadge()
-        }
+        Task { await updateVerificationBadge() }
     }
 
     override func process(viewAction: RoomScreenViewAction) {
@@ -171,13 +168,6 @@ class RoomScreenViewModel: RoomScreenViewModelType, RoomScreenViewModelProtocol 
     }
 
     // MARK: - Private
-
-    private func markRoomAsReadOnEntry() async {
-        let receiptType: ReceiptType = appSettings.sharePresence ? .read : .readPrivate
-        if case .failure(let error) = await roomProxy.markAsRead(receiptType: receiptType) {
-            MXLog.error("Failed marking room \(roomProxy.id) as read on entry with error: \(error)")
-        }
-    }
 
     private func setupSubscriptions(ongoingCallRoomIDPublisher: CurrentValuePublisher<String?, Never>) {
         appSettings.$roomThreadListEnabled
