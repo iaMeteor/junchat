@@ -53,29 +53,29 @@ extension UNNotificationContent {
         guard let content = mutableCopy() as? UNMutableNotificationContent else {
             return nil
         }
-        
+
         content.badge = badgeForDelivery
         return content
     }
-    
+
     var badgeReplacementContentForDelivery: UNMutableNotificationContent {
         let content = UNMutableNotificationContent()
         content.userInfo = validBadgeContractMetadata
         content.badge = badgeForDelivery
         return content
     }
-    
+
     private var validBadgeContractMetadata: [AnyHashable: Any] {
         guard userInfo[NotificationConstants.UserInfoKey.badgeContract] as? String == NotificationConstants.BadgeContract.identifier,
               let badgeTotal = Self.validBadgeNumber(userInfo[NotificationConstants.UserInfoKey.badgeTotal],
                                                      maximum: NotificationConstants.BadgeContract.maximumSafeInteger) else {
             return [:]
         }
-        
+
         return [NotificationConstants.UserInfoKey.badgeContract: NotificationConstants.BadgeContract.identifier,
                 NotificationConstants.UserInfoKey.badgeTotal: badgeTotal]
     }
-    
+
     private static func validBadgeNumber(_ value: Any?, maximum: Int64? = nil) -> NSNumber? {
         guard let number = value as? NSNumber,
               CFGetTypeID(number) != CFBooleanGetTypeID(),
@@ -92,7 +92,7 @@ extension UNNotificationContent {
         if let maximum, integerValue > maximum {
             return nil
         }
-        
+
         return number
     }
 }

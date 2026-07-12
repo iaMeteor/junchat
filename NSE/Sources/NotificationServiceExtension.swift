@@ -15,24 +15,24 @@ final class NotificationContentCompletion {
     private let bestAttemptContent: UNNotificationContent
     private let contentHandler: (UNNotificationContent) -> Void
     private var hasCompleted = false
-    
+
     init(bestAttemptContent: UNNotificationContent,
          contentHandler: @escaping (UNNotificationContent) -> Void) {
         self.bestAttemptContent = bestAttemptContent
         self.contentHandler = contentHandler
     }
-    
+
     func complete(with content: UNNotificationContent? = nil) {
         lock.lock()
         guard !hasCompleted else {
             lock.unlock()
             return
         }
-        
+
         hasCompleted = true
         let content = content ?? bestAttemptContent
         lock.unlock()
-        
+
         contentHandler(content)
     }
 }
@@ -106,12 +106,12 @@ class NotificationServiceExtension: UNNotificationServiceExtension {
         let bestAttemptContent = mutableContent ?? request.content.badgeReplacementContentForDelivery
         let completion = NotificationContentCompletion(bestAttemptContent: bestAttemptContent, contentHandler: contentHandler)
         notificationContentCompletion = completion
-        
+
         guard let mutableContent else {
             completion.complete()
             return
         }
-        
+
         Task { await handle(request, notificationContent: mutableContent, completion: completion) }
     }
     
@@ -124,21 +124,21 @@ class NotificationServiceExtension: UNNotificationServiceExtension {
             print("Missing roomID, bailing out.")
             return completion.complete()
         }
-        
+
         guard let eventID = request.content.eventID else {
             // Don't log until the app hooks have been run:
             // swiftlint:disable:next print_deprecation
             print("Missing eventID, bailing out.")
             return completion.complete()
         }
-        
+
         guard let clientID = request.content.pusherNotificationClientIdentifier else {
             // Don't log until the app hooks have been run:
             // swiftlint:disable:next print_deprecation
             print("Missing clientID, bailing out.")
             return completion.complete()
         }
-        
+
         // If we skipped configuring the target it means we can't write to the app group, so we're unlikely to
         // be able to create a session (and even if we could, we would be missing the lightweightTokioRuntime).
         // Additionally, APNs servers only store the most recent notification when the device is powered off.
