@@ -119,8 +119,18 @@ class TimelineTableViewController: UIViewController {
     /// The focussed event if navigating to an event permalink within the room.
     var focussedEvent: TimelineState.FocussedEvent? {
         didSet {
-            guard let focussedEvent, focussedEvent.appearance != .hasAppeared else { return }
-            scrollToItem(eventID: focussedEvent.eventID, animated: focussedEvent.appearance == .animated)
+            guard let focussedEvent else {
+                cancelFocussedScrollRequest()
+                return
+            }
+            guard focussedEvent.appearance != .hasAppeared else {
+                if focussedScrollRequest?.eventID != focussedEvent.eventID {
+                    cancelFocussedScrollRequest()
+                }
+                return
+            }
+
+            beginFocussedScrollRequest(eventID: focussedEvent.eventID, animated: focussedEvent.appearance == .animated)
         }
     }
     
@@ -169,6 +179,18 @@ class TimelineTableViewController: UIViewController {
     private let scrollDirectionPublisher = PassthroughSubject<ScrollDirection, Never>()
     /// Whether or not the view has been shown on screen yet.
     private var hasAppearedOnce = false
+    /// Whether the timeline is actually visible on screen.
+    private var isTimelineVisible = false
+
+    private struct FocussedScrollRequest {
+        let eventID: String
+        let animated: Bool
+        let generation: Int
+        var hasStarted = false
+    }
+
+    private var focussedScrollRequestGeneration = 0
+    private var focussedScrollRequest: FocussedScrollRequest?
     
     /// Value that determines if the table view is flipped or not according to the VoiceOver status.
     private var scaleY: CGFloat {
@@ -264,7 +286,14 @@ class TimelineTableViewController: UIViewController {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
 
+        isTimelineVisible = true
         sendLastVisibleItemReadReceipt()
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+
+        isTimelineVisible = false
     }
     
     override func viewWillLayoutSubviews() {
@@ -375,11 +404,14 @@ class TimelineTableViewController: UIViewController {
         dataSource.apply(snapshot, animatingDifferences: animated) { [weak self] in
             guard let self else { return }
             tableView.layoutIfNeeded()
-            sendLastVisibleItemReadReceipt()
+            scheduleFocussedScrollIfNeeded()
+            DispatchQueue.main.async { [weak self] in
+                self?.sendLastVisibleItemReadReceipt()
+            }
         }
         
-        if let focussedEvent, focussedEvent.appearance != .hasAppeared {
-            scrollToItem(eventID: focussedEvent.eventID, animated: focussedEvent.appearance == .animated)
+        if focussedScrollRequest != nil {
+            scheduleFocussedScrollIfNeeded()
         } else if let layout {
             restoreLayout(layout)
         } else if isSwitchingTimelines {
@@ -409,25 +441,65 @@ class TimelineTableViewController: UIViewController {
         scrollDirectionPublisher.send(.top)
     }
     
-    /// Scrolls to the item with the corresponding event ID if loaded in the timeline.
-    private func scrollToItem(eventID: String, animated: Bool) {
+    private func beginFocussedScrollRequest(eventID: String, animated: Bool) {
+        focussedScrollRequestGeneration += 1
+        focussedScrollRequest = .init(eventID: eventID,
+                                       animated: animated,
+                                       generation: focussedScrollRequestGeneration)
+        scheduleFocussedScrollIfNeeded()
+    }
+
+    private func cancelFocussedScrollRequest() {
+        focussedScrollRequestGeneration += 1
+        focussedScrollRequest = nil
+    }
+
+    private func scheduleFocussedScrollIfNeeded() {
+        guard let focussedScrollRequest, !focussedScrollRequest.hasStarted else { return }
+        let generation = focussedScrollRequest.generation
+
         DispatchQueue.main.async { [weak self] in // Fixes #2805
+            self?.scrollToFocussedItem(requestGeneration: generation)
+        }
+    }
+
+    /// Scrolls to the requested event if loaded, otherwise keeps the request pending for the next snapshot.
+    private func scrollToFocussedItem(requestGeneration: Int) {
+        guard var request = focussedScrollRequest,
+              request.generation == requestGeneration,
+              !request.hasStarted,
+              let kvPair = timelineItemsDictionary.first(where: { $0.value.identifier.eventID == request.eventID }),
+              let indexPath = dataSource?.indexPath(for: kvPair.key) else {
+            return
+        }
+
+        request.hasStarted = true
+        focussedScrollRequest = request
+
+        // Scrolling to the middle created a small bump in the timeline. Using top, which is bottom
+        // in the reversed timeline, helps with rendering full long messages and images.
+        tableView.scrollToRow(at: indexPath, at: .top, animated: request.animated)
+        coordinator.send(viewAction: .scrolledToFocussedItem)
+
+        if !request.animated {
+            tableView.layoutIfNeeded()
+            completeFocussedScroll(requestGeneration: requestGeneration)
+        }
+
+        // Ensure VoiceOver focus happens after the scroll animation (if any).
+        DispatchQueue.main.asyncAfter(deadline: .now() + (request.animated ? 0.5 : 0.0)) { [weak self] in
             guard let self else { return }
-            if let kvPair = timelineItemsDictionary.first(where: { $0.value.identifier.eventID == eventID }),
-               let indexPath = dataSource?.indexPath(for: kvPair.key) {
-                // Scrolling to the middle created a small bump in the timeline
-                // Using top, which is bottom in the reversed timeline helps with rendering
-                // in full long messages and images
-                tableView.scrollToRow(at: indexPath, at: .top, animated: animated)
-                coordinator.send(viewAction: .scrolledToFocussedItem)
-                // Ensure VoiceOver focus happens after the scroll animation (if any)
-                DispatchQueue.main.asyncAfter(deadline: .now() + (animated ? 0.5 : 0.0)) {
-                    if let cell = self.tableView.cellForRow(at: indexPath) {
-                        UIAccessibility.post(notification: .layoutChanged, argument: cell)
-                    }
-                }
+            if let cell = tableView.cellForRow(at: indexPath) {
+                UIAccessibility.post(notification: .layoutChanged, argument: cell)
             }
         }
+    }
+
+    private func completeFocussedScroll(requestGeneration: Int) {
+        guard focussedScrollRequest?.generation == requestGeneration else { return }
+
+        focussedScrollRequest = nil
+        sendLastVisibleItemReadReceipt()
     }
     
     /// Checks whether or not pagination is needed in either direction and requests one if so.
@@ -458,12 +530,18 @@ class TimelineTableViewController: UIViewController {
             guard let visibleItemUniqueID = dataSource?.itemIdentifier(for: indexPath) else { return nil }
             return timelineItemsDictionary[visibleItemUniqueID]?.identifier
         }
-        guard let visibleItemID = Self.readReceiptItemIdentifier(in: visibleItemIDs) else { return }
+        guard let visibleItemID = Self.readReceiptItemIdentifier(in: visibleItemIDs,
+                                                                 isTimelineVisible: isTimelineVisible,
+                                                                 isFocussedScrollPending: focussedScrollRequest != nil) else { return }
         coordinator.send(viewAction: .sendReadReceiptIfNeeded(visibleItemID))
     }
 
-    static func readReceiptItemIdentifier(in visibleItemIdentifiers: [TimelineItemIdentifier]) -> TimelineItemIdentifier? {
-        visibleItemIdentifiers.first { $0.eventID != nil }
+    static func readReceiptItemIdentifier(in visibleItemIdentifiers: [TimelineItemIdentifier],
+                                          isTimelineVisible: Bool,
+                                          isFocussedScrollPending: Bool) -> TimelineItemIdentifier? {
+        guard isTimelineVisible, !isFocussedScrollPending else { return nil }
+
+        return visibleItemIdentifiers.first { $0.eventID != nil }
     }
 }
 
@@ -527,7 +605,14 @@ extension TimelineTableViewController: UITableViewDelegate {
     }
     
     func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
-        sendLastVisibleItemReadReceipt()
+        guard let focussedScrollRequest,
+              focussedScrollRequest.animated,
+              focussedScrollRequest.hasStarted else {
+            sendLastVisibleItemReadReceipt()
+            return
+        }
+
+        completeFocussedScroll(requestGeneration: focussedScrollRequest.generation)
     }
 }
 

@@ -257,7 +257,9 @@ final class TimelineViewModelTests {
             remoteItemID
         ]
 
-        #expect(TimelineTableViewController.readReceiptItemIdentifier(in: visibleItemIDs) == remoteItemID)
+        #expect(TimelineTableViewController.readReceiptItemIdentifier(in: visibleItemIDs,
+                                                                      isTimelineVisible: true,
+                                                                      isFocussedScrollPending: false) == remoteItemID)
     }
 
     @Test
@@ -267,7 +269,27 @@ final class TimelineViewModelTests {
             .event(uniqueID: .init("local"), eventOrTransactionID: .transactionID("transaction"))
         ]
 
-        #expect(TimelineTableViewController.readReceiptItemIdentifier(in: visibleItemIDs) == nil)
+        #expect(TimelineTableViewController.readReceiptItemIdentifier(in: visibleItemIDs,
+                                                                      isTimelineVisible: true,
+                                                                      isFocussedScrollPending: false) == nil)
+    }
+
+    @Test
+    func visibleReadReceiptSelectorReturnsNilWhenTimelineIsHidden() {
+        let remoteItemID = TimelineItemIdentifier.event(uniqueID: .init("remote"), eventOrTransactionID: .eventID("event"))
+
+        #expect(TimelineTableViewController.readReceiptItemIdentifier(in: [remoteItemID],
+                                                                      isTimelineVisible: false,
+                                                                      isFocussedScrollPending: false) == nil)
+    }
+
+    @Test
+    func visibleReadReceiptSelectorReturnsNilWhileFocussedScrollIsPending() {
+        let remoteItemID = TimelineItemIdentifier.event(uniqueID: .init("remote"), eventOrTransactionID: .eventID("event"))
+
+        #expect(TimelineTableViewController.readReceiptItemIdentifier(in: [remoteItemID],
+                                                                      isTimelineVisible: true,
+                                                                      isFocussedScrollPending: true) == nil)
     }
 
     @Test

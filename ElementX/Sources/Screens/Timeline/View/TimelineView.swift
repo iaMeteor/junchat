@@ -140,6 +140,10 @@ struct TimelineViewRepresentable: UIViewControllerRepresentable {
                 // Must come before timelineItemsDictionary in order to disable animations.
                 tableViewController.isSwitchingTimelines = context.viewState.timelineState.isSwitchingTimelines
             }
+            if tableViewController.focussedEvent != context.viewState.timelineState.focussedEvent {
+                // Must come before timelineItemsDictionary so receipts wait for focussed positioning.
+                tableViewController.focussedEvent = context.viewState.timelineState.focussedEvent
+            }
             if tableViewController.timelineItemsDictionary != context.viewState.timelineState.itemsDictionary {
                 tableViewController.timelineItemsDictionary = context.viewState.timelineState.itemsDictionary
             }
@@ -148,9 +152,6 @@ struct TimelineViewRepresentable: UIViewControllerRepresentable {
             }
             if tableViewController.isLive != context.viewState.timelineState.isLive {
                 tableViewController.isLive = context.viewState.timelineState.isLive
-            }
-            if tableViewController.focussedEvent != context.viewState.timelineState.focussedEvent {
-                tableViewController.focussedEvent = context.viewState.timelineState.focussedEvent
             }
             if tableViewController.hideTimelineMedia != context.viewState.hideTimelineMedia {
                 tableViewController.hideTimelineMedia = context.viewState.hideTimelineMedia
