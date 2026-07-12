@@ -136,6 +136,11 @@ struct TimelineViewRepresentable: UIViewControllerRepresentable {
 
         /// Updates the specified table view's properties from the current view state.
         func update(tableViewController: TimelineTableViewController) {
+            let isTimelineContentVisible = !context.viewState.isEmergencyPrivacyModeEnabled
+            if tableViewController.isTimelineContentVisible != isTimelineContentVisible {
+                // Must come before focussedEvent and timelineItemsDictionary so hidden content cannot emit receipts.
+                tableViewController.isTimelineContentVisible = isTimelineContentVisible
+            }
             if tableViewController.isSwitchingTimelines != context.viewState.timelineState.isSwitchingTimelines {
                 // Must come before timelineItemsDictionary in order to disable animations.
                 tableViewController.isSwitchingTimelines = context.viewState.timelineState.isSwitchingTimelines

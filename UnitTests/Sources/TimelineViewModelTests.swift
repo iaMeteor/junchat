@@ -259,6 +259,7 @@ final class TimelineViewModelTests {
 
         #expect(TimelineTableViewController.readReceiptItemIdentifier(in: visibleItemIDs,
                                                                       isTimelineVisible: true,
+                                                                      isTimelineContentVisible: true,
                                                                       isFocussedScrollPending: false) == remoteItemID)
     }
 
@@ -271,6 +272,7 @@ final class TimelineViewModelTests {
 
         #expect(TimelineTableViewController.readReceiptItemIdentifier(in: visibleItemIDs,
                                                                       isTimelineVisible: true,
+                                                                      isTimelineContentVisible: true,
                                                                       isFocussedScrollPending: false) == nil)
     }
 
@@ -280,6 +282,17 @@ final class TimelineViewModelTests {
 
         #expect(TimelineTableViewController.readReceiptItemIdentifier(in: [remoteItemID],
                                                                       isTimelineVisible: false,
+                                                                      isTimelineContentVisible: true,
+                                                                      isFocussedScrollPending: false) == nil)
+    }
+
+    @Test
+    func visibleReadReceiptSelectorReturnsNilWhenTimelineContentIsHidden() {
+        let remoteItemID = TimelineItemIdentifier.event(uniqueID: .init("remote"), eventOrTransactionID: .eventID("event"))
+
+        #expect(TimelineTableViewController.readReceiptItemIdentifier(in: [remoteItemID],
+                                                                      isTimelineVisible: true,
+                                                                      isTimelineContentVisible: false,
                                                                       isFocussedScrollPending: false) == nil)
     }
 
@@ -289,7 +302,62 @@ final class TimelineViewModelTests {
 
         #expect(TimelineTableViewController.readReceiptItemIdentifier(in: [remoteItemID],
                                                                       isTimelineVisible: true,
+                                                                      isTimelineContentVisible: true,
                                                                       isFocussedScrollPending: true) == nil)
+    }
+
+    @Test
+    func focussedScrollRequestDoesNotCompleteForWrongVisibleTarget() {
+        var state = TimelineTableViewController.FocussedScrollRequestState()
+        let generation = state.begin(eventID: "target", animated: true)
+        let didStart = state.markStarted(requestGeneration: generation)
+        let didComplete = state.complete(requestGeneration: generation, visibleEventIDs: ["other"])
+
+        #expect(didStart)
+        #expect(!didComplete)
+        #expect(state.isPending)
+    }
+
+    @Test
+    func focussedScrollRequestCompletesForMatchingVisibleTarget() {
+        var state = TimelineTableViewController.FocussedScrollRequestState()
+        let generation = state.begin(eventID: "target", animated: true)
+        _ = state.markStarted(requestGeneration: generation)
+        let didComplete = state.complete(requestGeneration: generation, visibleEventIDs: ["target"])
+
+        #expect(didComplete)
+        #expect(!state.isPending)
+    }
+
+    @Test
+    func staleFocussedScrollGenerationDoesNotCompleteReplacementRequest() {
+        var state = TimelineTableViewController.FocussedScrollRequestState()
+        let staleGeneration = state.begin(eventID: "old", animated: true)
+        _ = state.markStarted(requestGeneration: staleGeneration)
+        let replacementGeneration = state.begin(eventID: "replacement", animated: true)
+        _ = state.markStarted(requestGeneration: replacementGeneration)
+        let staleDidComplete = state.complete(requestGeneration: staleGeneration, visibleEventIDs: ["replacement"])
+
+        #expect(!staleDidComplete)
+        #expect(state.isPending)
+        let replacementDidComplete = state.complete(requestGeneration: replacementGeneration, visibleEventIDs: ["replacement"])
+        #expect(replacementDidComplete)
+    }
+
+    @Test
+    func cancellingFocussedScrollRequestUnblocksVisibleReceiptSelection() {
+        let remoteItemID = TimelineItemIdentifier.event(uniqueID: .init("remote"), eventOrTransactionID: .eventID("event"))
+        var state = TimelineTableViewController.FocussedScrollRequestState()
+        let generation = state.begin(eventID: "target", animated: true)
+        _ = state.markStarted(requestGeneration: generation)
+
+        state.cancel()
+
+        #expect(!state.isPending)
+        #expect(TimelineTableViewController.readReceiptItemIdentifier(in: [remoteItemID],
+                                                                      isTimelineVisible: true,
+                                                                      isTimelineContentVisible: true,
+                                                                      isFocussedScrollPending: state.isPending) == remoteItemID)
     }
 
     @Test
