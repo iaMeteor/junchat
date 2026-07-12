@@ -37,7 +37,8 @@ extension UNNotificationContent {
     
     var badgeForDelivery: NSNumber? {
         if userInfo[NotificationConstants.UserInfoKey.badgeContract] as? String == NotificationConstants.BadgeContract.identifier,
-           let badgeTotal = Self.validBadgeNumber(userInfo[NotificationConstants.UserInfoKey.badgeTotal]) {
+           let badgeTotal = Self.validBadgeNumber(userInfo[NotificationConstants.UserInfoKey.badgeTotal],
+                                                  maximum: NotificationConstants.BadgeContract.maximumSafeInteger) {
             return badgeTotal
         }
         
@@ -48,7 +49,34 @@ extension UNNotificationContent {
         return unreadCount as NSNumber?
     }
     
-    private static func validBadgeNumber(_ value: Any?) -> NSNumber? {
+    func normalizedMutableContentForBadgeDelivery() -> UNMutableNotificationContent? {
+        guard let content = mutableCopy() as? UNMutableNotificationContent else {
+            return nil
+        }
+        
+        content.badge = badgeForDelivery
+        return content
+    }
+    
+    var badgeReplacementContentForDelivery: UNMutableNotificationContent {
+        let content = UNMutableNotificationContent()
+        content.userInfo = validBadgeContractMetadata
+        content.badge = badgeForDelivery
+        return content
+    }
+    
+    private var validBadgeContractMetadata: [AnyHashable: Any] {
+        guard userInfo[NotificationConstants.UserInfoKey.badgeContract] as? String == NotificationConstants.BadgeContract.identifier,
+              let badgeTotal = Self.validBadgeNumber(userInfo[NotificationConstants.UserInfoKey.badgeTotal],
+                                                     maximum: NotificationConstants.BadgeContract.maximumSafeInteger) else {
+            return [:]
+        }
+        
+        return [NotificationConstants.UserInfoKey.badgeContract: NotificationConstants.BadgeContract.identifier,
+                NotificationConstants.UserInfoKey.badgeTotal: badgeTotal]
+    }
+    
+    private static func validBadgeNumber(_ value: Any?, maximum: Int64? = nil) -> NSNumber? {
         guard let number = value as? NSNumber,
               CFGetTypeID(number) != CFBooleanGetTypeID(),
               number.doubleValue.isFinite else {
@@ -57,8 +85,11 @@ extension UNNotificationContent {
         
         let integerValue = number.int64Value
         guard integerValue >= 0,
-              integerValue <= NotificationConstants.BadgeContract.maximumSafeInteger,
               number.compare(NSNumber(value: integerValue)) == .orderedSame else {
+            return nil
+        }
+        
+        if let maximum, integerValue > maximum {
             return nil
         }
         

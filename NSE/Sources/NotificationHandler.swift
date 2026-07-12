@@ -83,6 +83,7 @@ class NotificationHandler {
         // Called just before the extension will be terminated by the system.
         // Use this as an opportunity to deliver your "best attempt" at modified content
         MXLog.info("\(tag) Extension time will expire")
+        notificationContent.badge = notificationContent.badgeForDelivery
         deliverNotification()
     }
     
@@ -96,8 +97,7 @@ class NotificationHandler {
     private func discardNotification() {
         MXLog.info("\(tag) Discarding notification")
         
-        let content = UNMutableNotificationContent()
-        content.badge = notificationContent.badgeForDelivery
+        let content = notificationContent.badgeReplacementContentForDelivery
         MXLog.info("\(tag) New badge value: \(content.badge?.stringValue ?? "nil")")
         
         contentHandler(content)

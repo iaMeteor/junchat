@@ -77,6 +77,14 @@ struct NotificationBadgePolicyTests {
     }
     
     @Test
+    func largeExistingAPNsBadgeIsPreserved() {
+        let badge = NSNumber(value: Int64(9_007_199_254_740_992))
+        let content = makeContent(unreadCount: 4, badge: badge)
+        
+        #expect(content.badgeForDelivery == badge)
+    }
+    
+    @Test
     func legacyUnreadCountIsTheFinalFallback() {
         let content = makeContent(unreadCount: 4)
         
@@ -156,6 +164,78 @@ struct NotificationBadgePolicyTests {
                                   badge: 11)
         
         #expect(content.badgeForDelivery == NSNumber(value: 0))
+    }
+    
+    @Test
+    func countOnlyContentIsNormalizedForEarlyFallback() throws {
+        let content = makeContent(contract: expectedBadgeContract, total: 6)
+        let normalizedContent = try #require(content.normalizedMutableContentForBadgeDelivery())
+        
+        #expect(normalizedContent.badge == 6)
+        #expect(normalizedContent.roomID == nil)
+        #expect(normalizedContent.eventID == nil)
+    }
+    
+    @Test
+    func timeoutBeforeHandlerDeliversNormalizedBestAttempt() throws {
+        let content = makeContent(contract: expectedBadgeContract, total: 7)
+        let normalizedContent = try #require(content.normalizedMutableContentForBadgeDelivery())
+        var deliveredContent: UNNotificationContent?
+        let completion = NotificationContentCompletion(bestAttemptContent: normalizedContent) { content in
+            deliveredContent = content
+        }
+        
+        completion.complete()
+        
+        #expect(deliveredContent?.badge == 7)
+    }
+    
+    @Test
+    func notificationContentCompletionDeliversOnlyOnce() throws {
+        let firstContent = try #require(makeContent(contract: expectedBadgeContract, total: 1)
+            .normalizedMutableContentForBadgeDelivery())
+        let laterContent = makeContent(contract: expectedBadgeContract, total: 2).badgeReplacementContentForDelivery
+        var deliveredBadges = [NSNumber?]()
+        let completion = NotificationContentCompletion(bestAttemptContent: firstContent) { content in
+            deliveredBadges.append(content.badge)
+        }
+        
+        completion.complete()
+        completion.complete(with: laterContent)
+        
+        #expect(deliveredBadges == [NSNumber(value: 1)])
+    }
+    
+    @Test
+    func replacementContentCopiesOnlyValidContractMetadata() {
+        let content = makeContent(userInfo: ["badge_contract": expectedBadgeContract,
+                                             "badge_total": 5,
+                                             "room_id": "!room:example.org",
+                                             "event_id": "$event",
+                                             "unread_count": 9,
+                                             "custom": "value"],
+                                  badge: 12)
+        let replacementContent = content.badgeReplacementContentForDelivery
+        
+        #expect(replacementContent.badge == 5)
+        #expect(replacementContent.userInfo.count == 2)
+        #expect(replacementContent.userInfo["badge_contract"] as? String == expectedBadgeContract)
+        #expect(replacementContent.userInfo["badge_total"] as? Int == 5)
+        #expect(replacementContent.roomID == nil)
+        #expect(replacementContent.eventID == nil)
+    }
+    
+    @Test
+    func replacementContentDoesNotCopyInvalidContractMetadata() {
+        let content = makeContent(userInfo: ["badge_contract": expectedBadgeContract,
+                                             "badge_total": "5",
+                                             "room_id": "!room:example.org",
+                                             "event_id": "$event"],
+                                  badge: 12)
+        let replacementContent = content.badgeReplacementContentForDelivery
+        
+        #expect(replacementContent.badge == 12)
+        #expect(replacementContent.userInfo.isEmpty)
     }
     
     private func makeContent(userInfo: [String: Any] = [:], badge: NSNumber? = nil) -> UNMutableNotificationContent {

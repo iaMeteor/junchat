@@ -10,6 +10,33 @@ import Combine
 import MatrixRustSDK
 import UserNotifications
 
+final class NotificationContentCompletion {
+    private let lock = NSLock()
+    private let bestAttemptContent: UNNotificationContent
+    private let contentHandler: (UNNotificationContent) -> Void
+    private var hasCompleted = false
+    
+    init(bestAttemptContent: UNNotificationContent,
+         contentHandler: @escaping (UNNotificationContent) -> Void) {
+        self.bestAttemptContent = bestAttemptContent
+        self.contentHandler = contentHandler
+    }
+    
+    func complete(with content: UNNotificationContent? = nil) {
+        lock.lock()
+        guard !hasCompleted else {
+            lock.unlock()
+            return
+        }
+        
+        hasCompleted = true
+        let content = content ?? bestAttemptContent
+        lock.unlock()
+        
+        contentHandler(content)
+    }
+}
+
 // The lifecycle of the NSE looks something like the following:
 //  1)  App receives notification
 //  2)  System creates an instance of the extension class
@@ -41,6 +68,7 @@ class NotificationServiceExtension: UNNotificationServiceExtension {
     private let appHooks: AppHooks
     
     private var notificationHandler: NotificationHandler?
+    private var notificationContentCompletion: NotificationContentCompletion?
     private let keychainController = KeychainController(service: .sessions,
                                                         accessGroup: InfoPlistReader.main.keychainAccessGroupIdentifier)
     
@@ -74,10 +102,43 @@ class NotificationServiceExtension: UNNotificationServiceExtension {
     }
     
     override func didReceive(_ request: UNNotificationRequest, withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void) {
-        Task { await handle(request, withContentHandler: contentHandler) }
+        let mutableContent = request.content.normalizedMutableContentForBadgeDelivery()
+        let bestAttemptContent = mutableContent ?? request.content.badgeReplacementContentForDelivery
+        let completion = NotificationContentCompletion(bestAttemptContent: bestAttemptContent, contentHandler: contentHandler)
+        notificationContentCompletion = completion
+        
+        guard let mutableContent else {
+            completion.complete()
+            return
+        }
+        
+        Task { await handle(request, notificationContent: mutableContent, completion: completion) }
     }
     
-    private func handle(_ request: UNNotificationRequest, withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void) async {
+    private func handle(_ request: UNNotificationRequest,
+                        notificationContent: UNMutableNotificationContent,
+                        completion: NotificationContentCompletion) async {
+        guard let roomID = request.content.roomID else {
+            // Don't log until the app hooks have been run:
+            // swiftlint:disable:next print_deprecation
+            print("Missing roomID, bailing out.")
+            return completion.complete()
+        }
+        
+        guard let eventID = request.content.eventID else {
+            // Don't log until the app hooks have been run:
+            // swiftlint:disable:next print_deprecation
+            print("Missing eventID, bailing out.")
+            return completion.complete()
+        }
+        
+        guard let clientID = request.content.pusherNotificationClientIdentifier else {
+            // Don't log until the app hooks have been run:
+            // swiftlint:disable:next print_deprecation
+            print("Missing clientID, bailing out.")
+            return completion.complete()
+        }
+        
         // If we skipped configuring the target it means we can't write to the app group, so we're unlikely to
         // be able to create a session (and even if we could, we would be missing the lightweightTokioRuntime).
         // Additionally, APNs servers only store the most recent notification when the device is powered off.
@@ -88,11 +149,11 @@ class NotificationServiceExtension: UNNotificationServiceExtension {
             print("Device is locked after reboot.")
             
             if Self.hasHandledFirstNotificationSinceBoot {
-                return contentHandler(request.content)
+                return completion.complete()
             } else {
                 Self.hasHandledFirstNotificationSinceBoot = true
                 deliverReceivedWhileOfflineNotification(for: request)
-                return contentHandler(.init())
+                return completion.complete(with: UNNotificationContent())
             }
         }
         
@@ -101,43 +162,18 @@ class NotificationServiceExtension: UNNotificationServiceExtension {
             // swiftlint:disable:next print_deprecation
             print("Device is unlocked but may have missed notifications while offline.")
             deliverReceivedWhileOfflineNotification(for: request)
-            return contentHandler(.init())
-        }
-        
-        guard let roomID = request.content.roomID else {
-            // Don't log until the app hooks have been run:
-            // swiftlint:disable:next print_deprecation
-            print("Missing roomID, bailing out.")
-            return contentHandler(request.content)
-        }
-        
-        guard let eventID = request.content.eventID else {
-            // Don't log until the app hooks have been run:
-            // swiftlint:disable:next print_deprecation
-            print("Missing eventID, bailing out.")
-            return contentHandler(request.content)
-        }
-        
-        guard let clientID = request.content.pusherNotificationClientIdentifier else {
-            // Don't log until the app hooks have been run:
-            // swiftlint:disable:next print_deprecation
-            print("Missing clientID, bailing out.")
-            return contentHandler(request.content)
+            return completion.complete(with: UNNotificationContent())
         }
         
         guard let credentials = keychainController.restorationTokens().first(where: { $0.restorationToken.pusherNotificationClientIdentifier == clientID }) else {
             // Don't log until the app hooks have been run:
             // swiftlint:disable:next print_deprecation
             print("Credentials not found, bailing out.")
-            return contentHandler(request.content)
+            return completion.complete()
         }
         
         let homeserverURL = credentials.restorationToken.session.homeserverUrl
         await appHooks.remoteSettingsHook.loadCache(forHomeserver: homeserverURL, applyingTo: settings)
-        
-        guard let mutableContent = request.content.mutableCopy() as? UNMutableNotificationContent else {
-            return contentHandler(request.content)
-        }
         
         MXLog.info("\(tag) #########################################")
         
@@ -154,8 +190,8 @@ class NotificationServiceExtension: UNNotificationServiceExtension {
             
             notificationHandler = NotificationHandler(userSession: userSession,
                                                       settings: settings,
-                                                      contentHandler: contentHandler,
-                                                      notificationContent: mutableContent,
+                                                      contentHandler: completion.complete(with:),
+                                                      notificationContent: notificationContent,
                                                       tag: tag)
             
             ExtensionLogger.logMemory(with: tag)
@@ -164,11 +200,13 @@ class NotificationServiceExtension: UNNotificationServiceExtension {
             await notificationHandler?.processEvent(eventID, roomID: roomID)
         } catch {
             MXLog.error("Failed creating user session with error: \(error)")
+            completion.complete()
         }
     }
     
     override func serviceExtensionTimeWillExpire() {
         notificationHandler?.handleTimeExpiration()
+        notificationContentCompletion?.complete()
     }
     
     // MARK: - Boot handling
@@ -228,9 +266,8 @@ class NotificationServiceExtension: UNNotificationServiceExtension {
         // swiftlint:disable:next print_deprecation
         print("Delivering the 'received while offline' notification.")
         
-        let content = UNMutableNotificationContent()
+        let content = originalRequest.content.badgeReplacementContentForDelivery
         content.body = L10n.notificationReceivedWhileOfflineIos
-        content.badge = originalRequest.content.badgeForDelivery
         content.sound = .init(named: settings.notificationSoundName.publisher.value)
         
         let request = UNNotificationRequest(identifier: Self.receivedWhileOfflineNotificationID, content: content, trigger: nil)
