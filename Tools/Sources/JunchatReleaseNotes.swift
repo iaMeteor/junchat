@@ -5,6 +5,7 @@ enum JunchatReleaseNotes {
         case invalidChangelog
         case invalidReleaseDate
         case missingReleaseNotes
+        case conflictingReleaseNotes
 
         var errorDescription: String? {
             switch self {
@@ -14,6 +15,8 @@ enum JunchatReleaseNotes {
                 "Release date must use YYYY-MM-DD"
             case .missingReleaseNotes:
                 "Generated release notes are empty"
+            case .conflictingReleaseNotes:
+                "JUNCHAT_CHANGES.md already contains conflicting notes for this version"
             }
         }
     }
@@ -48,21 +51,72 @@ enum JunchatReleaseNotes {
             throw ReleaseNotesError.missingReleaseNotes
         }
 
-        let existingBody = existingContent
+        let entry = "## Changes in \(version) (\(releaseDate))\n\(cleanedNotes)"
+        let existingBody = String(existingContent
             .dropFirst(heading.count)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let previousContent = existingBody.isEmpty ? "" : "\n\n\(existingBody)"
-        return "\(heading)\n\n## Changes in \(version) (\(releaseDate))\n\(cleanedNotes)\(previousContent)"
+            .trimmingCharacters(in: .whitespacesAndNewlines))
+        let releaseHeading = try NSRegularExpression(pattern: #"(?m)^## Changes in [^\r\n]+ \([^\r\n]+\)$"#)
+        let releaseMatches = releaseHeading.matches(in: existingBody,
+                                                    range: NSRange(existingBody.startIndex..., in: existingBody))
+        let firstReleaseIndex = releaseMatches.first
+            .flatMap { Range($0.range, in: existingBody)?.lowerBound }
+        let introduction = firstReleaseIndex
+            .map { String(existingBody[..<$0]).trimmingCharacters(in: .whitespacesAndNewlines) }
+            ?? existingBody
+        let previousReleases = firstReleaseIndex
+            .map { String(existingBody[$0...]).trimmingCharacters(in: .whitespacesAndNewlines) }
+            ?? ""
+
+        if !previousReleases.isEmpty {
+            let escapedVersion = NSRegularExpression.escapedPattern(for: version)
+            let versionPattern = try NSRegularExpression(pattern: "(?m)^## Changes in \(escapedVersion) \\([^\\r\\n]+\\)$")
+            let versionMatches = versionPattern.matches(in: previousReleases,
+                                                        range: NSRange(previousReleases.startIndex..., in: previousReleases))
+            guard versionMatches.count <= 1 else {
+                throw ReleaseNotesError.conflictingReleaseNotes
+            }
+            if let match = versionMatches.first,
+               let matchRange = Range(match.range, in: previousReleases) {
+                let remainder = NSRange(matchRange.upperBound..<previousReleases.endIndex,
+                                        in: previousReleases)
+                let nextReleaseIndex = releaseHeading.firstMatch(in: previousReleases, range: remainder)
+                    .flatMap { Range($0.range, in: previousReleases)?.lowerBound }
+                let endIndex = nextReleaseIndex ?? previousReleases.endIndex
+                let existingEntry = String(previousReleases[matchRange.lowerBound..<endIndex])
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                guard existingEntry == entry else {
+                    throw ReleaseNotesError.conflictingReleaseNotes
+                }
+                return existingContent
+            }
+        }
+
+        let sections = [heading, introduction, entry, previousReleases].filter { !$0.isEmpty }
+        return sections.joined(separator: "\n\n") + "\n"
     }
 
     private static func isISODate(_ value: String) -> Bool {
         let parts = value.split(separator: "-", omittingEmptySubsequences: false)
-        return parts.count == 3 &&
-            parts[0].count == 4 &&
-            parts[1].count == 2 &&
-            parts[2].count == 2 &&
-            parts.allSatisfy { part in
-                part.allSatisfy { $0.isASCII && $0.isNumber }
-            }
+        guard parts.count == 3,
+              parts[0].count == 4,
+              parts[1].count == 2,
+              parts[2].count == 2,
+              parts.allSatisfy({ part in part.allSatisfy { $0.isASCII && $0.isNumber } }),
+              let year = Int(parts[0]),
+              let month = Int(parts[1]),
+              let day = Int(parts[2]) else {
+            return false
+        }
+        var calendar = Calendar(identifier: .gregorian)
+        guard let utc = TimeZone(secondsFromGMT: 0) else { return false }
+        calendar.timeZone = utc
+        let components = DateComponents(calendar: calendar,
+                                        timeZone: calendar.timeZone,
+                                        year: year,
+                                        month: month,
+                                        day: day)
+        guard let date = calendar.date(from: components) else { return false }
+        let roundTrip = calendar.dateComponents([.year, .month, .day], from: date)
+        return roundTrip.year == year && roundTrip.month == month && roundTrip.day == day
     }
 }

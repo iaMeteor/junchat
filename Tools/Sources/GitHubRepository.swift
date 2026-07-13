@@ -33,9 +33,13 @@ struct GitHubRepository: Equatable {
         } else {
             guard let url = URL(string: value),
                   url.host?.lowercased() == "github.com",
-                  ["http", "https", "ssh"].contains(url.scheme?.lowercased() ?? ""),
+                  let scheme = url.scheme?.lowercased(),
+                  ["http", "https", "ssh"].contains(scheme),
+                  url.port == nil,
                   url.query == nil,
-                  url.fragment == nil else {
+                  url.fragment == nil,
+                  url.password == nil,
+                  scheme == "ssh" ? url.user == "git" : url.user == nil else {
                 throw RepositoryError.unsupportedRemote
             }
             repositoryPath = url.path
@@ -59,7 +63,7 @@ struct GitHubRepository: Equatable {
     }
 
     private static func isValidComponent(_ value: String) -> Bool {
-        !value.isEmpty && value.allSatisfy { character in
+        !value.isEmpty && value != "." && value != ".." && value.allSatisfy { character in
             character.isASCII && (character.isLetter || character.isNumber || "-_.".contains(character))
         }
     }

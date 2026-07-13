@@ -19,7 +19,9 @@ final class JunchatReleaseNotesTests: XCTestCase {
                                                                generatedNotes: generated,
                                                                releaseDate: "2026-07-13")
 
-        XCTAssertTrue(updated.hasPrefix("# JunChat iOS Changes\n\n## Changes in 1.8.2 (2026-07-13)"))
+        XCTAssertTrue(updated.hasPrefix("# JunChat iOS Changes\n\nJunChat fork release notes"))
+        XCTAssertLessThan(try XCTUnwrap(updated.range(of: "JunChat fork release notes")?.lowerBound),
+                          try XCTUnwrap(updated.range(of: "## Changes in 1.8.2")?.lowerBound))
         XCTAssertTrue(updated.contains("### Highlights\n- Fixed call routing"))
         XCTAssertTrue(updated.contains("#### Contributors\n- Example"))
         XCTAssertFalse(updated.contains("generated metadata"))
@@ -34,6 +36,29 @@ final class JunchatReleaseNotesTests: XCTestCase {
         XCTAssertThrowsError(try JunchatReleaseNotes.updatedChangelog(existingContent: "# JunChat iOS Changes\n",
                                                                       version: "1.8.2",
                                                                       generatedNotes: "<!-- only a comment -->",
+                                                                      releaseDate: "2026-07-13"))
+        XCTAssertThrowsError(try JunchatReleaseNotes.updatedChangelog(existingContent: "# JunChat iOS Changes\n",
+                                                                      version: "1.8.2",
+                                                                      generatedNotes: "- Fix\n",
+                                                                      releaseDate: "2026-02-30"))
+    }
+
+    func testExactRepeatIsIdempotentAndConflictingRepeatFails() throws {
+        let existing = "# JunChat iOS Changes\n\n" +
+            "JunChat fork release notes are recorded here. Upstream history remains in `CHANGES.md`."
+        let first = try JunchatReleaseNotes.updatedChangelog(existingContent: existing,
+                                                             version: "1.8.2",
+                                                             generatedNotes: "## Highlights\n- Fixed call routing",
+                                                             releaseDate: "2026-07-13")
+
+        XCTAssertEqual(try JunchatReleaseNotes.updatedChangelog(existingContent: first,
+                                                                version: "1.8.2",
+                                                                generatedNotes: "## Highlights\n- Fixed call routing",
+                                                                releaseDate: "2026-07-13"),
+                       first)
+        XCTAssertThrowsError(try JunchatReleaseNotes.updatedChangelog(existingContent: first,
+                                                                      version: "1.8.2",
+                                                                      generatedNotes: "## Highlights\n- Different notes",
                                                                       releaseDate: "2026-07-13"))
     }
 }

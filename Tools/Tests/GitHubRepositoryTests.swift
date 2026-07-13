@@ -23,6 +23,9 @@ final class GitHubRepositoryTests: XCTestCase {
     func testRejectsNonGitHubOrAmbiguousOrigins() throws {
         for remote in [
             "git@example.com:iaMeteor/junchat.git",
+            "git@github.com:../junchat.git",
+            "https://token@github.com/iaMeteor/junchat.git",
+            "ssh://someone@github.com/iaMeteor/junchat.git",
             "https://github.com/iaMeteor",
             "https://github.com/iaMeteor/junchat/extra",
             "not a remote"
