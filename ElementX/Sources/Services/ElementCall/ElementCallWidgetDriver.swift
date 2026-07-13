@@ -164,7 +164,7 @@ final class ElementCallWidgetDriver: WidgetCapabilitiesProvider, ElementCallWidg
                                                                    config: .init(intent: intent,
                                                                                  skipLobby: skipLobby))
         } catch {
-            MXLog.error("Failed to build widget settings: \(error)")
+            MXLog.error("Failed to build widget settings: \(CallDiagnostics.errorSummary(error))")
             return .failure(.failedBuildingWidgetSettings)
         }
         
@@ -178,7 +178,7 @@ final class ElementCallWidgetDriver: WidgetCapabilitiesProvider, ElementCallWidg
                                                                   languageTag: languageTag,
                                                                   theme: theme))
         } catch {
-            MXLog.error("Failed to generate web view URL: \(error)")
+            MXLog.error("Failed to generate web view URL: \(CallDiagnostics.errorSummary(error))")
             return .failure(.failedBuildingCallURL)
         }
         
@@ -190,7 +190,7 @@ final class ElementCallWidgetDriver: WidgetCapabilitiesProvider, ElementCallWidg
         do {
             widgetDriver = try makeWidgetDriver(settings: widgetSettings)
         } catch {
-            MXLog.error("Failed to build widget driver: \(error)")
+            MXLog.error("Failed to build widget driver: \(CallDiagnostics.errorSummary(error))")
             return .failure(.failedBuildingWidgetDriver)
         }
         
@@ -209,7 +209,7 @@ final class ElementCallWidgetDriver: WidgetCapabilitiesProvider, ElementCallWidg
                 }
                 
                 messagePublisher.send(receivedMessage)
-                MXLog.debug("Received message: \(receivedMessage)")
+                MXLog.debug("Received widget message: \(CallDiagnostics.jsonSummary(receivedMessage))")
                 
                 self?.handleMessageIfNeeded(receivedMessage)
             }
@@ -238,7 +238,7 @@ final class ElementCallWidgetDriver: WidgetCapabilitiesProvider, ElementCallWidg
             handleMessageIfNeeded(message)
             if let response = widgetMessage.successResponseJSON() {
                 messagePublisher.send(response)
-                MXLog.debug("Acknowledged host-handled Element Call message: \(response)")
+                MXLog.debug("Acknowledged host-handled Element Call message: \(CallDiagnostics.jsonSummary(response))")
             } else {
                 MXLog.error("Failed to build response for host-handled Element Call message")
             }
@@ -246,7 +246,7 @@ final class ElementCallWidgetDriver: WidgetCapabilitiesProvider, ElementCallWidg
         }
         
         let result = await widgetDriver.handle.send(msg: message)
-        MXLog.debug("Sent message: \(message) with result: \(result)")
+        MXLog.debug("Sent widget message: \(CallDiagnostics.jsonSummary(message)) accepted=\(result)")
         
         handleMessageIfNeeded(message)
         
@@ -300,7 +300,7 @@ final class ElementCallWidgetDriver: WidgetCapabilitiesProvider, ElementCallWidg
             }
         } catch {
             // Not all actions are supported
-            MXLog.verbose("Failed processing widget message with error: \(error)")
+            MXLog.verbose("Failed processing widget message: \(CallDiagnostics.errorSummary(error))")
         }
     }
 }

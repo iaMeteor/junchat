@@ -49,6 +49,19 @@ struct CallDiagnosticsTests {
     }
 
     @Test
+    func dictionarySummaryOmitsKeysAndValues() {
+        let summary = CallDiagnostics.dictionarySummary([
+            "room_id": "!secret:example.org",
+            "token": "access-token"
+        ])
+
+        #expect(summary == "keys=2")
+        #expect(!summary.contains("room_id"))
+        #expect(!summary.contains("!secret:example.org"))
+        #expect(!summary.contains("access-token"))
+    }
+
+    @Test
     func errorSummaryOmitsDomainAndLocalizedDescription() {
         let error = NSError(domain: "access-token.example.org",
                             code: 401,

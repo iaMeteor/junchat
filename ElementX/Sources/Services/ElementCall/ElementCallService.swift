@@ -47,7 +47,7 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, PKPushRegistryDe
     private var acceptedIncomingCallID: CallID?
     private var incomingCallID: CallID? {
         didSet {
-            MXLog.info("[JunchatCall] incomingCallID changed room=\(incomingCallID?.roomID ?? "nil") voice=\(incomingCallID?.isVoiceCall.description ?? "nil")")
+            MXLog.info("[JunchatCall] incomingCallID changed present=\(incomingCallID != nil) voice=\(incomingCallID?.isVoiceCall.description ?? "nil")")
             incomingCallRoomIDSubject.send(incomingCallID?.roomID)
             Task { await observeIncomingCall() }
         }
@@ -57,7 +57,7 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, PKPushRegistryDe
 
     private var ongoingCallID: CallID? {
         didSet {
-            MXLog.info("[JunchatCall] ongoingCallID changed room=\(ongoingCallID?.roomID ?? "nil") voice=\(ongoingCallID?.isVoiceCall.description ?? "nil")")
+            MXLog.info("[JunchatCall] ongoingCallID changed present=\(ongoingCallID != nil) voice=\(ongoingCallID?.isVoiceCall.description ?? "nil")")
             ongoingCallRoomIDSubject.send(ongoingCallID?.roomID)
         }
     }
@@ -128,7 +128,7 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, PKPushRegistryDe
     }
 
     func setupCallSession(roomID: String, roomDisplayName: String) async {
-        MXLog.info("[JunchatCall] setupCallSession room=\(roomID) hasIncoming=\(incomingCallID?.roomID == roomID) hasAccepted=\(acceptedIncomingCallID?.roomID == roomID) hasOngoing=\(ongoingCallID != nil)")
+        MXLog.info("[JunchatCall] setupCallSession hasIncoming=\(incomingCallID?.roomID == roomID) hasAccepted=\(acceptedIncomingCallID?.roomID == roomID) hasOngoing=\(ongoingCallID != nil)")
 
         // Drop any ongoing calls when starting a new one
         if ongoingCallID != nil {
@@ -152,7 +152,7 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, PKPushRegistryDe
             endUnansweredCallTask = nil
             declineListenerHandle?.cancel()
             declineListenerHandle = nil
-            MXLog.info("[JunchatCall] ending CallKit incoming ring for accepted room=\(roomID)")
+            MXLog.info("[JunchatCall] ending CallKit incoming ring for accepted call")
             callProvider.reportCall(with: callID.callKitID, endedAt: nil, reason: .remoteEnded)
         }
 
@@ -172,7 +172,7 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, PKPushRegistryDe
         // do {
         //     try await callController.request(CXTransaction(action: startCallAction))
         // } catch {
-        //     MXLog.error("Failed requesting start call action with error: \(error)")
+        //     MXLog.error("Failed requesting start call action: \(CallDiagnostics.errorSummary(error))")
         // }
     }
 
@@ -182,13 +182,13 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, PKPushRegistryDe
 
     func acceptIncomingCall(roomID: String, isVoiceCall: Bool) async {
         guard let incomingCallID else {
-            MXLog.info("[JunchatCall] accepting foreground synced call room=\(roomID) voice=\(isVoiceCall)")
+            MXLog.info("[JunchatCall] accepting foreground synced call voice=\(isVoiceCall)")
             acceptedIncomingCallID = CallID(callKitID: UUID(), roomID: roomID, rtcNotificationID: nil, isVoiceCall: isVoiceCall)
             return
         }
 
         guard incomingCallID.roomID == roomID else {
-            MXLog.info("Incoming call room does not match accept request: \(incomingCallID.roomID) != \(roomID)")
+            MXLog.info("Incoming call room does not match accept request")
             return
         }
 
@@ -197,7 +197,7 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, PKPushRegistryDe
         declineListenerHandle?.cancel()
         declineListenerHandle = nil
         acceptedIncomingCallID = incomingCallID
-        MXLog.info("[JunchatCall] acceptIncomingCall stopping CallKit ring room=\(roomID)")
+        MXLog.info("[JunchatCall] acceptIncomingCall stopping CallKit ring")
         callProvider.reportCall(with: incomingCallID.callKitID, endedAt: nil, reason: .remoteEnded)
         self.incomingCallID = nil
     }
@@ -209,7 +209,7 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, PKPushRegistryDe
         }
 
         guard incomingCallID.roomID == roomID else {
-            MXLog.info("Incoming call room does not match decline request: \(incomingCallID.roomID) != \(roomID)")
+            MXLog.info("Incoming call room does not match decline request")
             return
         }
 
@@ -225,14 +225,14 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, PKPushRegistryDe
         }
 
         guard ongoingCallID.roomID == roomID else {
-            MXLog.error("Failed toggling call microphone, rooms don't match: \(ongoingCallID.roomID) != \(roomID)")
+            MXLog.error("Failed toggling call microphone, rooms don't match")
             return
         }
 
         let transaction = CXTransaction(action: CXSetMutedCallAction(call: ongoingCallID.callKitID, muted: !enabled))
         callController.request(transaction) { error in
             if let error {
-                MXLog.error("Failed toggling call microphone with error: \(error)")
+                MXLog.error("Failed toggling call microphone: \(CallDiagnostics.errorSummary(error))")
             }
         }
     }
@@ -243,19 +243,19 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, PKPushRegistryDe
 
     func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, completion: @escaping () -> Void) {
         guard let roomID = payload.dictionaryPayload[ElementCallServiceNotificationKey.roomID.rawValue] as? String else {
-            MXLog.error("Something went wrong, missing room identifier for incoming voip call: \(payload)")
+            MXLog.error("Missing room identifier for incoming voip call: \(CallDiagnostics.dictionarySummary(payload.dictionaryPayload))")
             completion()
             return
         }
 
         guard let rtcNotificationID = payload.dictionaryPayload[ElementCallServiceNotificationKey.rtcNotifyEventID.rawValue] as? String else {
-            MXLog.error("Something went wrong, missing rtc notification event identifier for incoming voip call: \(payload)")
+            MXLog.error("Missing rtc notification event identifier for incoming voip call: \(CallDiagnostics.dictionarySummary(payload.dictionaryPayload))")
             completion()
             return
         }
 
         guard ongoingCallID?.roomID != roomID else {
-            MXLog.warning("Call already ongoing for room \(roomID), ignoring incoming push")
+            MXLog.warning("Call already ongoing, ignoring incoming push")
             completion()
             return
         }
@@ -266,7 +266,7 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, PKPushRegistryDe
         incomingCallID = callID
 
         guard let expirationDate = (payload.dictionaryPayload[ElementCallServiceNotificationKey.expirationDate.rawValue] as? Date) else {
-            MXLog.error("Something went wrong, missing expiration timestamp for incoming voip call: \(payload)")
+            MXLog.error("Missing expiration timestamp for incoming voip call: \(CallDiagnostics.dictionarySummary(payload.dictionaryPayload))")
             completion()
             return
         }
@@ -274,7 +274,7 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, PKPushRegistryDe
         let nowDate = timeProvider.now()
 
         guard nowDate < expirationDate else {
-            MXLog.warning("Call expired for room \(roomID), ignoring incoming push")
+            MXLog.warning("Call expired, ignoring incoming push")
             completion()
             return
         }
@@ -295,7 +295,7 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, PKPushRegistryDe
 
         callProvider.reportNewIncomingCall(with: callID.callKitID, update: update) { [weak self] error in
             if let error {
-                MXLog.error("Failed reporting new incoming call with error: \(error)")
+                MXLog.error("Failed reporting new incoming call: \(CallDiagnostics.errorSummary(error))")
             }
 
             self?.actionsSubject.send(.receivedIncomingCallRequest)
@@ -327,7 +327,7 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, PKPushRegistryDe
     }
 
     func providerDidReset(_ provider: CXProvider) {
-        MXLog.info("Call provider did reset: \(provider)")
+        MXLog.info("Call provider did reset")
     }
 
     func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
@@ -336,7 +336,7 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, PKPushRegistryDe
             return
         }
 
-        MXLog.info("[JunchatCall] CallKit answer room=\(incomingCallID.roomID) voice=\(incomingCallID.isVoiceCall)")
+        MXLog.info("[JunchatCall] CallKit answer voice=\(incomingCallID.isVoiceCall)")
 
         // Fixes broken videos on EC web when a CallKit session is established.
         //
@@ -401,13 +401,13 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, PKPushRegistryDe
     // MARK: - Private
 
     private func tearDownCallSession(sendEndCallAction: Bool = true) {
-        MXLog.info("[JunchatCall] tearDownCallSession sendEndCallAction=\(sendEndCallAction) ongoing=\(ongoingCallID?.roomID ?? "nil") incoming=\(incomingCallID?.roomID ?? "nil")")
+        MXLog.info("[JunchatCall] tearDownCallSession sendEndCallAction=\(sendEndCallAction) hasOngoing=\(ongoingCallID != nil) hasIncoming=\(incomingCallID != nil)")
 
         if sendEndCallAction, let ongoingCallID {
             let transaction = CXTransaction(action: CXEndCallAction(call: ongoingCallID.callKitID))
             callController.request(transaction) { error in
                 if let error {
-                    MXLog.error("Failed transaction with error: \(error)")
+                    MXLog.error("Failed transaction: \(CallDiagnostics.errorSummary(error))")
                 }
             }
         }
@@ -494,12 +494,12 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, PKPushRegistryDe
             return
         }
 
-        MXLog.info("Observe decline events for notification \(rtcNotificationID)")
+        MXLog.info("Observe decline events for incoming call")
 
         let listener: CallDeclineListener = SDKListener { [weak self] senderID in
             guard let self else { return }
 
-            MXLog.debug("Call declined event received from \(senderID)")
+            MXLog.debug("Call declined event received")
 
             if senderID == roomProxy.ownUserID {
                 // Stop ringing!
@@ -517,7 +517,7 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, PKPushRegistryDe
     }
 
     private func reportEndedCall(incomingCallID: CallID, reason: CXCallEndedReason) {
-        MXLog.info("[JunchatCall] reportEndedCall room=\(incomingCallID.roomID) reason=\(reason.rawValue)")
+        MXLog.info("[JunchatCall] reportEndedCall reason=\(reason.rawValue)")
         declineListenerHandle?.cancel()
         declineListenerHandle = nil
         endUnansweredCallTask?.cancel()

@@ -43,6 +43,10 @@ enum CallDiagnostics {
         return "bytes=\(text.utf8.count) lines=\(lineCount)"
     }
 
+    static func dictionarySummary(_ dictionary: [AnyHashable: Any]) -> String {
+        "keys=\(dictionary.count)"
+    }
+
     static func errorSummary(_ error: Error) -> String {
         let errorCode = (error as NSError).code
         return "type=\(String(describing: type(of: error))) code=\(errorCode)"

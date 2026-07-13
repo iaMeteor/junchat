@@ -488,24 +488,23 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
 
     private func presentCallScreen(roomID: String, isVoiceCall: Bool, playConnectedTone: Bool? = nil) async {
         guard case let .joined(roomProxy) = await userSession.clientProxy.roomForIdentifier(roomID) else {
-            MXLog.warning("[JunchatCall] presentCallScreen failed: room not joined room=\(roomID)")
+            MXLog.warning("[JunchatCall] presentCallScreen failed: room not joined")
             return
         }
 
         let shouldPlayConnectedTone = playConnectedTone ?? (flowParameters.elementCallService.incomingCallRoomIDPublisher.value != roomID)
         let callPresentationDetails = [
-            "room=\(roomID)",
             "voice=\(isVoiceCall)",
             "playConnectedTone=\(shouldPlayConnectedTone)",
-            "explicit=\(playConnectedTone?.description ?? "nil")",
-            "incoming=\(flowParameters.elementCallService.incomingCallRoomIDPublisher.value ?? "nil")"
+            "explicit=\(playConnectedTone != nil)",
+            "matchesIncoming=\(flowParameters.elementCallService.incomingCallRoomIDPublisher.value == roomID)"
         ].joined(separator: " ")
-        MXLog.info("[JunchatCall] presentCallScreen by roomID \(callPresentationDetails)")
+        MXLog.info("[JunchatCall] presentCallScreen request \(callPresentationDetails)")
         presentCallScreen(roomProxy: roomProxy, voiceOnly: isVoiceCall, playConnectedTone: shouldPlayConnectedTone)
     }
 
     private func presentCallScreen(roomProxy: JoinedRoomProxyProtocol, voiceOnly: Bool, playConnectedTone: Bool = true) {
-        MXLog.info("[JunchatCall] presentCallScreen roomProxy room=\(roomProxy.id) voice=\(voiceOnly) playConnectedTone=\(playConnectedTone)")
+        MXLog.info("[JunchatCall] presentCallScreen roomProxy voice=\(voiceOnly) playConnectedTone=\(playConnectedTone)")
         let colorScheme: ColorScheme = flowParameters.windowManager.mainWindow?.traitCollection.userInterfaceStyle == .light ? .light : .dark
         presentCallScreen(configuration: .init(roomProxy: roomProxy,
                                                clientProxy: userSession.clientProxy,
@@ -525,13 +524,13 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
                                                                        pendingIncomingCallRoomID: pendingIncomingCallRoomID,
                                                                        ownUserID: userSession.clientProxy.userID) else {
             if pendingIncomingCallRoomID != nil || ongoingCallRoomID != nil {
-                MXLog.info("[JunchatCall] no incoming overlay candidate pending=\(pendingIncomingCallRoomID ?? "nil") ongoing=\(ongoingCallRoomID ?? "nil") roomsWithCall=\(rooms.filter(\.hasOngoingCall).map(\.id))")
+                MXLog.info("[JunchatCall] no incoming overlay candidate hasPending=\(pendingIncomingCallRoomID != nil) hasOngoing=\(ongoingCallRoomID != nil) roomsWithCall=\(rooms.filter(\.hasOngoingCall).count)")
             }
             dismissIncomingCallOverlayIfNeeded()
             return
         }
 
-        MXLog.info("[JunchatCall] incoming overlay candidate room=\(candidate.roomID) voice=\(candidate.isVoiceCall)")
+        MXLog.info("[JunchatCall] incoming overlay candidate voice=\(candidate.isVoiceCall)")
 
         guard candidate.roomID != presentedIncomingCallRoomID || !(navigationTabCoordinator.overlayCoordinator is IncomingCallScreenCoordinator) else {
             return
@@ -552,10 +551,10 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
 
                 switch action {
                 case .accept(let candidate):
-                    MXLog.info("[JunchatCall] incoming overlay accepted room=\(candidate.roomID) voice=\(candidate.isVoiceCall)")
+                    MXLog.info("[JunchatCall] incoming overlay accepted voice=\(candidate.isVoiceCall)")
                     acceptIncomingCallCandidate(candidate)
                 case .decline(let candidate):
-                    MXLog.info("[JunchatCall] incoming overlay declined room=\(candidate.roomID)")
+                    MXLog.info("[JunchatCall] incoming overlay declined")
                     globalIncomingCallPresentation.dismiss(roomID: candidate.roomID)
                     dismissIncomingCallOverlayIfNeeded()
                     Task { await self.flowParameters.elementCallService.declineIncomingCall(roomID: candidate.roomID) }
@@ -585,7 +584,7 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
         let configuredRoomID = ProcessInfo.processInfo.environment["JUNCHAT_DEBUG_AUTO_ACCEPT_INCOMING_CALL_ROOM_ID"]
         guard configuredRoomID == "*" || configuredRoomID == candidate.roomID else { return }
 
-        MXLog.info("[JunchatCall] DEBUG auto-accept incoming overlay room=\(candidate.roomID)")
+        MXLog.info("[JunchatCall] DEBUG auto-accept incoming overlay")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
             guard let self, self.presentedIncomingCallRoomID == candidate.roomID else { return }
             self.acceptIncomingCallCandidate(candidate)
@@ -620,11 +619,11 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
                 callScreenCoordinator?.stopPictureInPicture()
                 return
             } else {
-                MXLog.warning("[JunchatCall] rebuilding missing call overlay for ongoing room=\(configuration.callRoomID)")
+                MXLog.warning("[JunchatCall] rebuilding missing call overlay for ongoing call")
             }
         }
 
-        MXLog.info("[JunchatCall] presenting call overlay room=\(configuration.callRoomID) voice=\(configuration.voiceOnly) playConnectedTone=\(configuration.playConnectedTone)")
+        MXLog.info("[JunchatCall] presenting call overlay voice=\(configuration.voiceOnly) playConnectedTone=\(configuration.playConnectedTone)")
 
         let callScreenCoordinator = CallScreenCoordinator(parameters: .init(elementCallService: flowParameters.elementCallService,
                                                                             configuration: configuration,
@@ -711,9 +710,8 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
             endedCallDismissalWorkItem?.cancel()
             endedCallDismissalWorkItem = nil
             let initialSyncDetails = [
-                "room=\(presentedCallScreenRoomID)",
-                "participants=\(room.activeRoomCallParticipants)",
-                "ownUser=\(userSession.clientProxy.userID)",
+                "participantCount=\(room.activeRoomCallParticipants.count)",
+                "includesOwnUser=\(room.activeRoomCallParticipants.contains(userSession.clientProxy.userID))",
                 "age=\(String(format: "%.2f", callScreenAge))s"
             ].joined(separator: " ")
             MXLog.info("[JunchatCall] keeping call overlay during initial membership sync \(initialSyncDetails)")
@@ -725,9 +723,8 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
         let roomID = presentedCallScreenRoomID
         let dismissalDelay = callScreenHasSeenRemoteParticipant ? 1.0 : 2.0
         let dismissalDetails = [
-            "room=\(roomID)",
-            "participants=\(room.activeRoomCallParticipants)",
-            "ownUser=\(userSession.clientProxy.userID)",
+            "participantCount=\(room.activeRoomCallParticipants.count)",
+            "includesOwnUser=\(room.activeRoomCallParticipants.contains(userSession.clientProxy.userID))",
             "hasSeenRemote=\(callScreenHasSeenRemoteParticipant)",
             "delay=\(dismissalDelay)s"
         ].joined(separator: " ")
@@ -740,7 +737,7 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
                 return
             }
 
-            MXLog.info("[JunchatCall] dismissing call overlay because room stayed inactive room=\(roomID)")
+            MXLog.info("[JunchatCall] dismissing call overlay because room stayed inactive")
             self.flowParameters.elementCallService.tearDownCallSession()
             self.dismissCallScreenIfNeeded()
         }

@@ -671,7 +671,7 @@ class JoinedRoomProxy: JoinedRoomProxyProtocol {
             try await room.declineCall(rtcNotificationEventId: notificationID)
             return .success(())
         } catch {
-            MXLog.error("Failed to decline rtc notification \(notificationID) with error: \(error)")
+            MXLog.error("Failed to decline rtc notification: \(CallDiagnostics.errorSummary(error))")
             return .failure(.sdkError(error))
         }
     }
@@ -682,7 +682,7 @@ class JoinedRoomProxy: JoinedRoomProxyProtocol {
             let handle = try room.subscribeToCallDeclineEvents(rtcNotificationEventId: rtcNotificationEventID, listener: listener)
             return .success(handle)
         } catch {
-            MXLog.error("Failed observing rtc decline with error: \(error)")
+            MXLog.error("Failed observing rtc decline: \(CallDiagnostics.errorSummary(error))")
             return .failure(.sdkError(error))
         }
     }

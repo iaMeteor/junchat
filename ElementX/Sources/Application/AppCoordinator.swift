@@ -355,7 +355,7 @@ class AppCoordinator: AppCoordinatorProtocol, AuthenticationFlowCoordinatorDeleg
             return
         }
         
-        MXLog.info("Starting call in room: \(roomIdentifier)")
+        MXLog.info("Starting call from application route")
         handleAppRoute(AppRoute.call(roomID: roomIdentifier, isVoiceCall: false), windowType: nil)
     }
     
@@ -710,7 +710,7 @@ class AppCoordinator: AppCoordinatorProtocol, AuthenticationFlowCoordinatorDeleg
         
         #if DEBUG
         if let debugStartupRoute {
-            MXLog.info("[JunchatCall] handling debug startup route \(debugStartupRoute)")
+            MXLog.info("[JunchatCall] handling debug startup route")
             userSessionFlowCoordinator.handleAppRoute(debugStartupRoute, animated: false)
         }
         #endif
