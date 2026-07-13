@@ -45,9 +45,11 @@ candidate. Do not set `JUNCHAT_SKIP_SWIFTLINT=1` as a normal release path.
 
 Only the Xcode Cloud `Release` workflow should invoke
 `swift run -q tools ci release-to-github`. It derives the GitHub repository from
-`origin`, targets the archived commit explicitly, writes JunChat notes to
-`JUNCHAT_CHANGES.md`, prepares the next patch and build, and pushes only the
-current branch. It never rewrites or rebases an unrelated branch.
+`origin`, creates a draft that targets the archived commit explicitly, writes
+JunChat notes to `JUNCHAT_CHANGES.md`, prepares the next patch and build, and
+pushes only the current branch. It never rewrites or rebases an unrelated
+branch. The GitHub release remains a draft until a separate explicit publication
+approval; review its tag target, notes, and artifacts before publishing it.
 
 Release credentials, Apple signing certificates, provisioning profiles, and
 entitlements remain managed by the existing secure Xcode Cloud/signing setup.

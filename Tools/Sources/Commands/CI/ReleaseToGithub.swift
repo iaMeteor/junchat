@@ -3,7 +3,7 @@ import Foundation
 
 struct ReleaseToGitHub: AsyncParsableCommand {
     static let configuration = CommandConfiguration(commandName: "release-to-github",
-                                                    abstract: "Creates a GitHub release and updates JUNCHAT_CHANGES.md with generated release notes.")
+                                                    abstract: "Creates a GitHub draft release and updates JUNCHAT_CHANGES.md with generated release notes.")
 
     enum ReleaseError: LocalizedError {
         case missingGitHubToken
@@ -26,18 +26,18 @@ struct ReleaseToGitHub: AsyncParsableCommand {
         let currentVersion = try CI.readReleaseVersion()
         let repository = try await CI.gitRepository()
         let releaseCommit = try await CI.gitCurrentCommit()
-        logger.info("Creating GitHub release for version \(currentVersion.name)…")
+        logger.info("Creating GitHub draft release for version \(currentVersion.name)…")
 
-        let releaseBody = try await createGitHubRelease(version: currentVersion.name,
-                                                        releaseCommit: releaseCommit,
-                                                        repository: repository)
+        let releaseBody = try await createGitHubDraft(version: currentVersion.name,
+                                                      releaseCommit: releaseCommit,
+                                                      repository: repository)
 
         try updateChangelog(version: currentVersion.name, generatedNotes: releaseBody)
 
         let changesFilePath = URL.projectDirectory.appendingPathComponent("JUNCHAT_CHANGES.md").path
         try await CI.run(.name("git"), ["add", changesFilePath])
 
-        logger.info("Successfully created GitHub release \(currentVersion.name) and updated JUNCHAT_CHANGES.md.")
+        logger.info("Successfully created GitHub draft release \(currentVersion.name) and updated JUNCHAT_CHANGES.md.")
         
         let targetFilePath = "project.yml"
         let xcodeProjPath = "ElementX.xcodeproj"
@@ -56,13 +56,14 @@ struct ReleaseToGitHub: AsyncParsableCommand {
         try await CI.run(.name("git"), ["commit", "-m", "Prepare next release"])
         
         try await CI.gitPush()
+        logger.info("GitHub release \(currentVersion.name) remains a draft pending explicit publication approval.")
     }
 
     // MARK: - Private
 
-    private func createGitHubRelease(version: String,
-                                     releaseCommit: String,
-                                     repository: GitHubRepository) async throws -> String {
+    private func createGitHubDraft(version: String,
+                                   releaseCommit: String,
+                                   repository: GitHubRepository) async throws -> String {
         guard let apiToken = ProcessInfo.processInfo.environment["GITHUB_TOKEN"], !apiToken.isEmpty
         else {
             throw ReleaseError.missingGitHubToken
@@ -74,11 +75,8 @@ struct ReleaseToGitHub: AsyncParsableCommand {
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        let body: [String: Any] = ["tag_name": "release/\(version)",
-                                   "name": version,
-                                   "target_commitish": releaseCommit,
-                                   "generate_release_notes": true]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        request.httpBody = try JSONEncoder().encode(GitHubReleaseRequest(version: version,
+                                                                         targetCommit: releaseCommit))
         
         let (data, response) = try await URLSession.shared.data(for: request)
 
