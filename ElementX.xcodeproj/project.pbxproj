@@ -73,6 +73,7 @@
 		08547E55DD3686A84550996D /* SeparatorMediaEventsTimelineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13F354AD441E2FD83DED89AF /* SeparatorMediaEventsTimelineView.swift */; };
 		086D01E79C8E8D3F004FAF21 /* AudioPlayerProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC9104846487244648D32C6D /* AudioPlayerProtocol.swift */; };
 		08CB4BD12CEEDE6AAE4A18DD /* WindowManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 035177BCD8E8308B098AC3C2 /* WindowManager.swift */; };
+		094A2EFE8E70EC238123AEA4 /* ElementCallWidgetDriverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3AB768DB72513B529D5BBB50 /* ElementCallWidgetDriverTests.swift */; };
 		095C0ACFC234E0550A6404C5 /* AppCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FC803282F9268D49F4ABF14 /* AppCoordinator.swift */; };
 		095D3906CF2F940C2D2D17CC /* RoomFlowCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FCB2126C091EEF2454B4D56 /* RoomFlowCoordinatorTests.swift */; };
 		09693596AA3CA4E598C0D2F1 /* ThreadTimelineScreenCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73FEE625AB52042049DB9268 /* ThreadTimelineScreenCoordinator.swift */; };
@@ -2031,6 +2032,7 @@
 		3A81DA8871C9743AAC0248C1 /* JunchatSupportScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JunchatSupportScreen.swift; sourceTree = "<group>"; };
 		3AAE1C11B9EF94C753448D42 /* JunchatMapProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JunchatMapProviderTests.swift; sourceTree = "<group>"; };
 		3AB34956C87731AB094DB33A /* URLTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = URLTests.swift; sourceTree = "<group>"; };
+		3AB768DB72513B529D5BBB50 /* ElementCallWidgetDriverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ElementCallWidgetDriverTests.swift; sourceTree = "<group>"; };
 		3AD253E7EFF88F308D644272 /* zh-Hans */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "zh-Hans"; path = "zh-Hans.lproj/SAS.strings"; sourceTree = "<group>"; };
 		3B5E97E9615A158C76B2AB77 /* DateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DateTests.swift; sourceTree = "<group>"; };
 		3BAC027034248429A438886B /* AppMediatorMock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppMediatorMock.swift; sourceTree = "<group>"; };
@@ -5162,6 +5164,7 @@
 				DEBB74427E24AF30CDB131B7 /* DeferredFulfillmentTests.swift */,
 				906451FB8CF27C628152BF7A /* EditRoomAddressScreenViewModelTests.swift */,
 				7EA2AFF6EB59FE25234D29F3 /* ElementCallServiceTests.swift */,
+				3AB768DB72513B529D5BBB50 /* ElementCallWidgetDriverTests.swift */,
 				A1087DCC491CD4C027173DDA /* EmojiPickerScreenViewModelTests.swift */,
 				099F2D36C141D845A445B1E6 /* EmojiProviderTests.swift */,
 				F13778488CBCEF6946172C78 /* EventTimelineItemProxyTests.swift */,
@@ -8238,6 +8241,7 @@
 				A583B70939707197B0B21DFC /* DeferredFulfillmentTests.swift in Sources */,
 				EDB6915EC953BB2A44AA608E /* EditRoomAddressScreenViewModelTests.swift in Sources */,
 				D820B3C223E4C2E77BB2A2BF /* ElementCallServiceTests.swift in Sources */,
+				094A2EFE8E70EC238123AEA4 /* ElementCallWidgetDriverTests.swift in Sources */,
 				7AE25D29734267271106D732 /* EmojiPickerScreenViewModelTests.swift in Sources */,
 				25618589E0DE0F1E95FC7B5C /* EmojiProviderTests.swift in Sources */,
 				CD3093D154173894C1DF8C3C /* EventTimelineItemProxyTests.swift in Sources */,

@@ -336,6 +336,8 @@ struct CallScreenJunchatTests {
         try await Task.sleep(for: .milliseconds(50))
 
         #expect(elementCallService.setupCallSessionRoomIDRoomDisplayNameCallsCount == 0)
+        #expect(viewModel.context.viewState.url == nil)
+        #expect(widgetDriver.stopCallsCount == 1)
     }
 
     @Test

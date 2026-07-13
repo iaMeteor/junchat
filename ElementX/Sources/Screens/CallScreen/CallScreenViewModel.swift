@@ -212,6 +212,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         logAudioSessionSnapshot(reason: "before call cleanup")
         timeoutTask = nil
         setupTask = nil
+        widgetDriver.stop()
         stopPictureInPicture()
         callMediaCoordinator.stop()
         elementCallService.tearDownCallSession()
@@ -313,6 +314,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
                                             rageshakeURL: rageshakeURL,
                                             analyticsConfiguration: analyticsConfiguration) {
             case .success(let url):
+                guard !Task.isCancelled, !hasCleanedUpLocalCallState else { return }
                 state.url = url
             case .failure(let error):
                 guard !Task.isCancelled, !hasCleanedUpLocalCallState else { return }

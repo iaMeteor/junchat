@@ -16,6 +16,7 @@ enum ElementCallWidgetDriverError: Error {
     case failedBuildingWidgetDriver
     case failedParsingCallURL
     case driverNotSetup
+    case cancelled
 }
 
 enum ElementCallWidgetDriverAction {
@@ -36,6 +37,8 @@ protocol ElementCallWidgetDriverProtocol {
                voiceOnly: Bool,
                rageshakeURL: String?,
                analyticsConfiguration: ElementCallAnalyticsConfiguration?) async -> Result<URL, ElementCallWidgetDriverError>
+
+    func stop()
     
     /// Passes a message from the Widget to the SDK to handle, returning a Bool that represents whether or not the widget driver is still running.
     @discardableResult

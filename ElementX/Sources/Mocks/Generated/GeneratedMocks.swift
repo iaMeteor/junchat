@@ -5895,7 +5895,9 @@ class ClientProxyMock: ClientProxyProtocol, @unchecked Sendable {
     func setJunchatHideFromContactsDirectory(_ hidden: Bool) async -> Result<Void, ClientProxyError> {
         setJunchatHideFromContactsDirectoryCallsCount += 1
         setJunchatHideFromContactsDirectoryReceivedHidden = hidden
-        setJunchatHideFromContactsDirectoryReceivedInvocations.append(hidden)
+        DispatchQueue.main.async {
+            self.setJunchatHideFromContactsDirectoryReceivedInvocations.append(hidden)
+        }
         if let setJunchatHideFromContactsDirectoryClosure = setJunchatHideFromContactsDirectoryClosure {
             return await setJunchatHideFromContactsDirectoryClosure(hidden)
         } else {
@@ -6027,7 +6029,9 @@ class ClientProxyMock: ClientProxyProtocol, @unchecked Sendable {
     func changePassword(oldPassword: String, newPassword: String, logoutDevices: Bool) async -> Result<Void, ClientProxyError> {
         changePasswordOldPasswordNewPasswordLogoutDevicesCallsCount += 1
         changePasswordOldPasswordNewPasswordLogoutDevicesReceivedArguments = (oldPassword: oldPassword, newPassword: newPassword, logoutDevices: logoutDevices)
-        changePasswordOldPasswordNewPasswordLogoutDevicesReceivedInvocations.append((oldPassword: oldPassword, newPassword: newPassword, logoutDevices: logoutDevices))
+        DispatchQueue.main.async {
+            self.changePasswordOldPasswordNewPasswordLogoutDevicesReceivedInvocations.append((oldPassword: oldPassword, newPassword: newPassword, logoutDevices: logoutDevices))
+        }
         if let changePasswordOldPasswordNewPasswordLogoutDevicesClosure = changePasswordOldPasswordNewPasswordLogoutDevicesClosure {
             return await changePasswordOldPasswordNewPasswordLogoutDevicesClosure(oldPassword, newPassword, logoutDevices)
         } else {
@@ -7179,15 +7183,15 @@ class ElementCallServiceMock: ElementCallServiceProtocol, @unchecked Sendable {
     }
     //MARK: - acceptIncomingCall
 
-    var acceptIncomingCallRoomIDUnderlyingCallsCount = 0
-    var acceptIncomingCallRoomIDCallsCount: Int {
+    var acceptIncomingCallRoomIDIsVoiceCallUnderlyingCallsCount = 0
+    var acceptIncomingCallRoomIDIsVoiceCallCallsCount: Int {
         get {
             if Thread.isMainThread {
-                return acceptIncomingCallRoomIDUnderlyingCallsCount
+                return acceptIncomingCallRoomIDIsVoiceCallUnderlyingCallsCount
             } else {
                 var returnValue: Int? = nil
                 DispatchQueue.main.sync {
-                    returnValue = acceptIncomingCallRoomIDUnderlyingCallsCount
+                    returnValue = acceptIncomingCallRoomIDIsVoiceCallUnderlyingCallsCount
                 }
 
                 return returnValue!
@@ -7195,32 +7199,28 @@ class ElementCallServiceMock: ElementCallServiceProtocol, @unchecked Sendable {
         }
         set {
             if Thread.isMainThread {
-                acceptIncomingCallRoomIDUnderlyingCallsCount = newValue
+                acceptIncomingCallRoomIDIsVoiceCallUnderlyingCallsCount = newValue
             } else {
                 DispatchQueue.main.sync {
-                    acceptIncomingCallRoomIDUnderlyingCallsCount = newValue
+                    acceptIncomingCallRoomIDIsVoiceCallUnderlyingCallsCount = newValue
                 }
             }
         }
     }
-    var acceptIncomingCallRoomIDCalled: Bool {
-        return acceptIncomingCallRoomIDCallsCount > 0
+    var acceptIncomingCallRoomIDIsVoiceCallCalled: Bool {
+        return acceptIncomingCallRoomIDIsVoiceCallCallsCount > 0
     }
-    var acceptIncomingCallRoomIDReceivedRoomID: String?
-    var acceptIncomingCallRoomIDReceivedInvocations: [String] = []
     var acceptIncomingCallRoomIDIsVoiceCallReceivedArguments: (roomID: String, isVoiceCall: Bool)?
     var acceptIncomingCallRoomIDIsVoiceCallReceivedInvocations: [(roomID: String, isVoiceCall: Bool)] = []
-    var acceptIncomingCallRoomIDClosure: ((String, Bool) async -> Void)?
+    var acceptIncomingCallRoomIDIsVoiceCallClosure: ((String, Bool) async -> Void)?
 
     func acceptIncomingCall(roomID: String, isVoiceCall: Bool) async {
-        acceptIncomingCallRoomIDCallsCount += 1
-        acceptIncomingCallRoomIDReceivedRoomID = roomID
+        acceptIncomingCallRoomIDIsVoiceCallCallsCount += 1
         acceptIncomingCallRoomIDIsVoiceCallReceivedArguments = (roomID: roomID, isVoiceCall: isVoiceCall)
         DispatchQueue.main.async {
-            self.acceptIncomingCallRoomIDReceivedInvocations.append(roomID)
             self.acceptIncomingCallRoomIDIsVoiceCallReceivedInvocations.append((roomID: roomID, isVoiceCall: isVoiceCall))
         }
-        await acceptIncomingCallRoomIDClosure?(roomID, isVoiceCall)
+        await acceptIncomingCallRoomIDIsVoiceCallClosure?(roomID, isVoiceCall)
     }
     //MARK: - declineIncomingCall
 
@@ -7426,6 +7426,41 @@ class ElementCallWidgetDriverMock: ElementCallWidgetDriverProtocol, @unchecked S
         } else {
             return startBaseURLClientIDColorSchemeVoiceOnlyRageshakeURLAnalyticsConfigurationReturnValue
         }
+    }
+    //MARK: - stop
+
+    var stopUnderlyingCallsCount = 0
+    var stopCallsCount: Int {
+        get {
+            if Thread.isMainThread {
+                return stopUnderlyingCallsCount
+            } else {
+                var returnValue: Int? = nil
+                DispatchQueue.main.sync {
+                    returnValue = stopUnderlyingCallsCount
+                }
+
+                return returnValue!
+            }
+        }
+        set {
+            if Thread.isMainThread {
+                stopUnderlyingCallsCount = newValue
+            } else {
+                DispatchQueue.main.sync {
+                    stopUnderlyingCallsCount = newValue
+                }
+            }
+        }
+    }
+    var stopCalled: Bool {
+        return stopCallsCount > 0
+    }
+    var stopClosure: (() -> Void)?
+
+    func stop() {
+        stopCallsCount += 1
+        stopClosure?()
     }
     //MARK: - handleMessage
 

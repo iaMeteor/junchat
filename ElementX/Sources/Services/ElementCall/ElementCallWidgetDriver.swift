@@ -108,11 +108,23 @@ struct ElementCallWidgetMessage: Codable {
     }
 }
 
-final class ElementCallWidgetDriver: WidgetCapabilitiesProvider, ElementCallWidgetDriverProtocol {
+final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked Sendable {
+    struct Session {
+        let url: URL
+        let sdkDriver: WidgetDriverAndHandle
+    }
+
+    typealias SessionBuilder = () async -> Result<Session, ElementCallWidgetDriverError>
+
     private let room: RoomProtocol
-    private let deviceID: String
-    
-    private var widgetDriver: WidgetDriverAndHandle?
+    private let capabilitiesProvider: ElementCallWidgetCapabilitiesProvider
+    private let sessionBuilder: SessionBuilder?
+
+    private let lifecycleLock = NSLock()
+    private var sdkDriver: WidgetDriverAndHandle?
+    private var receiveTask: Task<Void, Never>?
+    private var runTask: Task<Void, Never>?
+    private var hasStopped = false
     
     let widgetID = UUID().uuidString
     let messagePublisher = PassthroughSubject<String, Never>()
@@ -122,9 +134,14 @@ final class ElementCallWidgetDriver: WidgetCapabilitiesProvider, ElementCallWidg
         actionsSubject.eraseToAnyPublisher()
     }
     
-    init(room: RoomProtocol, deviceID: String) {
+    init(room: RoomProtocol, deviceID: String, sessionBuilder: SessionBuilder? = nil) {
         self.room = room
-        self.deviceID = deviceID
+        capabilitiesProvider = .init(room: room, deviceID: deviceID)
+        self.sessionBuilder = sessionBuilder
+    }
+
+    deinit {
+        stop()
     }
     
     static func skipLobbyOverride(voiceOnly: Bool, isDirect: Bool) -> Bool? {
@@ -140,11 +157,92 @@ final class ElementCallWidgetDriver: WidgetCapabilitiesProvider, ElementCallWidg
         guard let room = room as? Room else {
             return .failure(.roomInvalid)
         }
-        
+
+        let sessionResult = if let sessionBuilder {
+            await sessionBuilder()
+        } else {
+            await buildSession(room: room,
+                               baseURL: baseURL,
+                               clientID: clientID,
+                               colorScheme: colorScheme,
+                               voiceOnly: voiceOnly,
+                               rageshakeURL: rageshakeURL,
+                               analyticsConfiguration: analyticsConfiguration)
+        }
+
+        guard !Task.isCancelled else {
+            return .failure(.cancelled)
+        }
+
+        switch sessionResult {
+        case .success(let session):
+            return start(session: session, room: room)
+        case .failure(let error):
+            return .failure(error)
+        }
+    }
+
+    func stop() {
+        lifecycleLock.lock()
+        guard !hasStopped else {
+            lifecycleLock.unlock()
+            return
+        }
+
+        hasStopped = true
+        let receiveTask = receiveTask
+        self.receiveTask = nil
+        let runTask = runTask
+        self.runTask = nil
+        sdkDriver = nil
+        lifecycleLock.unlock()
+
+        receiveTask?.cancel()
+        runTask?.cancel()
+    }
+
+    @discardableResult
+    func handleMessage(_ message: String) async -> Result<Bool, ElementCallWidgetDriverError> {
+        lifecycleLock.lock()
+        let sdkDriver = sdkDriver
+        lifecycleLock.unlock()
+
+        guard let sdkDriver else {
+            return .failure(.driverNotSetup)
+        }
+
+        if let widgetMessage = decodeHostHandledMessage(message) {
+            handleMessageIfNeeded(message)
+            if let response = widgetMessage.successResponseJSON() {
+                messagePublisher.send(response)
+                MXLog.debug("Acknowledged host-handled Element Call message: \(CallDiagnostics.jsonSummary(response))")
+            } else {
+                MXLog.error("Failed to build response for host-handled Element Call message")
+            }
+            return .success(true)
+        }
+
+        let result = await sdkDriver.handle.send(msg: message)
+        MXLog.debug("Sent widget message: \(CallDiagnostics.jsonSummary(message)) accepted=\(result)")
+
+        handleMessageIfNeeded(message)
+
+        return .success(result)
+    }
+
+    // MARK: - Private
+
+    private func buildSession(room: Room,
+                              baseURL: URL,
+                              clientID: String,
+                              colorScheme: ColorScheme,
+                              voiceOnly: Bool,
+                              rageshakeURL: String?,
+                              analyticsConfiguration: ElementCallAnalyticsConfiguration?) async -> Result<Session, ElementCallWidgetDriverError> {
         async let useEncryption = (try? room.latestEncryptionState() == .encrypted) ?? false
         async let intent = room.joinCallIntent(voiceOnly: voiceOnly)
         async let isDirect = room.isDirect()
-        
+
         let widgetSettings: WidgetSettings
         do {
             let skipLobby = await Self.skipLobbyOverride(voiceOnly: voiceOnly, isDirect: isDirect)
@@ -185,81 +283,61 @@ final class ElementCallWidgetDriver: WidgetCapabilitiesProvider, ElementCallWidg
         guard let url = URL(string: urlString) else {
             return .failure(.failedParsingCallURL)
         }
-        
-        let widgetDriver: WidgetDriverAndHandle
+
+        let sdkDriver: WidgetDriverAndHandle
         do {
-            widgetDriver = try makeWidgetDriver(settings: widgetSettings)
+            sdkDriver = try makeWidgetDriver(settings: widgetSettings)
         } catch {
             MXLog.error("Failed to build widget driver: \(CallDiagnostics.errorSummary(error))")
             return .failure(.failedBuildingWidgetDriver)
         }
-        
-        self.widgetDriver = widgetDriver
-        
-        Task.detached { [weak self, widgetDriver, messagePublisher] in
+
+        return .success(.init(url: url, sdkDriver: sdkDriver))
+    }
+
+    private func start(session: Session, room: Room) -> Result<URL, ElementCallWidgetDriverError> {
+        lifecycleLock.lock()
+        guard !hasStopped, !Task.isCancelled else {
+            lifecycleLock.unlock()
+            return .failure(.cancelled)
+        }
+
+        let receiveTask = Task.detached { [weak self, sdkDriver = session.sdkDriver, messagePublisher] in
             MXLog.debug("Started message receiving loop")
-            
+
             defer {
                 MXLog.debug("Stopped message receiving loop")
             }
-            
-            while true {
-                guard let receivedMessage = await widgetDriver.handle.recv() else {
+
+            while !Task.isCancelled {
+                guard let receivedMessage = await sdkDriver.handle.recv(), !Task.isCancelled else {
                     return
                 }
-                
+
                 messagePublisher.send(receivedMessage)
                 MXLog.debug("Received widget message: \(CallDiagnostics.jsonSummary(receivedMessage))")
-                
+
                 self?.handleMessageIfNeeded(receivedMessage)
             }
         }
-        
-        Task.detached { [widgetDriver] in
+
+        let runTask = Task.detached { [sdkDriver = session.sdkDriver, capabilitiesProvider] in
             MXLog.debug("Started widget driver")
-            
+
             defer {
                 MXLog.debug("Stopped widget driver")
             }
-            
-            await widgetDriver.driver.run(room: room, capabilitiesProvider: self)
-        }
-        
-        return .success(url)
-    }
-    
-    @discardableResult
-    func handleMessage(_ message: String) async -> Result<Bool, ElementCallWidgetDriverError> {
-        guard let widgetDriver else {
-            return .failure(.driverNotSetup)
+
+            await sdkDriver.driver.run(room: room, capabilitiesProvider: capabilitiesProvider)
         }
 
-        if let widgetMessage = decodeHostHandledMessage(message) {
-            handleMessageIfNeeded(message)
-            if let response = widgetMessage.successResponseJSON() {
-                messagePublisher.send(response)
-                MXLog.debug("Acknowledged host-handled Element Call message: \(CallDiagnostics.jsonSummary(response))")
-            } else {
-                MXLog.error("Failed to build response for host-handled Element Call message")
-            }
-            return .success(true)
-        }
-        
-        let result = await widgetDriver.handle.send(msg: message)
-        MXLog.debug("Sent widget message: \(CallDiagnostics.jsonSummary(message)) accepted=\(result)")
-        
-        handleMessageIfNeeded(message)
-        
-        return .success(result)
+        sdkDriver = session.sdkDriver
+        self.receiveTask = receiveTask
+        self.runTask = runTask
+        lifecycleLock.unlock()
+
+        return .success(session.url)
     }
-    
-    // MARK: - WidgetCapabilitiesProvider
-    
-    func acquireCapabilities(capabilities: WidgetCapabilities) -> WidgetCapabilities {
-        getElementCallRequiredPermissions(ownUserId: room.ownUserId(), ownDeviceId: deviceID)
-    }
-    
-    // MARK: - Private
 
     private func decodeHostHandledMessage(_ message: String) -> ElementCallWidgetMessage? {
         guard let data = message.data(using: .utf8),
@@ -302,5 +380,19 @@ final class ElementCallWidgetDriver: WidgetCapabilitiesProvider, ElementCallWidg
             // Not all actions are supported
             MXLog.verbose("Failed processing widget message: \(CallDiagnostics.errorSummary(error))")
         }
+    }
+}
+
+private final class ElementCallWidgetCapabilitiesProvider: WidgetCapabilitiesProvider, @unchecked Sendable {
+    private let room: RoomProtocol
+    private let deviceID: String
+
+    init(room: RoomProtocol, deviceID: String) {
+        self.room = room
+        self.deviceID = deviceID
+    }
+
+    func acquireCapabilities(capabilities: WidgetCapabilities) -> WidgetCapabilities {
+        getElementCallRequiredPermissions(ownUserId: room.ownUserId(), ownDeviceId: deviceID)
     }
 }
