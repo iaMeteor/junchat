@@ -7,6 +7,18 @@
 
 import Compound
 import SwiftUI
+import UIKit
+
+enum ContactsScreenAccessibility {
+    static let loadErrorAnnouncement = "通讯录加载失败，请稍后重试。"
+
+    static func announceLoadErrorIfNeeded(wasLoadError: Bool,
+                                          hasLoadError: Bool,
+                                          postAnnouncement: (String) -> Void) {
+        guard !wasLoadError, hasLoadError else { return }
+        postAnnouncement(loadErrorAnnouncement)
+    }
+}
 
 struct ContactsScreen: View {
     @Environment(\.scenePhase) private var scenePhase
@@ -31,6 +43,12 @@ struct ContactsScreen: View {
             .onChange(of: scenePhase) { _, newPhase in
                 guard newPhase == .active else { return }
                 context.send(viewAction: .refresh)
+            }
+            .onChange(of: context.viewState.hasLoadError) { wasLoadError, hasLoadError in
+                ContactsScreenAccessibility.announceLoadErrorIfNeeded(wasLoadError: wasLoadError,
+                                                                      hasLoadError: hasLoadError) { announcement in
+                    UIAccessibility.post(notification: .announcement, argument: announcement)
+                }
             }
     }
 
@@ -78,7 +96,7 @@ struct ContactsScreen: View {
 
     private var loadErrorView: some View {
         VStack(spacing: 12) {
-            Text("通讯录加载失败，请稍后重试。")
+            Text(ContactsScreenAccessibility.loadErrorAnnouncement)
                 .font(.compound.bodyMD)
                 .foregroundColor(.compound.textSecondary)
                 .multilineTextAlignment(.center)
@@ -89,8 +107,6 @@ struct ContactsScreen: View {
             .buttonStyle(.compound(.primary, size: .medium))
         }
         .padding(.horizontal, 24)
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.updatesFrequently)
     }
 
     private func avatar(for contact: UserProfileProxy) -> some View {

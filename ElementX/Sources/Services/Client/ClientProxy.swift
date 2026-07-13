@@ -962,7 +962,7 @@ class ClientProxy: ClientProxyProtocol {
         case .success(let contacts):
             return .success(contacts.map(UserProfileProxy.init(junchatContact:)))
         case .failure(let error):
-            return .failure(clientProxyError(for: error))
+            return .failure(Self.clientProxyError(for: error))
         }
     }
     
@@ -971,7 +971,7 @@ class ClientProxy: ClientProxyProtocol {
         case .success(let hidden):
             return .success(hidden)
         case .failure(let error):
-            return .failure(clientProxyError(for: error))
+            return .failure(Self.clientProxyError(for: error))
         }
     }
     
@@ -980,7 +980,7 @@ class ClientProxy: ClientProxyProtocol {
         case .success:
             return .success(())
         case .failure(let error):
-            return .failure(clientProxyError(for: error))
+            return .failure(Self.clientProxyError(for: error))
         }
     }
 
@@ -1101,7 +1101,7 @@ class ClientProxy: ClientProxyProtocol {
         return JunchatPasswordChangeResponse(statusCode: httpResponse.statusCode, uiaSession: uiaSession)
     }
 
-    private func clientProxyError(for error: JunchatContactsServiceError) -> ClientProxyError {
+    static func clientProxyError(for error: JunchatContactsServiceError) -> ClientProxyError {
         switch error {
         case .invalidURL:
             .invalidServerName

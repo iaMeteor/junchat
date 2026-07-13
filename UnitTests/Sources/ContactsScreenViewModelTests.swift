@@ -174,6 +174,27 @@ struct ContactsScreenViewModelTests {
     }
 }
 
+struct ContactsScreenAccessibilityTests {
+    @Test
+    func announcesEachLoadErrorTransitionExactlyOnce() {
+        var announcements = [String]()
+        var previousValue = false
+
+        for currentValue in [false, true, true, false, true] {
+            ContactsScreenAccessibility.announceLoadErrorIfNeeded(wasLoadError: previousValue,
+                                                                  hasLoadError: currentValue) { announcement in
+                announcements.append(announcement)
+            }
+            previousValue = currentValue
+        }
+
+        #expect(announcements == [
+            ContactsScreenAccessibility.loadErrorAnnouncement,
+            ContactsScreenAccessibility.loadErrorAnnouncement
+        ])
+    }
+}
+
 private final class ContactsServiceFake: ContactsServiceProtocol {
     var result: Result<[UserProfileProxy], ContactsServiceError>
     var contactsCallsCount = 0
