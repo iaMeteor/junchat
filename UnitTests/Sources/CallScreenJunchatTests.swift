@@ -297,6 +297,49 @@ struct CallScreenJunchatTests {
 
     @Test
     @MainActor
+    func stoppingDuringWidgetSetupDoesNotCreateAnOngoingCall() async throws {
+        let widgetDriver = ElementCallWidgetDriverMock()
+        widgetDriver.underlyingWidgetID = "widget"
+        widgetDriver.underlyingMessagePublisher = .init()
+        widgetDriver.underlyingActions = Empty().eraseToAnyPublisher()
+        var releaseStart: CheckedContinuation<Result<URL, ElementCallWidgetDriverError>, Never>?
+        widgetDriver.startBaseURLClientIDColorSchemeVoiceOnlyRageshakeURLAnalyticsConfigurationClosure = { _, _, _, _, _, _ in
+            await withCheckedContinuation { releaseStart = $0 }
+        }
+
+        let roomProxy = JoinedRoomProxyMock(.init(id: "room-id", name: "Call Room"))
+        roomProxy.elementCallWidgetDriverDeviceIDReturnValue = widgetDriver
+        let elementCallService = ElementCallServiceMock(.init())
+        let appSettings = AppSettings()
+        let viewModel = CallScreenViewModel(elementCallService: elementCallService,
+                                            configuration: .init(roomProxy: roomProxy,
+                                                                 clientProxy: ClientProxyMock(.init(deviceID: "device-id")),
+                                                                 clientID: "com.heyujk.junchat",
+                                                                 elementCallBaseURL: URL.homeDirectory,
+                                                                 elementCallBaseURLOverride: nil,
+                                                                 voiceOnly: true,
+                                                                 colorScheme: .dark),
+                                            allowPictureInPicture: false,
+                                            appHooks: AppHooks(),
+                                            appSettings: appSettings,
+                                            analyticsService: AnalyticsService(client: AnalyticsClientMock(), appSettings: appSettings),
+                                            callConnectedTonePlayer: { },
+                                            callEndedTonePlayer: { })
+
+        for _ in 0..<20 where releaseStart == nil {
+            await Task.yield()
+        }
+        #expect(releaseStart != nil)
+
+        viewModel.stop()
+        releaseStart?.resume(returning: .success(URL.userDirectory))
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(elementCallService.setupCallSessionRoomIDRoomDisplayNameCallsCount == 0)
+    }
+
+    @Test
+    @MainActor
     func outboundCallStartsRingbackAndStopsWhenRemoteMediaConnects() async throws {
         let widgetActions = PassthroughSubject<ElementCallWidgetDriverAction, Never>()
         let widgetDriver = ElementCallWidgetDriverMock()

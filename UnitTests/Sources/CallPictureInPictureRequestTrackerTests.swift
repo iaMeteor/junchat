@@ -71,7 +71,7 @@ struct CallPictureInPictureRequestTrackerTests {
         #expect(beginCount == 1)
         #expect(!hasCompleted)
 
-        #expect(!tracker.didStart())
+        #expect(tracker.didStart())
 
         let result = await task.value
         expectSuccess(result)
@@ -102,7 +102,7 @@ struct CallPictureInPictureRequestTrackerTests {
 
         #expect(beginCount == 1)
 
-        #expect(!tracker.didStart())
+        #expect(tracker.didStart())
 
         let firstResult = await firstTask.value
         let secondResult = await secondTask.value
@@ -190,7 +190,7 @@ struct CallPictureInPictureRequestTrackerTests {
             beginCount += 1
             return .awaitingDelegate
         }
-        expectUnavailable(blockedResult)
+        expectTransitionInProgress(blockedResult)
         #expect(beginCount == 1)
 
         #expect(tracker.didStart())
@@ -218,7 +218,7 @@ struct CallPictureInPictureRequestTrackerTests {
             beginCount += 1
             return .awaitingDelegate
         }
-        expectUnavailable(blockedResult)
+        expectTransitionInProgress(blockedResult)
         #expect(beginCount == 1)
 
         tracker.didFailToStart()
@@ -305,7 +305,7 @@ struct CallPictureInPictureRequestTrackerTests {
             beginCount += 1
             return .awaitingDelegate
         }
-        expectUnavailable(blockedResult)
+        expectTransitionInProgress(blockedResult)
         #expect(beginCount == 1)
 
         #expect(!tracker.didStart())
@@ -313,7 +313,7 @@ struct CallPictureInPictureRequestTrackerTests {
             beginCount += 1
             return .awaitingDelegate
         }
-        expectUnavailable(staleCallbackBlockedResult)
+        expectTransitionInProgress(staleCallbackBlockedResult)
         #expect(beginCount == 1)
 
         tracker.willStop()
@@ -460,19 +460,19 @@ struct CallPictureInPictureRequestTrackerTests {
         await waitUntil { requestEntered }
 
         #expect(beginCount == 0)
-        #expect(!tracker.didStart())
+        #expect(tracker.didStart())
 
         let result = await task.value
         expectSuccess(result)
     }
 
     @Test
-    func automaticStartTimeoutDoesNotReportALateManualRequest() async throws {
+    func automaticStartTimeoutStillReportsTheActiveTransition() async throws {
         let tracker = CallPictureInPictureRequestTracker(timeout: .milliseconds(10))
         tracker.willStart()
         try await Task.sleep(for: .milliseconds(20))
 
-        #expect(!tracker.didStart())
+        #expect(tracker.didStart())
     }
 
     private func waitUntil(_ condition: () -> Bool) async {
@@ -494,6 +494,14 @@ struct CallPictureInPictureRequestTrackerTests {
                                    sourceLocation: SourceLocation = #_sourceLocation) {
         guard case .failure(.pictureInPictureNotAvailable) = result else {
             Issue.record("Expected picture in picture to be unavailable.", sourceLocation: sourceLocation)
+            return
+        }
+    }
+
+    private func expectTransitionInProgress(_ result: Result<Void, CallScreenError>,
+                                            sourceLocation: SourceLocation = #_sourceLocation) {
+        guard case .failure(.pictureInPictureTransitionInProgress) = result else {
+            Issue.record("Expected a picture in picture transition to be in progress.", sourceLocation: sourceLocation)
             return
         }
     }

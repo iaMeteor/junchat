@@ -77,7 +77,7 @@ struct CallMediaCoordinatorTests {
         coordinator.startLifecycleHandling { event in
             events.append(event)
         } pictureInPictureAttemptHandler: { _ in
-            true
+            .succeeded
         }
 
         notificationCenter.post(name: AVAudioSession.routeChangeNotification, object: nil)
@@ -118,7 +118,7 @@ struct CallMediaCoordinatorTests {
         coordinator.startLifecycleHandling { _ in
         } pictureInPictureAttemptHandler: { attempt in
             attempts.append(attempt)
-            return true
+            return .succeeded
         }
 
         notificationCenter.post(name: UIApplication.willResignActiveNotification, object: nil)
@@ -147,7 +147,7 @@ struct CallMediaCoordinatorTests {
         coordinator.startLifecycleHandling { _ in
         } pictureInPictureAttemptHandler: { attempt in
             attempts.append(attempt)
-            return false
+            return .retry
         }
 
         coordinator.schedulePictureInPictureRecovery(reason: .remoteMediaConnected)
@@ -178,7 +178,7 @@ struct CallMediaCoordinatorTests {
             await withCheckedContinuation { releaseRecovery = $0 }
         } pictureInPictureAttemptHandler: { _ in
             pictureInPictureAttempts += 1
-            return true
+            return .succeeded
         }
 
         notificationCenter.post(name: UIApplication.didBecomeActiveNotification, object: nil)
@@ -188,6 +188,37 @@ struct CallMediaCoordinatorTests {
         await Task.yield()
 
         #expect(pictureInPictureAttempts == 0)
+    }
+
+    @Test
+    func pictureInPictureTransitionWaitsDoNotConsumeRetryAttempts() async {
+        let coordinator = CallMediaCoordinator(voiceOnly: true,
+                                               playConnectedTone: false,
+                                               audioSessionController: .init(audioSession: AudioSessionMock()),
+                                               connectedTonePlayer: { },
+                                               ringbackTonePlayer: TestCallRingbackTonePlayer(),
+                                               setProximityMonitoringEnabled: { _ in },
+                                               allowsPictureInPicture: true,
+                                               applicationStateProvider: { .background },
+                                               pictureInPictureRetryDelay: .milliseconds(1),
+                                               pictureInPictureMaxAttempts: 2,
+                                               pictureInPictureMaxTransitionWaits: 3)
+        var attempts = [CallPictureInPictureRecoveryAttempt]()
+        var results = [CallPictureInPictureAttemptResult.waitingForTransition,
+                       .waitingForTransition,
+                       .retry,
+                       .succeeded]
+        coordinator.startLifecycleHandling { _ in
+        } pictureInPictureAttemptHandler: { attempt in
+            attempts.append(attempt)
+            return results.removeFirst()
+        }
+
+        coordinator.schedulePictureInPictureRecovery(reason: .remoteMediaConnected)
+        try? await Task.sleep(for: .milliseconds(20))
+
+        #expect(results.isEmpty)
+        #expect(attempts.map(\.attempt) == [1, 1, 1, 2])
     }
 
     @Test

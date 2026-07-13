@@ -58,11 +58,11 @@ final class CallPictureInPictureRequestTracker {
                     attempt.waiters[waiterID] = continuation
                     state = .starting(attempt)
                 case .timedOut:
-                    continuation.resume(returning: .failure(.pictureInPictureNotAvailable))
+                    continuation.resume(returning: .failure(.pictureInPictureTransitionInProgress))
                 case .active:
                     continuation.resume(returning: .success(()))
                 case .stopping:
-                    continuation.resume(returning: .failure(.pictureInPictureNotAvailable))
+                    continuation.resume(returning: .failure(.pictureInPictureTransitionInProgress))
                 case .invalidated:
                     continuation.resume(returning: .failure(.pictureInPictureNotAvailable))
                 }
@@ -87,10 +87,10 @@ final class CallPictureInPictureRequestTracker {
         switch state {
         case .starting(let attempt):
             completeAttempt(id: attempt.id, with: .success(()), nextState: .active)
-            return false
-        case .timedOut(let hadPendingRequest):
+            return true
+        case .timedOut:
             state = .active
-            return hadPendingRequest
+            return true
         case .stopping:
             state = .stopping(awaitingStartTerminal: false)
             return false

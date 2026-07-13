@@ -36,8 +36,14 @@ struct CallPictureInPictureRecoveryAttempt: Equatable {
     let attempt: Int
 }
 
+enum CallPictureInPictureAttemptResult: Equatable {
+    case succeeded
+    case retry
+    case waitingForTransition
+}
+
 typealias CallMediaLifecycleEventHandler = @MainActor (CallMediaLifecycleEvent) async -> Void
-typealias CallPictureInPictureAttemptHandler = @MainActor (CallPictureInPictureRecoveryAttempt) async -> Bool
+typealias CallPictureInPictureAttemptHandler = @MainActor (CallPictureInPictureRecoveryAttempt) async -> CallPictureInPictureAttemptResult
 
 enum CallAudioRoutePolicy {
     static func shouldEnableProximityMonitoring(voiceOnly: Bool,
@@ -134,6 +140,7 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
     private let applicationStateProvider: @MainActor () -> UIApplication.State
     private let pictureInPictureRetryDelay: Duration
     private let pictureInPictureMaxAttempts: Int
+    private let pictureInPictureMaxTransitionWaits: Int
 
     private(set) var selectedOutput = CallAudioOutputSelection.nativeEarpiece
     private(set) var currentAudioEnabled = true
@@ -159,7 +166,8 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
          notificationCenter: NotificationCenter = .default,
          applicationStateProvider: @escaping @MainActor () -> UIApplication.State = { UIApplication.shared.applicationState },
          pictureInPictureRetryDelay: Duration = .milliseconds(350),
-         pictureInPictureMaxAttempts: Int = 6) {
+         pictureInPictureMaxAttempts: Int = 6,
+         pictureInPictureMaxTransitionWaits: Int = 30) {
         self.voiceOnly = voiceOnly
         self.playConnectedTone = playConnectedTone
         self.audioSessionController = audioSessionController
@@ -171,6 +179,7 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
         self.applicationStateProvider = applicationStateProvider
         self.pictureInPictureRetryDelay = pictureInPictureRetryDelay
         self.pictureInPictureMaxAttempts = pictureInPictureMaxAttempts
+        self.pictureInPictureMaxTransitionWaits = pictureInPictureMaxTransitionWaits
     }
 
     func startLifecycleHandling(eventHandler: @escaping CallMediaLifecycleEventHandler,
@@ -366,17 +375,28 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
     private func recoverPictureInPicture(reason: CallMediaRecoveryReason, forceFirstAttempt: Bool) async {
         guard let pictureInPictureAttemptHandler else { return }
 
-        for attempt in 1...pictureInPictureMaxAttempts {
+        var attempt = 1
+        var transitionWaits = 0
+        recoveryLoop: while attempt <= pictureInPictureMaxAttempts {
             guard !Task.isCancelled, !hasStopped else { return }
 
             let applicationState = applicationStateProvider()
             guard applicationState != .active || (forceFirstAttempt && attempt == 1) else { return }
 
-            if await pictureInPictureAttemptHandler(.init(reason: reason, attempt: attempt)) {
+            switch await pictureInPictureAttemptHandler(.init(reason: reason, attempt: attempt)) {
+            case .succeeded:
                 return
+            case .retry:
+                attempt += 1
+                transitionWaits = 0
+            case .waitingForTransition:
+                transitionWaits += 1
+                guard transitionWaits <= pictureInPictureMaxTransitionWaits else {
+                    break recoveryLoop
+                }
             }
 
-            guard attempt < pictureInPictureMaxAttempts else { break }
+            guard attempt <= pictureInPictureMaxAttempts else { break }
             try? await Task.sleep(for: pictureInPictureRetryDelay)
         }
 

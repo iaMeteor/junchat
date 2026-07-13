@@ -44,6 +44,7 @@ enum CallScreenViewAction {
 
 enum CallScreenError: Error {
     case pictureInPictureNotAvailable
+    case pictureInPictureTransitionInProgress
 }
 
 /// Identifies each event handler used by the CallScreen webview

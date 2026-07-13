@@ -896,8 +896,7 @@ private struct CallView: UIViewRepresentable {
                 setWebPictureInPictureEnabled(true)
             case .didStart(let isActive, let isSuspended):
                 MXLog.info("[JunchatCallPiP] did start active=\(isActive) suspended=\(isSuspended)")
-                let completedTimedOutRequest = pictureInPictureRequestTracker.didStart()
-                if completedTimedOutRequest, UIApplication.shared.applicationState == .active {
+                if pictureInPictureRequestTracker.didStart() {
                     viewModelContext?.send(viewAction: .pictureInPictureStarted)
                 }
                 validateStartedPictureInPicture()

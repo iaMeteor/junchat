@@ -35,6 +35,9 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
     @CancellableTask
     private var timeoutTask: Task<Void, Never>?
 
+    @CancellableTask
+    private var setupTask: Task<Void, Never>?
+
     private var hasAppliedInitialVoiceOutputDevice = false
     private var hasCleanedUpLocalCallState = false
     private var hasCompletedCall = false
@@ -84,7 +87,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         self.callMediaCoordinator.startLifecycleHandling { [weak self] event in
             await self?.handleCallMediaLifecycleEvent(event)
         } pictureInPictureAttemptHandler: { [weak self] attempt in
-            guard let self else { return false }
+            guard let self else { return .succeeded }
             return await startPictureInPictureForBackgrounding(attempt)
         }
 
@@ -208,6 +211,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
 
         logAudioSessionSnapshot(reason: "before call cleanup")
         timeoutTask = nil
+        setupTask = nil
         stopPictureInPicture()
         callMediaCoordinator.stop()
         elementCallService.tearDownCallSession()
@@ -277,8 +281,8 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
     }
 
     private func setupCall() {
-        Task { [weak self] in
-            guard let self else { return }
+        setupTask = Task { [weak self] in
+            guard let self, !Task.isCancelled else { return }
 
             MXLog.info("[JunchatCall] setupCall start voice=\(configuration.voiceOnly) playConnectedTone=\(configuration.playConnectedTone)")
 
@@ -311,6 +315,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
             case .success(let url):
                 state.url = url
             case .failure(let error):
+                guard !Task.isCancelled, !hasCleanedUpLocalCallState else { return }
                 MXLog.error("Failed starting ElementCall Widget Driver with \(CallDiagnostics.errorSummary(error))")
                 state.bindings.alertInfo = .init(id: UUID(),
                                                  title: L10n.errorUnknown,
@@ -320,6 +325,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
                 return
             }
 
+            guard !Task.isCancelled, !hasCleanedUpLocalCallState else { return }
             callMediaCoordinator.prepareForCall()
 
             await elementCallService.setupCallSession(roomID: configuration.roomProxy.id,
@@ -431,13 +437,13 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
 
         switch await requestPictureInPicture() {
         case .success:
-            actionsSubject.send(.pictureInPictureStarted)
+            break
         case .failure:
             MXLog.warning("[JunchatCall] picture in picture did not start, keeping the call screen visible")
         }
     }
 
-    private func startPictureInPictureForBackgrounding(_ recoveryAttempt: CallPictureInPictureRecoveryAttempt) async -> Bool {
+    private func startPictureInPictureForBackgrounding(_ recoveryAttempt: CallPictureInPictureRecoveryAttempt) async -> CallPictureInPictureAttemptResult {
         let reason = recoveryAttempt.reason.rawValue
         let attempt = recoveryAttempt.attempt
         logAudioSessionSnapshot(reason: "before PiP recovery attempt \(attempt) \(reason)")
@@ -445,18 +451,21 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
               isPictureInPictureAllowed,
               state.bindings.requestPictureInPictureHandler != nil else {
             MXLog.info("[JunchatCall] skip picture in picture recovery reason=\(reason) attempt=\(attempt) hasURL=\(state.url != nil) hasHandler=\(state.bindings.requestPictureInPictureHandler != nil)")
-            return false
+            return .retry
         }
 
         switch await requestPictureInPicture() {
         case .success:
             MXLog.info("[JunchatCall] started picture in picture recovery reason=\(reason) attempt=\(attempt)")
             logAudioSessionSnapshot(reason: "after successful PiP recovery attempt \(attempt) \(reason)")
-            return true
+            return .succeeded
+        case .failure(.pictureInPictureTransitionInProgress):
+            MXLog.info("[JunchatCall] waiting for picture in picture transition reason=\(reason) attempt=\(attempt)")
+            return .waitingForTransition
         case .failure(let error):
             MXLog.warning("[JunchatCall] unable to start picture in picture recovery reason=\(reason) attempt=\(attempt) \(CallDiagnostics.errorSummary(error))")
             logAudioSessionSnapshot(reason: "after failed PiP recovery attempt \(attempt) \(reason)")
-            return false
+            return .retry
         }
     }
 
