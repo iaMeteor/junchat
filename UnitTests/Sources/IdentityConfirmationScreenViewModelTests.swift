@@ -50,6 +50,22 @@ struct IdentityConfirmationScreenViewModelTests {
         #expect(decisionStore.operationOrder == ["persist", "action"])
         withExtendedLifetime(cancellable) { }
     }
+
+    @Test
+    mutating func skipOnlyPersistsAndEmitsOnce() throws {
+        setupViewModel()
+        let decisionStore = try #require(verificationPromptDecisionStore)
+        let viewModel = try #require(viewModel)
+        var emittedActions = [IdentityConfirmationScreenViewModelAction]()
+        let cancellable = viewModel.actionsPublisher.sink { emittedActions.append($0) }
+
+        viewModel.context.send(viewAction: .skip)
+        viewModel.context.send(viewAction: .skip)
+
+        #expect(decisionStore.operationOrder == ["persist"])
+        #expect(emittedActions == [.skip])
+        withExtendedLifetime(cancellable) { }
+    }
     
     // MARK: - Available Actions
     

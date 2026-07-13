@@ -17,6 +17,7 @@ class IdentityConfirmationScreenViewModel: IdentityConfirmationScreenViewModelTy
     private let userIndicatorController: UserIndicatorControllerProtocol
     
     private let actionsSubject: PassthroughSubject<IdentityConfirmationScreenViewModelAction, Never> = .init()
+    private var hasHandledSkip = false
     var actionsPublisher: AnyPublisher<IdentityConfirmationScreenViewModelAction, Never> {
         actionsSubject.eraseToAnyPublisher()
     }
@@ -50,6 +51,8 @@ class IdentityConfirmationScreenViewModel: IdentityConfirmationScreenViewModelTy
         case .recoveryKey:
             actionsSubject.send(.recoveryKey)
         case .skip:
+            guard !hasHandledSkip else { return }
+            hasHandledSkip = true
             verificationPromptDecisionStore.hidePermanently(for: userSession.clientProxy.userID)
             actionsSubject.send(.skip)
         case .reset:

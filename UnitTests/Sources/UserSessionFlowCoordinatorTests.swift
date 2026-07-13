@@ -126,6 +126,8 @@ struct UserSessionFlowCoordinatorTests {
         defer { userDefaults.removePersistentDomain(forName: suiteName) }
         let decisionStore = VerificationPromptDecisionStore(userDefaults: userDefaults)
         let legacyAppSettings = AppSettings()
+        let previousLegacyValue = legacyAppSettings.hasRunIdentityConfirmationOnboarding
+        defer { legacyAppSettings.hasRunIdentityConfirmationOnboarding = previousLegacyValue }
         legacyAppSettings.hasRunIdentityConfirmationOnboarding = true
 
         #expect(makeOnboardingFlowCoordinator(userID: "@alice:example.org",
@@ -164,6 +166,78 @@ struct UserSessionFlowCoordinatorTests {
 
         decisionStore.hidePermanently(for: "@alice:example.org")
         #expect(!coordinator.shouldStart)
+    }
+
+    @Test
+    func verificationDecisionSurvivesUserSessionFlowRecreationAndRemainsAccountScoped() async throws {
+        let (userDefaults, suiteName) = try makeVerificationPromptUserDefaults()
+        defer { userDefaults.removePersistentDomain(forName: suiteName) }
+        let decisionStore = VerificationPromptDecisionStore(userDefaults: userDefaults)
+        let appSettings = AppSettings()
+        let previousAnalyticsConsentState = appSettings.analyticsConsentState
+        let previousNotificationPermissionsValue = appSettings.hasRunNotificationPermissionsOnboarding
+        defer {
+            appSettings.analyticsConsentState = previousAnalyticsConsentState
+            appSettings.hasRunNotificationPermissionsOnboarding = previousNotificationPermissionsValue
+        }
+        appSettings.analyticsConsentState = .optedOut
+        appSettings.hasRunNotificationPermissionsOnboarding = true
+
+        let firstSecurityStateSubject = CurrentValueSubject<SessionSecurityState, Never>(.init(verificationState: .unknown,
+                                                                                               recoveryState: .unknown))
+        let firstRootCoordinator = NavigationRootCoordinator()
+        var firstFlowCoordinator: UserSessionFlowCoordinator? = makeUserSessionFlowCoordinator(userID: "@alice:example.org",
+                                                                                               securityStateSubject: firstSecurityStateSubject,
+                                                                                               appSettings: appSettings,
+                                                                                               decisionStore: decisionStore,
+                                                                                               rootCoordinator: firstRootCoordinator)
+        let firstTabCoordinator = try #require(firstRootCoordinator.rootCoordinator as? NavigationTabCoordinator<UserSessionFlowCoordinator.HomeTab>)
+        let firstPresentation = deferFulfillment(firstTabCoordinator.observe(\.fullScreenCoverCoordinator)) { $0 != nil }
+
+        firstFlowCoordinator?.start()
+        firstSecurityStateSubject.send(.init(verificationState: .unverified, recoveryState: .enabled))
+        try await firstPresentation.fulfill()
+
+        decisionStore.hidePermanently(for: "@alice:example.org")
+        weak var releasedFlowCoordinator = firstFlowCoordinator
+        firstFlowCoordinator?.stop()
+        firstRootCoordinator.setRootCoordinator(SplashScreenCoordinator())
+        firstFlowCoordinator = nil
+        #expect(releasedFlowCoordinator == nil)
+
+        let aliceReloginSecurityStateSubject = CurrentValueSubject<SessionSecurityState, Never>(.init(verificationState: .unknown,
+                                                                                                      recoveryState: .unknown))
+        let aliceReloginRootCoordinator = NavigationRootCoordinator()
+        let aliceReloginDecisionStore = VerificationPromptDecisionStore(userDefaults: userDefaults)
+        let aliceReloginFlowCoordinator = makeUserSessionFlowCoordinator(userID: "@alice:example.org",
+                                                                         securityStateSubject: aliceReloginSecurityStateSubject,
+                                                                         appSettings: appSettings,
+                                                                         decisionStore: aliceReloginDecisionStore,
+                                                                         rootCoordinator: aliceReloginRootCoordinator)
+        let aliceReloginTabCoordinator = try #require(aliceReloginRootCoordinator.rootCoordinator as? NavigationTabCoordinator<UserSessionFlowCoordinator.HomeTab>)
+        let unexpectedAlicePresentation = deferFailure(aliceReloginTabCoordinator.observe(\.fullScreenCoverCoordinator),
+                                                       timeout: .milliseconds(300)) { $0 != nil }
+
+        aliceReloginFlowCoordinator.start()
+        aliceReloginSecurityStateSubject.send(.init(verificationState: .unverified, recoveryState: .enabled))
+        try await unexpectedAlicePresentation.fulfill()
+        #expect(aliceReloginTabCoordinator.fullScreenCoverCoordinator == nil)
+
+        let bobSecurityStateSubject = CurrentValueSubject<SessionSecurityState, Never>(.init(verificationState: .unknown,
+                                                                                             recoveryState: .unknown))
+        let bobRootCoordinator = NavigationRootCoordinator()
+        let bobDecisionStore = VerificationPromptDecisionStore(userDefaults: userDefaults)
+        let bobFlowCoordinator = makeUserSessionFlowCoordinator(userID: "@bob:example.org",
+                                                                securityStateSubject: bobSecurityStateSubject,
+                                                                appSettings: appSettings,
+                                                                decisionStore: bobDecisionStore,
+                                                                rootCoordinator: bobRootCoordinator)
+        let bobTabCoordinator = try #require(bobRootCoordinator.rootCoordinator as? NavigationTabCoordinator<UserSessionFlowCoordinator.HomeTab>)
+        let bobPresentation = deferFulfillment(bobTabCoordinator.observe(\.fullScreenCoverCoordinator)) { $0 != nil }
+
+        bobFlowCoordinator.start()
+        bobSecurityStateSubject.send(.init(verificationState: .unverified, recoveryState: .enabled))
+        try await bobPresentation.fulfill()
     }
 
     @Test
@@ -769,10 +843,11 @@ struct UserSessionFlowCoordinatorTests {
     }
 
     private func makeCommonFlowParameters(userSession: UserSessionProtocol,
-                                          appSettings: AppSettings) -> CommonFlowParameters {
+                                          appSettings: AppSettings,
+                                          elementCallService: ElementCallServiceProtocol = ElementCallServiceMock(.init())) -> CommonFlowParameters {
         CommonFlowParameters(userSession: userSession,
                              bugReportService: BugReportServiceMock(.init()),
-                             elementCallService: ElementCallServiceMock(.init()),
+                             elementCallService: elementCallService,
                              timelineControllerFactory: TimelineControllerFactoryMock(.init()),
                              emojiProvider: EmojiProvider(appSettings: appSettings),
                              linkMetadataProvider: LinkMetadataProvider(),
@@ -783,6 +858,32 @@ struct UserSessionFlowCoordinatorTests {
                              userIndicatorController: UserIndicatorControllerMock(),
                              notificationManager: NotificationManagerMock(),
                              stateMachineFactory: PublishedStateMachineFactory())
+    }
+
+    private func makeUserSessionFlowCoordinator(userID: String,
+                                                securityStateSubject: CurrentValueSubject<SessionSecurityState, Never>,
+                                                appSettings: AppSettings,
+                                                decisionStore: VerificationPromptDecisionStoreProtocol,
+                                                rootCoordinator: NavigationRootCoordinator) -> UserSessionFlowCoordinator {
+        let clientProxy = ClientProxyMock(.init(userID: userID,
+                                                deviceID: "DEVICEID",
+                                                roomSummaryProvider: RoomSummaryProviderMock(.init(state: .loaded(.mockRooms)))))
+        clientProxy.homeserverReachabilityPublisher = homeserverReachabilitySubject.asCurrentValuePublisher()
+        let staticRoomSummaryProvider = RoomSummaryProviderMock()
+        staticRoomSummaryProvider.roomListPublisher = CurrentValueSubject<[RoomSummary], Never>([]).asCurrentValuePublisher()
+        staticRoomSummaryProvider.statePublisher = CurrentValueSubject<RoomSummaryProviderState, Never>(.loaded(totalNumberOfRooms: 0)).asCurrentValuePublisher()
+        clientProxy.staticRoomSummaryProvider = staticRoomSummaryProvider
+
+        let userSession = UserSessionMock(.init(clientProxy: clientProxy))
+        userSession.sessionSecurityStatePublisher = securityStateSubject.asCurrentValuePublisher()
+
+        return UserSessionFlowCoordinator(isNewLogin: false,
+                                          navigationRootCoordinator: rootCoordinator,
+                                          appLockService: AppLockServiceMock(),
+                                          flowParameters: makeCommonFlowParameters(userSession: userSession,
+                                                                                   appSettings: appSettings,
+                                                                                   elementCallService: elementCallService),
+                                          verificationPromptDecisionStore: decisionStore)
     }
 
     private func makeOnboardingFlowCoordinator(userID: String,
