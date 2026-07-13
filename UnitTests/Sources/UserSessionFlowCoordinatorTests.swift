@@ -221,6 +221,33 @@ struct UserSessionFlowCoordinatorTests {
     }
 
     @Test
+    mutating func supersededCallCoordinatorActionsCannotAffectReplacement() async throws {
+        let firstCoordinator = ControllableCallScreenCoordinator()
+        callScreenCoordinatorFactory.override = firstCoordinator
+        userSessionFlowCoordinator.handleAppRoute(.call(roomID: "1", isVoiceCall: true), animated: false)
+        try await waitUntil { tabCoordinator?.overlayCoordinator === firstCoordinator }
+
+        let replacementCoordinator = ControllableCallScreenCoordinator()
+        callScreenCoordinatorFactory.override = replacementCoordinator
+        userSessionFlowCoordinator.handleAppRoute(.call(roomID: "2", isVoiceCall: true), animated: false)
+        try await waitUntil { tabCoordinator?.overlayCoordinator === replacementCoordinator }
+
+        #expect(firstCoordinator.stopCallsCount == 1)
+        #expect(replacementCoordinator.stopCallsCount == 0)
+        #expect(tabCoordinator?.overlayAllowsHitTesting == true)
+
+        firstCoordinator.send(.pictureInPictureStarted)
+        #expect(tabCoordinator?.overlayAllowsHitTesting == true)
+
+        firstCoordinator.send(.pictureInPictureStopped)
+        #expect(tabCoordinator?.overlayAllowsHitTesting == true)
+
+        firstCoordinator.send(.dismiss)
+        #expect(tabCoordinator?.overlayCoordinator === replacementCoordinator)
+        #expect(replacementCoordinator.stopCallsCount == 0)
+    }
+
+    @Test
     mutating func callScreenIsDismissedWhenOnlyOwnCallMembershipRemains() async throws {
         userSessionFlowCoordinator.handleAppRoute(.call(roomID: "1", isVoiceCall: true), animated: false)
         try await Task.sleep(for: .milliseconds(100))
@@ -537,6 +564,8 @@ private final class ControllableCallScreenCoordinator: CallScreenCoordinatorProt
     private let actionsSubject = PassthroughSubject<CallScreenCoordinatorAction, Never>()
     private var pictureInPictureRequestContinuation: CheckedContinuation<Result<Void, CallScreenError>, Never>?
 
+    private(set) var stopCallsCount = 0
+
     var actions: AnyPublisher<CallScreenCoordinatorAction, Never> {
         actionsSubject.eraseToAnyPublisher()
     }
@@ -550,6 +579,10 @@ private final class ControllableCallScreenCoordinator: CallScreenCoordinatorProt
     }
 
     func stopPictureInPicture() { }
+
+    func stop() {
+        stopCallsCount += 1
+    }
 
     func send(_ action: CallScreenCoordinatorAction) {
         actionsSubject.send(action)

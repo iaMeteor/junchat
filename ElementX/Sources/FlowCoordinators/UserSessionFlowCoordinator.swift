@@ -522,6 +522,7 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
     }
 
     private weak var callScreenCoordinator: (any CallScreenCoordinatorProtocol)?
+    private var callScreenCoordinatorCancellable: AnyCancellable?
 
     private var isCallScreenOverlayPresented: Bool {
         guard let callScreenCoordinator else { return false }
@@ -648,9 +649,14 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
                                                                        appHooks: flowParameters.appHooks,
                                                                        analytics: flowParameters.analytics))
 
-        callScreenCoordinator.actions
-            .sink { [weak self] action in
-                guard let self else { return }
+        callScreenCoordinatorCancellable = callScreenCoordinator.actions
+            .sink { [weak self, weak callScreenCoordinator] action in
+                guard let self,
+                      let callScreenCoordinator,
+                      self.callScreenCoordinator === callScreenCoordinator,
+                      navigationTabCoordinator.overlayCoordinator === callScreenCoordinator else {
+                    return
+                }
                 switch action {
                 case .pictureInPictureStarted:
                     MXLog.info("Hiding call for PiP presentation.")
@@ -663,7 +669,6 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
                     navigationTabCoordinator.setOverlayCoordinator(nil)
                 }
             }
-            .store(in: &cancellables)
 
         presentedCallScreenRoomID = configuration.callRoomID
         presentedCallScreenStartedAt = Date()
@@ -767,6 +772,7 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
         presentedCallScreenRoomID = nil
         presentedCallScreenStartedAt = nil
         callScreenHasSeenRemoteParticipant = false
+        callScreenCoordinatorCancellable = nil
         callScreenCoordinator = nil
     }
 
