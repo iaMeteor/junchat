@@ -18,6 +18,8 @@ enum UserSessionFlowCoordinatorAction {
     case forceLogout
 }
 
+typealias CallScreenCoordinatorFactory = @MainActor (CallScreenCoordinatorParameters) -> any CallScreenCoordinatorProtocol
+
 class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
     enum HomeTab: Hashable { case chats, contacts, entertainment, spaces }
 
@@ -25,6 +27,7 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
     private let navigationTabCoordinator: NavigationTabCoordinator<HomeTab>
     private let appLockService: AppLockServiceProtocol
     private let flowParameters: CommonFlowParameters
+    private let callScreenCoordinatorFactory: CallScreenCoordinatorFactory
 
     private var userSession: UserSessionProtocol {
         flowParameters.userSession
@@ -85,10 +88,12 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
     init(isNewLogin: Bool,
          navigationRootCoordinator: NavigationRootCoordinator,
          appLockService: AppLockServiceProtocol,
-         flowParameters: CommonFlowParameters) {
+         flowParameters: CommonFlowParameters,
+         callScreenCoordinatorFactory: @escaping CallScreenCoordinatorFactory = { CallScreenCoordinator(parameters: $0) }) {
         self.navigationRootCoordinator = navigationRootCoordinator
         self.appLockService = appLockService
         self.flowParameters = flowParameters
+        self.callScreenCoordinatorFactory = callScreenCoordinatorFactory
 
         navigationTabCoordinator = NavigationTabCoordinator()
         navigationRootCoordinator.setRootCoordinator(navigationTabCoordinator)
@@ -516,7 +521,12 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
                                                playConnectedTone: playConnectedTone))
     }
 
-    private weak var callScreenCoordinator: CallScreenCoordinator?
+    private weak var callScreenCoordinator: (any CallScreenCoordinatorProtocol)?
+
+    private var isCallScreenOverlayPresented: Bool {
+        guard let callScreenCoordinator else { return false }
+        return navigationTabCoordinator.overlayCoordinator === callScreenCoordinator
+    }
 
     private func updateIncomingCallOverlay(rooms: [RoomSummary], ongoingCallRoomID: String?, pendingIncomingCallRoomID: String?) {
         guard let candidate = globalIncomingCallPresentation.candidate(from: rooms,
@@ -609,7 +619,7 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
         endedCallDismissalWorkItem = nil
 
         if flowParameters.ongoingCallRoomIDPublisher.value == configuration.callRoomID {
-            if navigationTabCoordinator.overlayCoordinator is CallScreenCoordinator {
+            if isCallScreenOverlayPresented {
                 MXLog.info("Returning to existing call.")
                 if presentedCallScreenRoomID != configuration.callRoomID {
                     presentedCallScreenStartedAt = Date()
@@ -625,12 +635,12 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
 
         MXLog.info("[JunchatCall] presenting call overlay voice=\(configuration.voiceOnly) playConnectedTone=\(configuration.playConnectedTone)")
 
-        let callScreenCoordinator = CallScreenCoordinator(parameters: .init(elementCallService: flowParameters.elementCallService,
-                                                                            configuration: configuration,
-                                                                            allowPictureInPicture: true,
-                                                                            appSettings: flowParameters.appSettings,
-                                                                            appHooks: flowParameters.appHooks,
-                                                                            analytics: flowParameters.analytics))
+        let callScreenCoordinator = callScreenCoordinatorFactory(.init(elementCallService: flowParameters.elementCallService,
+                                                                       configuration: configuration,
+                                                                       allowPictureInPicture: true,
+                                                                       appSettings: flowParameters.appSettings,
+                                                                       appHooks: flowParameters.appHooks,
+                                                                       analytics: flowParameters.analytics))
 
         callScreenCoordinator.actions
             .sink { [weak self] action in
@@ -658,7 +668,7 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
         flowParameters.analytics.track(screen: .RoomCall)
     }
 
-    private func hideCallScreenOverlay() {
+    func hideCallScreenOverlay() {
         guard let callScreenCoordinator else {
             MXLog.warning("Picture in picture isn't available, keeping the call screen visible.")
             return
@@ -673,12 +683,12 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
                 MXLog.warning("Picture in picture did not start, keeping the call screen visible.")
                 return
             }
-            navigationTabCoordinator.setOverlayPresentationMode(.minimized)
+            MXLog.info("Picture in picture hide request completed; delegate controls overlay presentation.")
         }
     }
 
     private func dismissCallScreenIfNeeded() {
-        guard navigationTabCoordinator.overlayCoordinator is CallScreenCoordinator else {
+        guard isCallScreenOverlayPresented else {
             clearPresentedCallScreenState()
             return
         }
@@ -690,7 +700,7 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
     private func dismissEndedCallScreenIfNeeded(rooms: [RoomSummary], ongoingCallRoomID: String?) {
         guard let presentedCallScreenRoomID,
               ongoingCallRoomID == presentedCallScreenRoomID,
-              navigationTabCoordinator.overlayCoordinator is CallScreenCoordinator,
+              isCallScreenOverlayPresented,
               let room = rooms.first(where: { $0.id == presentedCallScreenRoomID }) else {
             return
         }
@@ -733,7 +743,7 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
             guard let self,
                   self.presentedCallScreenRoomID == roomID,
                   self.flowParameters.ongoingCallRoomIDPublisher.value == roomID,
-                  self.navigationTabCoordinator.overlayCoordinator is CallScreenCoordinator else {
+                  self.isCallScreenOverlayPresented else {
                 return
             }
 

@@ -20,6 +20,7 @@ struct UserSessionFlowCoordinatorTests {
     private var elementCallService: ElementCallServiceMock!
     private var userIndicatorController: UserIndicatorControllerMock!
     private let stateMachineFactory = PublishedStateMachineFactory()
+    private let callScreenCoordinatorFactory = CallScreenCoordinatorTestFactory()
 
     private let staticRoomListSubject = CurrentValueSubject<[RoomSummary], Never>([])
     private let ongoingCallRoomIDSubject = CurrentValueSubject<String?, Never>(nil)
@@ -85,7 +86,8 @@ struct UserSessionFlowCoordinatorTests {
         userSessionFlowCoordinator = UserSessionFlowCoordinator(isNewLogin: false,
                                                                 navigationRootCoordinator: rootCoordinator,
                                                                 appLockService: AppLockServiceMock(),
-                                                                flowParameters: flowParameters)
+                                                                flowParameters: flowParameters,
+                                                                callScreenCoordinatorFactory: callScreenCoordinatorFactory.make)
 
         userSessionFlowCoordinator.start()
     }
@@ -118,11 +120,11 @@ struct UserSessionFlowCoordinatorTests {
     @Test
     func onboardingRequiresIdentityConfirmationUntilPermanentlyHidden() {
         #expect(makeOnboardingFlowCoordinator(verificationState: .unverified,
-                                             hasHiddenIdentityConfirmation: false).shouldStart)
-        #expect(!makeOnboardingFlowCoordinator(verificationState: .unverified,
-                                              hasHiddenIdentityConfirmation: true).shouldStart)
-        #expect(!makeOnboardingFlowCoordinator(verificationState: .verified,
                                               hasHiddenIdentityConfirmation: false).shouldStart)
+        #expect(!makeOnboardingFlowCoordinator(verificationState: .unverified,
+                                               hasHiddenIdentityConfirmation: true).shouldStart)
+        #expect(!makeOnboardingFlowCoordinator(verificationState: .verified,
+                                               hasHiddenIdentityConfirmation: false).shouldStart)
     }
 
     @Test
@@ -233,6 +235,30 @@ struct UserSessionFlowCoordinatorTests {
 
         #expect(tabCoordinator?.overlayCoordinator is CallScreenCoordinator)
         #expect(!elementCallService.tearDownCallSessionCalled)
+    }
+
+    @Test
+    mutating func lateHideRequestCannotMinimizeAfterPictureInPictureWillStop() async throws {
+        let callScreenCoordinator = ControllableCallScreenCoordinator()
+        callScreenCoordinatorFactory.override = callScreenCoordinator
+        userSessionFlowCoordinator.handleAppRoute(.call(roomID: "1", isVoiceCall: true), animated: false)
+        try await waitUntil { tabCoordinator?.overlayCoordinator === callScreenCoordinator }
+
+        #expect(tabCoordinator?.overlayAllowsHitTesting == true)
+
+        userSessionFlowCoordinator.hideCallScreenOverlay()
+        try await waitUntil { callScreenCoordinator.hasPendingPictureInPictureRequest }
+
+        callScreenCoordinator.send(.pictureInPictureStarted)
+        #expect(tabCoordinator?.overlayAllowsHitTesting == false)
+
+        callScreenCoordinator.send(.pictureInPictureStopped)
+        #expect(tabCoordinator?.overlayAllowsHitTesting == true)
+
+        callScreenCoordinator.completePictureInPictureRequest(with: .success(()))
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(tabCoordinator?.overlayAllowsHitTesting == true)
     }
 
     @Test
@@ -396,6 +422,16 @@ struct UserSessionFlowCoordinatorTests {
         try await deferredChatsState?.fulfill()
     }
 
+    private func waitUntil(_ condition: () -> Bool,
+                           sourceLocation: SourceLocation = #_sourceLocation) async throws {
+        for _ in 0..<100 {
+            guard !condition() else { return }
+            await Task.yield()
+        }
+
+        try #require(condition(), sourceLocation: sourceLocation)
+    }
+
     /// Other services retract indicators, so this filters based on the reachability ID.
     private var retractReachabilityIndicatorCallsCount: Int {
         userIndicatorController
@@ -459,12 +495,50 @@ struct UserSessionFlowCoordinatorTests {
 
         let userSession = UserSessionMock(.init())
         userSession.sessionSecurityStatePublisher = CurrentValueSubject<SessionSecurityState, Never>(.init(verificationState: verificationState,
-                                                                                                            recoveryState: .enabled)).asCurrentValuePublisher()
+                                                                                                           recoveryState: .enabled)).asCurrentValuePublisher()
 
         return OnboardingFlowCoordinator(isNewLogin: false,
                                          appLockService: AppLockServiceMock(),
                                          navigationStackCoordinator: NavigationStackCoordinator(),
                                          flowParameters: makeCommonFlowParameters(userSession: userSession,
                                                                                   appSettings: appSettings))
+    }
+}
+
+@MainActor
+private final class CallScreenCoordinatorTestFactory {
+    var override: (any CallScreenCoordinatorProtocol)?
+
+    func make(parameters: CallScreenCoordinatorParameters) -> any CallScreenCoordinatorProtocol {
+        override ?? CallScreenCoordinator(parameters: parameters)
+    }
+}
+
+@MainActor
+private final class ControllableCallScreenCoordinator: CallScreenCoordinatorProtocol {
+    private let actionsSubject = PassthroughSubject<CallScreenCoordinatorAction, Never>()
+    private var pictureInPictureRequestContinuation: CheckedContinuation<Result<Void, CallScreenError>, Never>?
+
+    var actions: AnyPublisher<CallScreenCoordinatorAction, Never> {
+        actionsSubject.eraseToAnyPublisher()
+    }
+
+    var hasPendingPictureInPictureRequest: Bool {
+        pictureInPictureRequestContinuation != nil
+    }
+
+    func requestPictureInPicture() async -> Result<Void, CallScreenError> {
+        await withCheckedContinuation { pictureInPictureRequestContinuation = $0 }
+    }
+
+    func stopPictureInPicture() { }
+
+    func send(_ action: CallScreenCoordinatorAction) {
+        actionsSubject.send(action)
+    }
+
+    func completePictureInPictureRequest(with result: Result<Void, CallScreenError>) {
+        pictureInPictureRequestContinuation?.resume(returning: result)
+        pictureInPictureRequestContinuation = nil
     }
 }

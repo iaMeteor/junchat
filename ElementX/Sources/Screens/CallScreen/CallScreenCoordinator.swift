@@ -27,7 +27,15 @@ enum CallScreenCoordinatorAction {
     case dismiss
 }
 
-final class CallScreenCoordinator: CoordinatorProtocol {
+@MainActor
+protocol CallScreenCoordinatorProtocol: CoordinatorProtocol {
+    var actions: AnyPublisher<CallScreenCoordinatorAction, Never> { get }
+
+    func requestPictureInPicture() async -> Result<Void, CallScreenError>
+    func stopPictureInPicture()
+}
+
+final class CallScreenCoordinator: CallScreenCoordinatorProtocol {
     private var viewModel: CallScreenViewModelProtocol
     private let actionsSubject: PassthroughSubject<CallScreenCoordinatorAction, Never> = .init()
     
