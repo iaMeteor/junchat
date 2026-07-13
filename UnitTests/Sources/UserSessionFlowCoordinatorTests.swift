@@ -89,6 +89,7 @@ struct UserSessionFlowCoordinatorTests {
                                                                 navigationRootCoordinator: rootCoordinator,
                                                                 appLockService: AppLockServiceMock(),
                                                                 flowParameters: flowParameters,
+                                                                verificationPromptDecisionStore: VerificationPromptDecisionStore(userDefaults: AppSettings.sharedUserDefaults),
                                                                 callScreenCoordinatorFactory: callScreenCoordinatorFactory.make)
 
         userSessionFlowCoordinator.start()
@@ -120,13 +121,49 @@ struct UserSessionFlowCoordinatorTests {
     }
 
     @Test
-    func onboardingRequiresIdentityConfirmationUntilPermanentlyHidden() {
-        #expect(makeOnboardingFlowCoordinator(verificationState: .unverified,
-                                              hasHiddenIdentityConfirmation: false).shouldStart)
-        #expect(!makeOnboardingFlowCoordinator(verificationState: .unverified,
-                                               hasHiddenIdentityConfirmation: true).shouldStart)
-        #expect(!makeOnboardingFlowCoordinator(verificationState: .verified,
-                                               hasHiddenIdentityConfirmation: false).shouldStart)
+    func onboardingRequiresIdentityConfirmationUntilPermanentlyHidden() throws {
+        let (userDefaults, suiteName) = try makeVerificationPromptUserDefaults()
+        defer { userDefaults.removePersistentDomain(forName: suiteName) }
+        let decisionStore = VerificationPromptDecisionStore(userDefaults: userDefaults)
+        let legacyAppSettings = AppSettings()
+        legacyAppSettings.hasRunIdentityConfirmationOnboarding = true
+
+        #expect(makeOnboardingFlowCoordinator(userID: "@alice:example.org",
+                                              verificationState: .unverified,
+                                              appSettings: legacyAppSettings,
+                                              decisionStore: decisionStore).shouldStart)
+
+        decisionStore.hidePermanently(for: "@alice:example.org")
+
+        #expect(!makeOnboardingFlowCoordinator(userID: "@alice:example.org",
+                                               verificationState: .unverified,
+                                               decisionStore: decisionStore).shouldStart)
+        #expect(makeOnboardingFlowCoordinator(userID: "@bob:example.org",
+                                              verificationState: .unverified,
+                                              decisionStore: decisionStore).shouldStart)
+        #expect(!makeOnboardingFlowCoordinator(userID: "@bob:example.org",
+                                               verificationState: .verified,
+                                               decisionStore: decisionStore).shouldStart)
+    }
+
+    @Test
+    func verificationResetShowsPromptUnlessPermanentlyHidden() throws {
+        let (userDefaults, suiteName) = try makeVerificationPromptUserDefaults()
+        defer { userDefaults.removePersistentDomain(forName: suiteName) }
+        let decisionStore = VerificationPromptDecisionStore(userDefaults: userDefaults)
+        let securityStateSubject = CurrentValueSubject<SessionSecurityState, Never>(.init(verificationState: .verified,
+                                                                                          recoveryState: .enabled))
+        let coordinator = makeOnboardingFlowCoordinator(userID: "@alice:example.org",
+                                                        verificationState: .verified,
+                                                        decisionStore: decisionStore,
+                                                        securityStateSubject: securityStateSubject)
+
+        #expect(!coordinator.shouldStart)
+        securityStateSubject.send(.init(verificationState: .unverified, recoveryState: .enabled))
+        #expect(coordinator.shouldStart)
+
+        decisionStore.hidePermanently(for: "@alice:example.org")
+        #expect(!coordinator.shouldStart)
     }
 
     @Test
@@ -748,22 +785,32 @@ struct UserSessionFlowCoordinatorTests {
                              stateMachineFactory: PublishedStateMachineFactory())
     }
 
-    private func makeOnboardingFlowCoordinator(verificationState: SessionVerificationState,
-                                               hasHiddenIdentityConfirmation: Bool) -> OnboardingFlowCoordinator {
-        let appSettings = AppSettings()
+    private func makeOnboardingFlowCoordinator(userID: String,
+                                               verificationState: SessionVerificationState,
+                                               appSettings: AppSettings = AppSettings(),
+                                               decisionStore: VerificationPromptDecisionStoreProtocol,
+                                               securityStateSubject: CurrentValueSubject<SessionSecurityState, Never>? = nil) -> OnboardingFlowCoordinator {
         appSettings.analyticsConsentState = .optedOut
         appSettings.hasRunNotificationPermissionsOnboarding = true
-        appSettings.hasRunIdentityConfirmationOnboarding = hasHiddenIdentityConfirmation
 
-        let userSession = UserSessionMock(.init())
-        userSession.sessionSecurityStatePublisher = CurrentValueSubject<SessionSecurityState, Never>(.init(verificationState: verificationState,
-                                                                                                           recoveryState: .enabled)).asCurrentValuePublisher()
+        let userSession = UserSessionMock(.init(clientProxy: ClientProxyMock(.init(userID: userID))))
+        let resolvedSecurityStateSubject = securityStateSubject ?? .init(.init(verificationState: verificationState,
+                                                                               recoveryState: .enabled))
+        userSession.sessionSecurityStatePublisher = resolvedSecurityStateSubject.asCurrentValuePublisher()
 
         return OnboardingFlowCoordinator(isNewLogin: false,
                                          appLockService: AppLockServiceMock(),
                                          navigationStackCoordinator: NavigationStackCoordinator(),
                                          flowParameters: makeCommonFlowParameters(userSession: userSession,
-                                                                                  appSettings: appSettings))
+                                                                                  appSettings: appSettings),
+                                         verificationPromptDecisionStore: decisionStore)
+    }
+
+    private func makeVerificationPromptUserDefaults() throws -> (UserDefaults, String) {
+        let suiteName = "io.element.elementx.onboarding-verification-tests.\(UUID().uuidString)"
+        let userDefaults = try #require(UserDefaults(suiteName: suiteName))
+        userDefaults.removePersistentDomain(forName: suiteName)
+        return (userDefaults, suiteName)
     }
 }
 

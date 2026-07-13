@@ -631,7 +631,8 @@ class MockScreen: Identifiable {
                                                                                                   analytics: ServiceLocator.shared.analytics,
                                                                                                   userIndicatorController: UserIndicatorControllerMock(),
                                                                                                   notificationManager: NotificationManagerMock(),
-                                                                                                  stateMachineFactory: StateMachineFactory()))
+                                                                                                  stateMachineFactory: StateMachineFactory()),
+                                                             verificationPromptDecisionStore: VerificationPromptDecisionStore(userDefaults: AppSettings.sharedUserDefaults))
 
             flowCoordinator.start()
             

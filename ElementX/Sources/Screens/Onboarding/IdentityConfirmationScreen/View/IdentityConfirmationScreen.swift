@@ -131,6 +131,7 @@ struct IdentityConfirmationScreen_Previews: PreviewProvider, TestablePreview {
         
         return IdentityConfirmationScreenViewModel(userSession: userSession,
                                                    appSettings: ServiceLocator.shared.settings,
+                                                   verificationPromptDecisionStore: VerificationPromptDecisionStore(userDefaults: AppSettings.sharedUserDefaults),
                                                    userIndicatorController: ServiceLocator.shared.userIndicatorController)
     }
 }

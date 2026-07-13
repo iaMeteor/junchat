@@ -12,13 +12,14 @@ import SwiftUI
 struct IdentityConfirmationScreenCoordinatorParameters {
     let userSession: UserSessionProtocol
     let appSettings: AppSettings
+    let verificationPromptDecisionStore: VerificationPromptDecisionStoreProtocol
     let userIndicatorController: UserIndicatorControllerProtocol
 }
 
 enum IdentityConfirmationScreenCoordinatorAction {
     case otherDevice
     case recoveryKey
-    /// Only possible in debug builds.
+    /// Permanently hides this onboarding prompt for the local account.
     case skip
     case reset
     case logoutConfirmed
@@ -40,6 +41,7 @@ final class IdentityConfirmationScreenCoordinator: CoordinatorProtocol {
         
         viewModel = IdentityConfirmationScreenViewModel(userSession: parameters.userSession,
                                                         appSettings: parameters.appSettings,
+                                                        verificationPromptDecisionStore: parameters.verificationPromptDecisionStore,
                                                         userIndicatorController: parameters.userIndicatorController)
     }
     

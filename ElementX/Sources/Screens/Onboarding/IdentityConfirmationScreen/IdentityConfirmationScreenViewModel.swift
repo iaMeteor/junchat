@@ -13,6 +13,7 @@ typealias IdentityConfirmationScreenViewModelType = StateStoreViewModelV2<Identi
 
 class IdentityConfirmationScreenViewModel: IdentityConfirmationScreenViewModelType, IdentityConfirmationScreenViewModelProtocol {
     private let userSession: UserSessionProtocol
+    private let verificationPromptDecisionStore: VerificationPromptDecisionStoreProtocol
     private let userIndicatorController: UserIndicatorControllerProtocol
     
     private let actionsSubject: PassthroughSubject<IdentityConfirmationScreenViewModelAction, Never> = .init()
@@ -20,8 +21,12 @@ class IdentityConfirmationScreenViewModel: IdentityConfirmationScreenViewModelTy
         actionsSubject.eraseToAnyPublisher()
     }
     
-    init(userSession: UserSessionProtocol, appSettings: AppSettings, userIndicatorController: UserIndicatorControllerProtocol) {
+    init(userSession: UserSessionProtocol,
+         appSettings: AppSettings,
+         verificationPromptDecisionStore: VerificationPromptDecisionStoreProtocol,
+         userIndicatorController: UserIndicatorControllerProtocol) {
         self.userSession = userSession
+        self.verificationPromptDecisionStore = verificationPromptDecisionStore
         self.userIndicatorController = userIndicatorController
         
         super.init(initialViewState: IdentityConfirmationScreenViewState(learnMoreURL: appSettings.deviceVerificationURL))
@@ -45,6 +50,7 @@ class IdentityConfirmationScreenViewModel: IdentityConfirmationScreenViewModelTy
         case .recoveryKey:
             actionsSubject.send(.recoveryKey)
         case .skip:
+            verificationPromptDecisionStore.hidePermanently(for: userSession.clientProxy.userID)
             actionsSubject.send(.skip)
         case .reset:
             actionsSubject.send(.reset)

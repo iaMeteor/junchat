@@ -301,9 +301,9 @@ final class AppSettings {
         store.removePersistentDomain(forName: suiteName)
     }
 
-    static func resetSessionSpecificSettings() {
+    static func resetSessionSpecificSettings(userDefaults: UserDefaults = store) {
         MXLog.warning("Resetting the user session specific AppSettings.")
-        store.removeObject(forKey: UserDefaultsKeys.hasRunIdentityConfirmationOnboarding.rawValue)
+        userDefaults.removeObject(forKey: UserDefaultsKeys.hasRunIdentityConfirmationOnboarding.rawValue)
     }
 
     static func configureWithSuiteName(_ name: String) {
@@ -608,6 +608,8 @@ final class AppSettings {
     @UserPreference(key: UserDefaultsKeys.hasRunNotificationPermissionsOnboarding, defaultValue: false, storageType: .userDefaults(store))
     var hasRunNotificationPermissionsOnboarding
 
+    /// Legacy completion marker retained for migrations and downgrade compatibility.
+    /// Permanent prompt decisions are stored per account by `VerificationPromptDecisionStore`.
     @UserPreference(key: UserDefaultsKeys.hasRunIdentityConfirmationOnboarding, defaultValue: false, storageType: .userDefaults(store))
     var hasRunIdentityConfirmationOnboarding
 

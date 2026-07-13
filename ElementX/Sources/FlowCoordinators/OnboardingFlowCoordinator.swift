@@ -21,6 +21,7 @@ class OnboardingFlowCoordinator: FlowCoordinatorProtocol {
     private let appLockService: AppLockServiceProtocol
     private let analyticsService: AnalyticsService
     private let appSettings: AppSettings
+    private let verificationPromptDecisionStore: VerificationPromptDecisionStoreProtocol
     private let notificationManager: NotificationManagerProtocol
     private let userIndicatorController: UserIndicatorControllerProtocol
     private let windowManager: WindowManagerProtocol
@@ -61,12 +62,14 @@ class OnboardingFlowCoordinator: FlowCoordinatorProtocol {
     init(isNewLogin: Bool,
          appLockService: AppLockServiceProtocol,
          navigationStackCoordinator: NavigationStackCoordinator,
-         flowParameters: CommonFlowParameters) {
+         flowParameters: CommonFlowParameters,
+         verificationPromptDecisionStore: VerificationPromptDecisionStoreProtocol) {
         self.isNewLogin = isNewLogin
         userSession = flowParameters.userSession
         self.appLockService = appLockService
         analyticsService = flowParameters.analytics
         appSettings = flowParameters.appSettings
+        self.verificationPromptDecisionStore = verificationPromptDecisionStore
         notificationManager = flowParameters.notificationManager
         userIndicatorController = flowParameters.userIndicatorController
         windowManager = flowParameters.windowManager
@@ -128,7 +131,8 @@ class OnboardingFlowCoordinator: FlowCoordinatorProtocol {
             return false
         }
         
-        return !appSettings.hasRunIdentityConfirmationOnboarding && userSession.sessionSecurityStatePublisher.value.verificationState == .unverified
+        return !verificationPromptDecisionStore.isPermanentlyHidden(for: userSession.clientProxy.userID) &&
+            userSession.sessionSecurityStatePublisher.value.verificationState == .unverified
     }
     
     private var requiresAppLockSetup: Bool {
@@ -251,6 +255,7 @@ class OnboardingFlowCoordinator: FlowCoordinatorProtocol {
     private func presentIdentityConfirmationScreen() {
         let parameters = IdentityConfirmationScreenCoordinatorParameters(userSession: userSession,
                                                                          appSettings: appSettings,
+                                                                         verificationPromptDecisionStore: verificationPromptDecisionStore,
                                                                          userIndicatorController: userIndicatorController)
         
         let coordinator = IdentityConfirmationScreenCoordinator(parameters: parameters)

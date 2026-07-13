@@ -94,6 +94,7 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
          navigationRootCoordinator: NavigationRootCoordinator,
          appLockService: AppLockServiceProtocol,
          flowParameters: CommonFlowParameters,
+         verificationPromptDecisionStore: VerificationPromptDecisionStoreProtocol,
          callScreenCoordinatorFactory: @escaping CallScreenCoordinatorFactory = { CallScreenCoordinator(parameters: $0) }) {
         self.navigationRootCoordinator = navigationRootCoordinator
         self.appLockService = appLockService
@@ -131,7 +132,8 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
         onboardingFlowCoordinator = OnboardingFlowCoordinator(isNewLogin: isNewLogin,
                                                               appLockService: appLockService,
                                                               navigationStackCoordinator: onboardingStackCoordinator,
-                                                              flowParameters: flowParameters)
+                                                              flowParameters: flowParameters,
+                                                              verificationPromptDecisionStore: verificationPromptDecisionStore)
 
         var initialTabs: [NavigationTabCoordinator<HomeTab>.Tab] = [
             .init(coordinator: chatsSplitCoordinator, details: chatsTabDetails),

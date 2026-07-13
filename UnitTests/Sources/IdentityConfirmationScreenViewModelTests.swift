@@ -12,6 +12,7 @@ import Testing
 @MainActor
 struct IdentityConfirmationScreenViewModelTests {
     var securityStateSubject: CurrentValueSubject<SessionSecurityState, Never>!
+    private var verificationPromptDecisionStore: VerificationPromptDecisionStoreFake!
     
     var viewModel: IdentityConfirmationScreenViewModel!
     var context: IdentityConfirmationScreenViewModel.Context {
@@ -31,6 +32,23 @@ struct IdentityConfirmationScreenViewModelTests {
         let deferred = deferFulfillment(viewModel.actionsPublisher) { $0 == .logoutConfirmed }
         alertInfo.primaryButton.action?()
         try await deferred.fulfill()
+    }
+
+    @Test
+    mutating func skipPersistsDecisionBeforeEmittingAction() throws {
+        setupViewModel()
+        let decisionStore = try #require(verificationPromptDecisionStore)
+        let viewModel = try #require(viewModel)
+        let cancellable = viewModel.actionsPublisher.sink { action in
+            guard action == .skip else { return }
+            decisionStore.recordSkipAction()
+        }
+
+        viewModel.context.send(viewAction: .skip)
+
+        #expect(decisionStore.hiddenUserIDs == ["@alice:example.org"])
+        #expect(decisionStore.operationOrder == ["persist", "action"])
+        withExtendedLifetime(cancellable) { }
     }
     
     // MARK: - Available Actions
@@ -102,14 +120,34 @@ struct IdentityConfirmationScreenViewModelTests {
     mutating func setupViewModel(hasDevicesToVerifyAgainst: Bool = true) {
         let initialState = SessionSecurityState(verificationState: .unverified, recoveryState: .unknown)
         securityStateSubject = CurrentValueSubject<SessionSecurityState, Never>(initialState)
+        verificationPromptDecisionStore = VerificationPromptDecisionStoreFake()
         
-        let clientProxy = ClientProxyMock(.init())
+        let clientProxy = ClientProxyMock(.init(userID: "@alice:example.org"))
         clientProxy.hasDevicesToVerifyAgainstReturnValue = .success(hasDevicesToVerifyAgainst)
         let userSession = UserSessionMock(.init(clientProxy: clientProxy))
         userSession.sessionSecurityStatePublisher = securityStateSubject.asCurrentValuePublisher()
         
         viewModel = IdentityConfirmationScreenViewModel(userSession: userSession,
                                                         appSettings: AppSettings(),
+                                                        verificationPromptDecisionStore: verificationPromptDecisionStore,
                                                         userIndicatorController: UserIndicatorControllerMock())
+    }
+}
+
+private final class VerificationPromptDecisionStoreFake: VerificationPromptDecisionStoreProtocol {
+    private(set) var hiddenUserIDs = Set<String>()
+    private(set) var operationOrder = [String]()
+
+    func isPermanentlyHidden(for userID: String) -> Bool {
+        hiddenUserIDs.contains(userID)
+    }
+
+    func hidePermanently(for userID: String) {
+        hiddenUserIDs.insert(userID)
+        operationOrder.append("persist")
+    }
+
+    func recordSkipAction() {
+        operationOrder.append("action")
     }
 }

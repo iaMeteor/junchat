@@ -821,7 +821,8 @@ class AppCoordinator: AppCoordinatorProtocol, AuthenticationFlowCoordinatorDeleg
         let userSessionFlowCoordinator = UserSessionFlowCoordinator(isNewLogin: isNewLogin,
                                                                     navigationRootCoordinator: navigationRootCoordinator,
                                                                     appLockService: appLockFlowCoordinator.appLockService,
-                                                                    flowParameters: flowParameters)
+                                                                    flowParameters: flowParameters,
+                                                                    verificationPromptDecisionStore: VerificationPromptDecisionStore(userDefaults: AppSettings.sharedUserDefaults))
         
         userSessionFlowCoordinator.actionsPublisher
             .sink { [weak self] action in
