@@ -71,7 +71,7 @@ struct CallPictureInPictureRequestTrackerTests {
         #expect(beginCount == 1)
         #expect(!hasCompleted)
 
-        #expect(tracker.didStart())
+        #expect(tracker.didStart() == .started)
 
         let result = await task.value
         expectSuccess(result)
@@ -102,7 +102,7 @@ struct CallPictureInPictureRequestTrackerTests {
 
         #expect(beginCount == 1)
 
-        #expect(tracker.didStart())
+        #expect(tracker.didStart() == .started)
 
         let firstResult = await firstTask.value
         let secondResult = await secondTask.value
@@ -202,7 +202,7 @@ struct CallPictureInPictureRequestTrackerTests {
         expectTransitionInProgress(blockedResult)
         #expect(beginCount == 1)
 
-        #expect(tracker.didStart())
+        #expect(tracker.didStart() == .started)
 
         let activeResult = await tracker.request {
             beginCount += 1
@@ -295,7 +295,7 @@ struct CallPictureInPictureRequestTrackerTests {
     }
 
     @Test
-    func stopBlocksAReplacementUntilDidStop() async {
+    func earlyStopRetriesAfterDidStartWithoutPublishingVisibleTransitions() async {
         let tracker = CallPictureInPictureRequestTracker(timeout: .seconds(1))
         var beginCount = 0
         let firstTask = Task { @MainActor in
@@ -317,7 +317,7 @@ struct CallPictureInPictureRequestTrackerTests {
         expectTransitionInProgress(blockedResult)
         #expect(beginCount == 1)
 
-        #expect(!tracker.didStart())
+        #expect(tracker.didStart() == .stopRequested)
         let staleCallbackBlockedResult = await tracker.request {
             beginCount += 1
             return .awaitingDelegate
@@ -325,7 +325,7 @@ struct CallPictureInPictureRequestTrackerTests {
         expectTransitionInProgress(staleCallbackBlockedResult)
         #expect(beginCount == 1)
 
-        tracker.willStop()
+        #expect(!tracker.willStop())
         tracker.didStop()
         let secondTask = Task { @MainActor in
             await tracker.request {
@@ -339,6 +339,19 @@ struct CallPictureInPictureRequestTrackerTests {
         let secondResult = await secondTask.value
         expectSuccess(secondResult)
         #expect(beginCount == 2)
+    }
+
+    @Test
+    func activeStopPublishesOnlyOneVisibleStopTransition() {
+        let tracker = CallPictureInPictureRequestTracker(timeout: .seconds(1))
+        tracker.willStart()
+        #expect(tracker.didStart() == .started)
+
+        tracker.stopRequested()
+
+        #expect(tracker.didStart() == .ignored)
+        #expect(tracker.willStop())
+        #expect(!tracker.willStop())
     }
 
     @Test
@@ -469,7 +482,7 @@ struct CallPictureInPictureRequestTrackerTests {
         await waitUntil { requestEntered }
 
         #expect(beginCount == 0)
-        #expect(tracker.didStart())
+        #expect(tracker.didStart() == .started)
 
         let result = await task.value
         expectSuccess(result)
@@ -481,7 +494,7 @@ struct CallPictureInPictureRequestTrackerTests {
         tracker.willStart()
         try await Task.sleep(for: .milliseconds(20))
 
-        #expect(tracker.didStart())
+        #expect(tracker.didStart() == .started)
     }
 
     private func waitUntil(_ condition: () -> Bool) async {

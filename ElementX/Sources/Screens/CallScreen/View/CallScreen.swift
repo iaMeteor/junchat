@@ -915,10 +915,19 @@ private struct CallView: UIViewRepresentable {
                 setWebPictureInPictureEnabled(true)
             case .didStart(let isActive, let isSuspended):
                 MXLog.info("[JunchatCallPiP] did start active=\(isActive) suspended=\(isSuspended)")
-                if pictureInPictureRequestTracker.didStart() {
+                switch pictureInPictureRequestTracker.didStart() {
+                case .started:
                     viewModelContext?.send(viewAction: .pictureInPictureStarted)
+                    validateStartedPictureInPicture()
+                case .stopRequested:
+                    MXLog.info("[JunchatCallPiP] fulfilling stop requested before activation")
+                    pictureInPictureValidationTask?.cancel()
+                    pictureInPictureValidationTask = nil
+                    restoreWebViewAfterPictureInPicture()
+                    pictureInPictureController?.stopPictureInPicture()
+                case .ignored:
+                    break
                 }
-                validateStartedPictureInPicture()
             case .failedToStart(let errorDescription):
                 MXLog.warning("[JunchatCallPiP] failed to start error=\(errorDescription)")
                 pictureInPictureValidationTask?.cancel()
@@ -929,8 +938,9 @@ private struct CallView: UIViewRepresentable {
                 MXLog.info("[JunchatCallPiP] will stop active=\(isActive) suspended=\(isSuspended)")
                 pictureInPictureValidationTask?.cancel()
                 pictureInPictureValidationTask = nil
-                pictureInPictureRequestTracker.willStop()
-                viewModelContext?.send(viewAction: .pictureInPictureWillStop)
+                if pictureInPictureRequestTracker.willStop() {
+                    viewModelContext?.send(viewAction: .pictureInPictureWillStop)
+                }
             case .didStop:
                 MXLog.info("[JunchatCallPiP] did stop")
                 pictureInPictureValidationTask?.cancel()

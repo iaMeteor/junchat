@@ -15,6 +15,12 @@ final class CallPictureInPictureRequestTracker {
         case unavailable
     }
 
+    enum DidStartResult: Equatable {
+        case started
+        case stopRequested
+        case ignored
+    }
+
     typealias RequestResult = Result<Void, CallScreenError>
 
     private struct Attempt {
@@ -29,7 +35,7 @@ final class CallPictureInPictureRequestTracker {
         case starting(Attempt)
         case timedOut(hadPendingRequest: Bool)
         case active
-        case stopping(awaitingStartTerminal: Bool)
+        case stopping(awaitingStartTerminal: Bool, shouldPublishStop: Bool)
         case invalidated
     }
 
@@ -84,19 +90,19 @@ final class CallPictureInPictureRequestTracker {
     }
 
     @discardableResult
-    func didStart() -> Bool {
+    func didStart() -> DidStartResult {
         switch state {
         case .starting(let attempt):
             completeAttempt(id: attempt.id, with: .success(()), nextState: .active)
-            return true
+            return .started
         case .timedOut:
             state = .active
-            return true
-        case .stopping:
-            state = .stopping(awaitingStartTerminal: false)
-            return false
+            return .started
+        case .stopping(let awaitingStartTerminal, let shouldPublishStop):
+            state = .stopping(awaitingStartTerminal: false, shouldPublishStop: shouldPublishStop)
+            return awaitingStartTerminal ? .stopRequested : .ignored
         case .idle, .active, .invalidated:
-            return false
+            return .ignored
         }
     }
 
@@ -108,7 +114,7 @@ final class CallPictureInPictureRequestTracker {
                             nextState: .idle)
         case .timedOut:
             state = .idle
-        case .stopping(let awaitingStartTerminal):
+        case .stopping(let awaitingStartTerminal, _):
             if awaitingStartTerminal {
                 state = .idle
             }
@@ -120,29 +126,38 @@ final class CallPictureInPictureRequestTracker {
     func stopRequested() {
         switch state {
         case .starting(let attempt):
-            let nextState: State = attempt.beginTask == nil ? .stopping(awaitingStartTerminal: true) : .idle
+            let nextState: State = attempt.beginTask == nil ? .stopping(awaitingStartTerminal: true, shouldPublishStop: false) : .idle
             completeAttempt(id: attempt.id,
                             with: .failure(.pictureInPictureNotAvailable),
                             nextState: nextState)
         case .active:
-            state = .stopping(awaitingStartTerminal: false)
+            state = .stopping(awaitingStartTerminal: false, shouldPublishStop: true)
         case .timedOut:
-            state = .stopping(awaitingStartTerminal: true)
+            state = .stopping(awaitingStartTerminal: true, shouldPublishStop: false)
         case .idle, .stopping, .invalidated:
             break
         }
     }
 
-    func willStop() {
+    @discardableResult
+    func willStop() -> Bool {
         switch state {
         case .starting(let attempt):
             completeAttempt(id: attempt.id,
                             with: .failure(.pictureInPictureNotAvailable),
-                            nextState: .stopping(awaitingStartTerminal: false))
-        case .idle, .timedOut, .active, .stopping:
-            state = .stopping(awaitingStartTerminal: false)
+                            nextState: .stopping(awaitingStartTerminal: false, shouldPublishStop: false))
+            return false
+        case .active:
+            state = .stopping(awaitingStartTerminal: false, shouldPublishStop: false)
+            return true
+        case .stopping(_, let shouldPublishStop):
+            state = .stopping(awaitingStartTerminal: false, shouldPublishStop: false)
+            return shouldPublishStop
+        case .idle, .timedOut:
+            state = .stopping(awaitingStartTerminal: false, shouldPublishStop: false)
+            return false
         case .invalidated:
-            break
+            return false
         }
     }
 
