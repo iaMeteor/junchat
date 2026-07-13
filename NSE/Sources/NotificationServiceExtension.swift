@@ -10,30 +10,70 @@ import Combine
 import MatrixRustSDK
 import UserNotifications
 
-final class NotificationContentCompletion {
+final class NotificationContentCompletion: @unchecked Sendable {
     private let lock = NSLock()
-    private let bestAttemptContent: UNNotificationContent
-    private let contentHandler: (UNNotificationContent) -> Void
-    private var hasCompleted = false
+    private var bestAttemptContent: UNNotificationContent?
+    private var contentHandler: ((UNNotificationContent) -> Void)?
+    private var completionHook: (() -> Void)?
 
     init(bestAttemptContent: UNNotificationContent,
-         contentHandler: @escaping (UNNotificationContent) -> Void) {
+         contentHandler: @escaping (UNNotificationContent) -> Void,
+         completionHook: (() -> Void)? = nil) {
         self.bestAttemptContent = bestAttemptContent
         self.contentHandler = contentHandler
+        self.completionHook = completionHook
     }
 
     func complete(with content: UNNotificationContent? = nil) {
         lock.lock()
-        guard !hasCompleted else {
+        guard let contentHandler,
+              let content = content ?? bestAttemptContent else {
             lock.unlock()
             return
         }
 
-        hasCompleted = true
-        let content = content ?? bestAttemptContent
+        let completionHook = completionHook
+        bestAttemptContent = nil
+        self.contentHandler = nil
+        self.completionHook = nil
         lock.unlock()
 
+        completionHook?()
         contentHandler(content)
+    }
+}
+
+final class NotificationContentCompletionRegistry: @unchecked Sendable {
+    private let lock = NSLock()
+    private var completions = [UUID: NotificationContentCompletion]()
+
+    var inFlightCount: Int {
+        lock.withLock { completions.count }
+    }
+
+    @discardableResult
+    func register(bestAttemptContent: UNNotificationContent,
+                  contentHandler: @escaping (UNNotificationContent) -> Void) -> NotificationContentCompletion {
+        let identifier = UUID()
+        let completion = NotificationContentCompletion(bestAttemptContent: bestAttemptContent,
+                                                       contentHandler: contentHandler) { [weak self] in
+            self?.remove(identifier)
+        }
+        lock.withLock {
+            completions[identifier] = completion
+        }
+        return completion
+    }
+
+    func completeAll() {
+        let snapshot = lock.withLock { Array(completions.values) }
+        snapshot.forEach { $0.complete() }
+    }
+
+    private func remove(_ identifier: UUID) {
+        lock.withLock {
+            completions[identifier] = nil
+        }
     }
 }
 
@@ -63,12 +103,11 @@ class NotificationServiceExtension: UNNotificationServiceExtension {
     
     private static var hasHandledFirstNotificationSinceBoot = false
     private static let firstNotificationThreshold: TimeInterval = 15 * 60
+    private static let notificationContentCompletions = NotificationContentCompletionRegistry()
     
     private let settings: CommonSettingsProtocol = AppSettings()
     private let appHooks: AppHooks
     
-    private var notificationHandler: NotificationHandler?
-    private var notificationContentCompletion: NotificationContentCompletion?
     private let keychainController = KeychainController(service: .sessions,
                                                         accessGroup: InfoPlistReader.main.keychainAccessGroupIdentifier)
     
@@ -103,9 +142,11 @@ class NotificationServiceExtension: UNNotificationServiceExtension {
     
     override func didReceive(_ request: UNNotificationRequest, withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void) {
         let mutableContent = request.content.normalizedMutableContentForBadgeDelivery()
-        let bestAttemptContent = mutableContent ?? request.content.badgeReplacementContentForDelivery
-        let completion = NotificationContentCompletion(bestAttemptContent: bestAttemptContent, contentHandler: contentHandler)
-        notificationContentCompletion = completion
+        let normalizedContent = mutableContent ?? request.content.badgeReplacementContentForDelivery
+        let bestAttemptContent = normalizedContent.copy() as? UNNotificationContent
+            ?? request.content.badgeReplacementContentForDelivery
+        let completion = Self.notificationContentCompletions.register(bestAttemptContent: bestAttemptContent,
+                                                                      contentHandler: contentHandler)
 
         guard let mutableContent else {
             completion.complete()
@@ -179,7 +220,9 @@ class NotificationServiceExtension: UNNotificationServiceExtension {
         
         ExtensionLogger.logMemory(with: tag)
         
-        MXLog.info("\(tag) Received payload: \(request.content.userInfo)")
+        let hasBadgeContract = request.content.userInfo[NotificationConstants.UserInfoKey.badgeContract] as? String
+            == NotificationConstants.BadgeContract.identifier
+        MXLog.info("\(tag) Received notification metadata for event \(eventID) in room \(roomID), badge contract: \(hasBadgeContract)")
         
         do {
             let userSession = try await NSEUserSession(credentials: credentials,
@@ -188,16 +231,16 @@ class NotificationServiceExtension: UNNotificationServiceExtension {
                                                        appHooks: appHooks,
                                                        appSettings: settings)
             
-            notificationHandler = NotificationHandler(userSession: userSession,
-                                                      settings: settings,
-                                                      contentHandler: completion.complete(with:),
-                                                      notificationContent: notificationContent,
-                                                      tag: tag)
+            let notificationHandler = NotificationHandler(userSession: userSession,
+                                                          settings: settings,
+                                                          contentHandler: completion.complete(with:),
+                                                          notificationContent: notificationContent,
+                                                          tag: tag)
             
             ExtensionLogger.logMemory(with: tag)
             MXLog.info("\(tag) Configured user session")
             
-            await notificationHandler?.processEvent(eventID, roomID: roomID)
+            await notificationHandler.processEvent(eventID, roomID: roomID)
         } catch {
             MXLog.error("Failed creating user session with error: \(error)")
             completion.complete()
@@ -205,8 +248,7 @@ class NotificationServiceExtension: UNNotificationServiceExtension {
     }
     
     override func serviceExtensionTimeWillExpire() {
-        notificationHandler?.handleTimeExpiration()
-        notificationContentCompletion?.complete()
+        Self.notificationContentCompletions.completeAll()
     }
     
     // MARK: - Boot handling

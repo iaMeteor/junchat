@@ -4,6 +4,7 @@
 
 import CryptoKit
 @testable import ElementX
+import Dispatch
 import Foundation
 import Testing
 import UserNotifications
@@ -89,6 +90,19 @@ struct NotificationBadgePolicyTests {
         let content = makeContent(unreadCount: 4)
         
         #expect(content.badgeForDelivery == 4)
+    }
+
+    @Test
+    func booleanLegacyUnreadCountIsRejected() {
+        let content = makeContent(unreadCount: true)
+
+        #expect(content.badgeForDelivery == nil)
+    }
+
+    @Test
+    func negativeAndFractionalLegacyUnreadCountsAreRejected() {
+        #expect(makeContent(unreadCount: -1).badgeForDelivery == nil)
+        #expect(makeContent(unreadCount: NSNumber(value: 1.5)).badgeForDelivery == nil)
     }
     
     @Test
@@ -207,6 +221,113 @@ struct NotificationBadgePolicyTests {
     }
 
     @Test
+    func notificationContentCompletionIsOneShotUnderConcurrency() throws {
+        let content = try #require(makeContent(contract: expectedBadgeContract, total: 3)
+            .normalizedMutableContentForBadgeDelivery())
+        let recorder = LockedBadgeRecorder()
+        let completion = NotificationContentCompletion(bestAttemptContent: content) { content in
+            recorder.append(content.badge)
+        }
+
+        DispatchQueue.concurrentPerform(iterations: 64) { _ in
+            completion.complete()
+        }
+
+        #expect(recorder.badges == [3])
+    }
+
+    @Test
+    func registryTimeoutCompletesEveryInFlightRequest() throws {
+        let firstContent = try #require(makeContent(contract: expectedBadgeContract, total: 4)
+            .normalizedMutableContentForBadgeDelivery())
+        let secondContent = try #require(makeContent(contract: expectedBadgeContract, total: 5)
+            .normalizedMutableContentForBadgeDelivery())
+        let recorder = LockedBadgeRecorder()
+        let registry = NotificationContentCompletionRegistry()
+
+        registry.register(bestAttemptContent: firstContent) { content in
+            recorder.append(content.badge)
+        }
+        registry.register(bestAttemptContent: secondContent) { content in
+            recorder.append(content.badge)
+        }
+
+        registry.completeAll()
+
+        #expect(recorder.badges.count == 2)
+        #expect(Set(recorder.badges) == Set([4, 5]))
+        #expect(registry.inFlightCount == 0)
+    }
+
+    @Test
+    func registryRemovesCompletedRequests() throws {
+        let content = try #require(makeContent(contract: expectedBadgeContract, total: 6)
+            .normalizedMutableContentForBadgeDelivery())
+        let registry = NotificationContentCompletionRegistry()
+        let completion = registry.register(bestAttemptContent: content) { _ in }
+
+        #expect(registry.inFlightCount == 1)
+
+        completion.complete()
+
+        #expect(registry.inFlightCount == 0)
+        registry.completeAll()
+    }
+
+    @Test
+    func completionReleasesDeliveryStateAfterInvocation() throws {
+        weak var weakContent: UNNotificationContent?
+        weak var weakCallbackToken: ReferenceToken?
+        weak var weakCompletionToken: ReferenceToken?
+        let completion: NotificationContentCompletion
+
+        do {
+            let content = try #require(makeContent(contract: expectedBadgeContract, total: 7)
+                .normalizedMutableContentForBadgeDelivery())
+            let callbackToken = ReferenceToken()
+            let completionToken = ReferenceToken()
+            weakContent = content
+            weakCallbackToken = callbackToken
+            weakCompletionToken = completionToken
+            completion = NotificationContentCompletion(bestAttemptContent: content,
+                                                        contentHandler: { [callbackToken] _ in
+                                                            _ = callbackToken
+                                                        },
+                                                        completionHook: { [completionToken] in
+                                                            _ = completionToken
+                                                        })
+        }
+
+        #expect(weakContent != nil)
+        #expect(weakCallbackToken != nil)
+        #expect(weakCompletionToken != nil)
+
+        completion.complete()
+
+        #expect(weakContent == nil)
+        #expect(weakCallbackToken == nil)
+        #expect(weakCompletionToken == nil)
+    }
+
+    @Test
+    func registryTimeoutUsesImmutableBestAttemptSnapshot() throws {
+        let processingContent = try #require(makeContent(contract: expectedBadgeContract, total: 8)
+            .normalizedMutableContentForBadgeDelivery())
+        let bestAttemptContent = try #require(processingContent.copy() as? UNNotificationContent)
+        let recorder = LockedBadgeRecorder()
+        let registry = NotificationContentCompletionRegistry()
+        registry.register(bestAttemptContent: bestAttemptContent) { content in
+            recorder.append(content.badge)
+        }
+
+        processingContent.badge = 99
+        processingContent.userInfo["badge_total"] = 99
+        registry.completeAll()
+
+        #expect(recorder.badges == [8])
+    }
+
+    @Test
     func replacementContentCopiesOnlyValidContractMetadata() {
         let content = makeContent(userInfo: ["badge_contract": expectedBadgeContract,
                                              "badge_total": 5,
@@ -258,3 +379,20 @@ struct NotificationBadgePolicyTests {
 }
 
 private final class NotificationBadgePolicyFixtureToken { }
+
+private final class LockedBadgeRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedBadges = [Int]()
+
+    var badges: [Int] {
+        lock.withLock { storedBadges }
+    }
+
+    func append(_ badge: NSNumber?) {
+        lock.withLock {
+            storedBadges.append(badge?.intValue ?? -1)
+        }
+    }
+}
+
+private final class ReferenceToken { }

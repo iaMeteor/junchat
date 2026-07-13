@@ -32,7 +32,7 @@ extension UNNotificationContent {
     }
     
     var unreadCount: Int? {
-        userInfo[NotificationConstants.UserInfoKey.unreadCount] as? Int
+        Self.validBadgeNumber(userInfo[NotificationConstants.UserInfoKey.unreadCount])?.intValue
     }
     
     var badgeForDelivery: NSNumber? {
