@@ -120,6 +120,15 @@ struct CallPictureInPictureRequestTrackerTests {
     }
 
     @Test
+    func notReadyBeginPreservesTheRecoveryAttempt() async {
+        let tracker = CallPictureInPictureRequestTracker(timeout: .seconds(1))
+
+        let result = await tracker.request { .notReady }
+
+        expectNotReady(result)
+    }
+
+    @Test
     func failedStartReleasesEveryWaiter() async {
         let tracker = CallPictureInPictureRequestTracker(timeout: .seconds(1))
         var beginCount = 0
@@ -245,7 +254,7 @@ struct CallPictureInPictureRequestTrackerTests {
             try? await Task.sleep(for: .milliseconds(50))
             return .awaitingDelegate
         }
-        expectUnavailable(timedOutResult)
+        expectNotReady(timedOutResult)
 
         let nextResult = await tracker.request {
             beginCount += 1
@@ -494,6 +503,14 @@ struct CallPictureInPictureRequestTrackerTests {
                                    sourceLocation: SourceLocation = #_sourceLocation) {
         guard case .failure(.pictureInPictureNotAvailable) = result else {
             Issue.record("Expected picture in picture to be unavailable.", sourceLocation: sourceLocation)
+            return
+        }
+    }
+
+    private func expectNotReady(_ result: Result<Void, CallScreenError>,
+                                sourceLocation: SourceLocation = #_sourceLocation) {
+        guard case .failure(.pictureInPictureNotReady) = result else {
+            Issue.record("Expected picture in picture to be waiting for readiness.", sourceLocation: sourceLocation)
             return
         }
     }

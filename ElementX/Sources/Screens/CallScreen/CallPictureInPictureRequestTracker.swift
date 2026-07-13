@@ -11,6 +11,7 @@ import Foundation
 final class CallPictureInPictureRequestTracker {
     enum BeginResult {
         case awaitingDelegate
+        case notReady
         case unavailable
     }
 
@@ -215,6 +216,10 @@ final class CallPictureInPictureRequestTracker {
         case .awaitingDelegate:
             attempt.beginTask = nil
             state = .starting(attempt)
+        case .notReady:
+            completeAttempt(id: attemptID,
+                            with: .failure(.pictureInPictureNotReady),
+                            nextState: .idle)
         case .unavailable:
             completeAttempt(id: attemptID,
                             with: .failure(.pictureInPictureNotAvailable),
@@ -237,7 +242,7 @@ final class CallPictureInPictureRequestTracker {
 
         if attempt.beginTask != nil {
             completeAttempt(id: id,
-                            with: .failure(.pictureInPictureNotAvailable),
+                            with: .failure(.pictureInPictureNotReady),
                             nextState: .idle)
             return
         }

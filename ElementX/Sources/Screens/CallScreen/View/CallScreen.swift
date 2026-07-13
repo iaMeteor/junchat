@@ -95,6 +95,7 @@ private struct CallView: UIViewRepresentable {
 
         private var webView: WKWebView!
         private var pictureInPictureController: AVPictureInPictureController?
+        private var pictureInPicturePossibleObservation: NSKeyValueObservation?
         private let pictureInPictureViewController: AVPictureInPictureVideoCallViewController
         private let pictureInPictureRequestTracker = CallPictureInPictureRequestTracker()
         private let pictureInPictureDelegateEventProcessor = CallPictureInPictureDelegateEventProcessor<PictureInPictureDelegateEvent>()
@@ -109,6 +110,7 @@ private struct CallView: UIViewRepresentable {
         private var url: URL!
 
         // The embedded Element Call bootstrap is kept as one auditable JavaScript template.
+        // swiftformat:disable indent
         // swiftlint:disable:next function_body_length
         fileprivate static func junchatLiveKitBootstrapScript(language: String = Bundle.junchatElementCallLanguage,
                                                               liveKitJWTURL: URL = JunchatServerEnvironment.current.liveKitJWTURL) -> String {
@@ -591,6 +593,8 @@ private struct CallView: UIViewRepresentable {
         """
         }
 
+        // swiftformat:enable indent
+
         init(viewModelContext: CallScreenViewModel.Context) {
             self.viewModelContext = viewModelContext
             certificateValidator = viewModelContext.viewState.certificateValidator
@@ -657,16 +661,22 @@ private struct CallView: UIViewRepresentable {
 
             webViewWrapper.addMatchedSubview(webView)
 
-	            if AVPictureInPictureController.isPictureInPictureSupported() {
-	                MXLog.info("[JunchatCallPiP] PiP supported, creating controller")
-		                let pictureInPictureController = AVPictureInPictureController(contentSource: .init(activeVideoCallSourceView: webViewWrapper,
-		                                                                                                   contentViewController: pictureInPictureViewController))
-		                pictureInPictureController.canStartPictureInPictureAutomaticallyFromInline = true
-		                pictureInPictureController.delegate = self
-		                self.pictureInPictureController = pictureInPictureController
-	            } else {
-	                MXLog.warning("[JunchatCallPiP] PiP is not supported on this device")
-	            }
+            if AVPictureInPictureController.isPictureInPictureSupported() {
+                MXLog.info("[JunchatCallPiP] PiP supported, creating controller")
+                let pictureInPictureController = AVPictureInPictureController(contentSource: .init(activeVideoCallSourceView: webViewWrapper,
+                                                                                                   contentViewController: pictureInPictureViewController))
+                pictureInPictureController.canStartPictureInPictureAutomaticallyFromInline = true
+                pictureInPictureController.delegate = self
+                pictureInPicturePossibleObservation = pictureInPictureController.observe(\.isPictureInPicturePossible, options: [.new]) { [weak self] _, _ in
+                    Task { @MainActor [weak self] in
+                        guard let self, !isInvalidated else { return }
+                        self.viewModelContext?.send(viewAction: .pictureInPictureReadinessChanged)
+                    }
+                }
+                self.pictureInPictureController = pictureInPictureController
+            } else {
+                MXLog.warning("[JunchatCallPiP] PiP is not supported on this device")
+            }
         }
 
         deinit {
@@ -679,6 +689,8 @@ private struct CallView: UIViewRepresentable {
         func invalidate() {
             guard !isInvalidated else { return }
             isInvalidated = true
+            pictureInPicturePossibleObservation?.invalidate()
+            pictureInPicturePossibleObservation = nil
             pictureInPictureController?.delegate = nil
             pictureInPictureDelegateEventProcessor.invalidate()
             pictureInPictureRequestTracker.invalidate()
@@ -812,6 +824,7 @@ private struct CallView: UIViewRepresentable {
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             MXLog.info("[JunchatCallWebView] didFinish \(CallDiagnostics.urlSummary(webView.url))")
             viewModelContext?.send(viewAction: .urlChanged(webView.url))
+            viewModelContext?.send(viewAction: .pictureInPictureReadinessChanged)
         }
 
         // MARK: - Picture in Picture
@@ -828,16 +841,21 @@ private struct CallView: UIViewRepresentable {
 
                 MXLog.info("[JunchatCallPiP] request begin \(pictureInPictureStateDescription())")
                 guard !pictureInPictureController.isPictureInPictureActive else {
-                    return .unavailable
+                    return .awaitingDelegate
                 }
-                guard pictureInPictureController.isPictureInPicturePossible,
-                      case .success(true) = await webViewCanEnterPictureInPicture(),
-                      !Task.isCancelled else {
-                    MXLog.warning("[JunchatCallPiP] request rejected")
+                guard pictureInPictureController.isPictureInPicturePossible else {
+                    MXLog.info("[JunchatCallPiP] waiting for controller readiness")
+                    return .notReady
+                }
+                guard case .success(true) = await webViewCanEnterPictureInPicture() else {
+                    MXLog.info("[JunchatCallPiP] waiting for web readiness")
+                    return .notReady
+                }
+                guard !Task.isCancelled else {
                     return .unavailable
                 }
                 guard !pictureInPictureController.isPictureInPictureActive else {
-                    return .unavailable
+                    return .awaitingDelegate
                 }
 
                 pictureInPictureController.startPictureInPicture()
@@ -960,13 +978,13 @@ private struct CallView: UIViewRepresentable {
             do {
                 guard let canEnterPictureInPicture = try await evaluateJavaScript("controls.canEnterPip()") as? Bool else {
                     MXLog.error("canEnterPip returned an unexpected value, skipping picture in picture.")
-                    return .failure(.pictureInPictureNotAvailable)
+                    return .failure(.pictureInPictureNotReady)
                 }
                 MXLog.info("canEnterPip returned \(canEnterPictureInPicture)")
                 return .success(canEnterPictureInPicture)
             } catch {
                 MXLog.error("Error checking canEnterPip: \(CallDiagnostics.errorSummary(error))")
-                return .failure(.pictureInPictureNotAvailable)
+                return .failure(.pictureInPictureNotReady)
             }
         }
     }

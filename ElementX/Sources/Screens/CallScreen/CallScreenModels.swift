@@ -45,6 +45,7 @@ enum CallScreenViewAction {
 
 enum CallScreenError: Error {
     case pictureInPictureNotAvailable
+    case pictureInPictureNotReady
     case pictureInPictureTransitionInProgress
 }
 

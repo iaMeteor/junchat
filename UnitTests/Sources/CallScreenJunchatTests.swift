@@ -616,6 +616,66 @@ struct CallScreenJunchatTests {
 
     @Test
     @MainActor
+    func transientPictureInPictureReadinessDoesNotConsumeTheAttemptBudget() async throws {
+        let widgetDriver = ElementCallWidgetDriverMock()
+        widgetDriver.underlyingWidgetID = "widget"
+        widgetDriver.underlyingMessagePublisher = .init()
+        widgetDriver.underlyingActions = Empty().eraseToAnyPublisher()
+        widgetDriver.startBaseURLClientIDColorSchemeVoiceOnlyRageshakeURLAnalyticsConfigurationReturnValue = .success(.userDirectory)
+
+        let roomProxy = JoinedRoomProxyMock(.init(id: "room-id", name: "Call Room"))
+        roomProxy.elementCallWidgetDriverDeviceIDReturnValue = widgetDriver
+        let appSettings = AppSettings()
+        let callMediaCoordinator = CallMediaCoordinator(voiceOnly: true,
+                                                        playConnectedTone: false,
+                                                        audioSessionController: .init(audioSession: AudioSessionMock()),
+                                                        connectedTonePlayer: { },
+                                                        ringbackTonePlayer: CallRingbackTonePlayerMock(),
+                                                        setProximityMonitoringEnabled: { _ in },
+                                                        allowsPictureInPicture: true,
+                                                        applicationStateProvider: { .background },
+                                                        pictureInPictureRetryDelay: .milliseconds(1),
+                                                        pictureInPictureMaxAttempts: 1,
+                                                        pictureInPictureMaxReadinessWaits: 2)
+        let viewModel = CallScreenViewModel(elementCallService: ElementCallServiceMock(.init()),
+                                            configuration: .init(roomProxy: roomProxy,
+                                                                 clientProxy: ClientProxyMock(.init(deviceID: "device-id")),
+                                                                 clientID: "com.heyujk.junchat",
+                                                                 elementCallBaseURL: .homeDirectory,
+                                                                 elementCallBaseURLOverride: nil,
+                                                                 voiceOnly: true,
+                                                                 colorScheme: .dark),
+                                            allowPictureInPicture: true,
+                                            appHooks: AppHooks(),
+                                            appSettings: appSettings,
+                                            analyticsService: AnalyticsService(client: AnalyticsClientMock(), appSettings: appSettings),
+                                            callConnectedTonePlayer: { },
+                                            callEndedTonePlayer: { },
+                                            callMediaCoordinator: callMediaCoordinator)
+        await waitUntil { viewModel.context.viewState.url != nil }
+
+        var isReady = false
+        var requests = 0
+        viewModel.context.requestPictureInPictureHandler = {
+            requests += 1
+            return isReady ? .success(()) : .failure(.pictureInPictureNotReady)
+        }
+
+        callMediaCoordinator.schedulePictureInPictureRecovery(reason: .remoteMediaConnected)
+        await waitUntil { requests == 2 }
+        try await Task.sleep(for: .milliseconds(20))
+        #expect(requests == 2)
+
+        isReady = true
+        viewModel.process(viewAction: .pictureInPictureReadinessChanged)
+        await waitUntil { requests == 3 }
+
+        #expect(requests == 3)
+        viewModel.stop()
+    }
+
+    @Test
+    @MainActor
     func failedBackNavigationPictureInPictureKeepsCallVisible() async throws {
         let widgetDriver = ElementCallWidgetDriverMock()
         widgetDriver.underlyingWidgetID = "widget"

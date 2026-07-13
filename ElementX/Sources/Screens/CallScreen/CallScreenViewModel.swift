@@ -470,6 +470,9 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         case .failure(.pictureInPictureTransitionInProgress):
             MXLog.info("[JunchatCall] waiting for picture in picture transition reason=\(reason) attempt=\(attempt)")
             return .waitingForTransition
+        case .failure(.pictureInPictureNotReady):
+            MXLog.info("[JunchatCall] waiting for picture in picture readiness reason=\(reason) attempt=\(attempt)")
+            return .waitingForReadiness
         case .failure(let error):
             MXLog.warning("[JunchatCall] unable to start picture in picture recovery reason=\(reason) attempt=\(attempt) \(CallDiagnostics.errorSummary(error))")
             logAudioSessionSnapshot(reason: "after failed PiP recovery attempt \(attempt) \(reason)")
