@@ -46,6 +46,7 @@ final class NotificationContentCompletion: @unchecked Sendable {
 final class NotificationContentCompletionRegistry: @unchecked Sendable {
     private let lock = NSLock()
     private var completions = [UUID: NotificationContentCompletion]()
+    private var hasExpired = false
 
     var inFlightCount: Int {
         lock.withLock { completions.count }
@@ -59,14 +60,27 @@ final class NotificationContentCompletionRegistry: @unchecked Sendable {
                                                        contentHandler: contentHandler) { [weak self] in
             self?.remove(identifier)
         }
-        lock.withLock {
+        let shouldComplete = lock.withLock {
+            guard !hasExpired else {
+                return true
+            }
+
             completions[identifier] = completion
+            return false
+        }
+        if shouldComplete {
+            completion.complete()
         }
         return completion
     }
 
     func completeAll() {
-        let snapshot = lock.withLock { Array(completions.values) }
+        let snapshot = lock.withLock {
+            hasExpired = true
+            let snapshot = Array(completions.values)
+            completions.removeAll()
+            return snapshot
+        }
         snapshot.forEach { $0.complete() }
     }
 
@@ -74,6 +88,43 @@ final class NotificationContentCompletionRegistry: @unchecked Sendable {
         lock.withLock {
             completions[identifier] = nil
         }
+    }
+}
+
+enum NSERequestPolicy {
+    enum Action: Equatable {
+        case deliverOfflineNotification
+        case deliverOfflineReplacement
+        case missingRoomID
+        case missingEventID
+        case missingClientID
+        case process(roomID: String, eventID: String, clientID: String)
+    }
+
+    static func action(isTargetConfigured: Bool,
+                       hasHandledFirstNotificationSinceBoot: Bool,
+                       content: UNNotificationContent) -> Action {
+        guard isTargetConfigured else {
+            return hasHandledFirstNotificationSinceBoot ? .deliverOfflineReplacement : .deliverOfflineNotification
+        }
+
+        guard let roomID = content.roomID else {
+            return .missingRoomID
+        }
+
+        guard let eventID = content.eventID else {
+            return .missingEventID
+        }
+
+        guard let clientID = content.pusherNotificationClientIdentifier else {
+            return .missingClientID
+        }
+
+        return .process(roomID: roomID, eventID: eventID, clientID: clientID)
+    }
+
+    static func offlineCompletionContent(for content: UNNotificationContent) -> UNMutableNotificationContent {
+        content.badgeReplacementContentForDelivery
     }
 }
 
@@ -159,51 +210,56 @@ class NotificationServiceExtension: UNNotificationServiceExtension {
     private func handle(_ request: UNNotificationRequest,
                         notificationContent: UNMutableNotificationContent,
                         completion: NotificationContentCompletion) async {
-        guard let roomID = request.content.roomID else {
+        let roomID: String
+        let eventID: String
+        let clientID: String
+        let action = NSERequestPolicy.action(isTargetConfigured: Self.targetConfiguration != nil,
+                                             hasHandledFirstNotificationSinceBoot: Self.hasHandledFirstNotificationSinceBoot,
+                                             content: request.content)
+
+        switch action {
+        case .deliverOfflineNotification:
+            // MXLog isn't configured:
+            // swiftlint:disable:next print_deprecation
+            print("Device is locked after reboot.")
+            Self.hasHandledFirstNotificationSinceBoot = true
+            let offlineCompletionContent = NSERequestPolicy.offlineCompletionContent(for: request.content)
+            deliverReceivedWhileOfflineNotification(for: request)
+            return completion.complete(with: offlineCompletionContent)
+        case .deliverOfflineReplacement:
+            // MXLog isn't configured:
+            // swiftlint:disable:next print_deprecation
+            print("Device is locked after reboot.")
+            let offlineCompletionContent = NSERequestPolicy.offlineCompletionContent(for: request.content)
+            return completion.complete(with: offlineCompletionContent)
+        case .missingRoomID:
             // Don't log until the app hooks have been run:
             // swiftlint:disable:next print_deprecation
             print("Missing roomID, bailing out.")
             return completion.complete()
-        }
-
-        guard let eventID = request.content.eventID else {
+        case .missingEventID:
             // Don't log until the app hooks have been run:
             // swiftlint:disable:next print_deprecation
             print("Missing eventID, bailing out.")
             return completion.complete()
-        }
-
-        guard let clientID = request.content.pusherNotificationClientIdentifier else {
+        case .missingClientID:
             // Don't log until the app hooks have been run:
             // swiftlint:disable:next print_deprecation
             print("Missing clientID, bailing out.")
             return completion.complete()
-        }
-
-        // If we skipped configuring the target it means we can't write to the app group, so we're unlikely to
-        // be able to create a session (and even if we could, we would be missing the lightweightTokioRuntime).
-        // Additionally, APNs servers only store the most recent notification when the device is powered off.
-        // So lets a) skip processing the notification and b) deliver a special "offline" notification as a workaround.
-        guard Self.targetConfiguration != nil else {
-            // MXLog isn't configured:
-            // swiftlint:disable:next print_deprecation
-            print("Device is locked after reboot.")
-
-            if Self.hasHandledFirstNotificationSinceBoot {
-                return completion.complete()
-            } else {
-                Self.hasHandledFirstNotificationSinceBoot = true
-                deliverReceivedWhileOfflineNotification(for: request)
-                return completion.complete(with: UNNotificationContent())
-            }
+        case .process(let resolvedRoomID, let resolvedEventID, let resolvedClientID):
+            roomID = resolvedRoomID
+            eventID = resolvedEventID
+            clientID = resolvedClientID
         }
 
         guard !shouldDeliverReceivedWhileOfflineNotification() else {
             // Don't log until the app hooks have been run:
             // swiftlint:disable:next print_deprecation
             print("Device is unlocked but may have missed notifications while offline.")
+            let offlineCompletionContent = NSERequestPolicy.offlineCompletionContent(for: request.content)
             deliverReceivedWhileOfflineNotification(for: request)
-            return completion.complete(with: UNNotificationContent())
+            return completion.complete(with: offlineCompletionContent)
         }
 
         guard let credentials = keychainController.restorationTokens().first(where: { $0.restorationToken.pusherNotificationClientIdentifier == clientID }) else {

@@ -260,6 +260,64 @@ struct NotificationBadgePolicyTests {
     }
 
     @Test
+    func registryCompletesRegistrationsAfterExpirationImmediately() throws {
+        let content = try #require(makeContent(contract: expectedBadgeContract, total: 6)
+            .normalizedMutableContentForBadgeDelivery())
+        let recorder = LockedBadgeRecorder()
+        let delivered = DispatchSemaphore(value: 0)
+        let registry = NotificationContentCompletionRegistry()
+
+        registry.completeAll()
+        registry.register(bestAttemptContent: content) { content in
+            recorder.append(content.badge)
+            delivered.signal()
+        }
+
+        #expect(delivered.wait(timeout: .now()) == .success)
+        #expect(recorder.badges == [6])
+        #expect(registry.inFlightCount == 0)
+    }
+
+    @Test
+    func registryDoesNotMissRegistrationInterleavedWithExpiration() throws {
+        let firstContent = try #require(makeContent(contract: expectedBadgeContract, total: 7)
+            .normalizedMutableContentForBadgeDelivery())
+        let secondContent = try #require(makeContent(contract: expectedBadgeContract, total: 8)
+            .normalizedMutableContentForBadgeDelivery())
+        let recorder = LockedBadgeRecorder()
+        let firstDeliveryStarted = DispatchSemaphore(value: 0)
+        let releaseFirstDelivery = DispatchSemaphore(value: 0)
+        let expirationFinished = DispatchSemaphore(value: 0)
+        let secondDelivered = DispatchSemaphore(value: 0)
+        let registry = NotificationContentCompletionRegistry()
+        defer { releaseFirstDelivery.signal() }
+
+        registry.register(bestAttemptContent: firstContent) { content in
+            recorder.append(content.badge)
+            firstDeliveryStarted.signal()
+            releaseFirstDelivery.wait()
+        }
+        DispatchQueue.global().async {
+            registry.completeAll()
+            expirationFinished.signal()
+        }
+
+        try #require(firstDeliveryStarted.wait(timeout: .now() + 2) == .success)
+
+        registry.register(bestAttemptContent: secondContent) { content in
+            recorder.append(content.badge)
+            secondDelivered.signal()
+        }
+
+        #expect(secondDelivered.wait(timeout: .now()) == .success)
+        releaseFirstDelivery.signal()
+        try #require(expirationFinished.wait(timeout: .now() + 2) == .success)
+        #expect(recorder.badges.count == 2)
+        #expect(Set(recorder.badges) == Set([7, 8]))
+        #expect(registry.inFlightCount == 0)
+    }
+
+    @Test
     func registryRemovesCompletedRequests() throws {
         let content = try #require(makeContent(contract: expectedBadgeContract, total: 6)
             .normalizedMutableContentForBadgeDelivery())
@@ -328,6 +386,74 @@ struct NotificationBadgePolicyTests {
     }
 
     @Test
+    func firstLockedOfflineRequestBypassesMissingIdentifiersWithBadgeOnlyCompletion() {
+        let content = sensitiveContentWithBadge(total: 9)
+
+        let action = NSERequestPolicy.action(isTargetConfigured: false,
+                                             hasHandledFirstNotificationSinceBoot: false,
+                                             content: content)
+        let completionContent = NSERequestPolicy.offlineCompletionContent(for: content)
+
+        #expect(action == .deliverOfflineNotification)
+        expectBadgeOnlyCompletion(completionContent, total: 9)
+    }
+
+    @Test
+    func repeatedLockedOfflineRequestBypassesMissingIdentifiersWithBadgeOnlyCompletion() {
+        let content = sensitiveContentWithBadge(total: 10)
+
+        let action = NSERequestPolicy.action(isTargetConfigured: false,
+                                             hasHandledFirstNotificationSinceBoot: true,
+                                             content: content)
+        let completionContent = NSERequestPolicy.offlineCompletionContent(for: content)
+
+        #expect(action == .deliverOfflineReplacement)
+        expectBadgeOnlyCompletion(completionContent, total: 10)
+    }
+
+    @Test
+    func lockedLegacyCountOnlyRequestUsesOfflineFallbackBeforeIdentifierValidation() {
+        let content = makeContent(unreadCount: 11)
+        content.body = "Sensitive legacy message"
+
+        let action = NSERequestPolicy.action(isTargetConfigured: false,
+                                             hasHandledFirstNotificationSinceBoot: false,
+                                             content: content)
+        let completionContent = NSERequestPolicy.offlineCompletionContent(for: content)
+
+        #expect(action == .deliverOfflineNotification)
+        #expect(completionContent.badge == 11)
+        #expect(completionContent.userInfo.isEmpty)
+        #expect(completionContent.body.isEmpty)
+    }
+
+    @Test
+    func configuredRequestsKeepRoomEventClientValidationOrder() {
+        let content = makeContent()
+
+        #expect(NSERequestPolicy.action(isTargetConfigured: true,
+                                       hasHandledFirstNotificationSinceBoot: false,
+                                       content: content) == .missingRoomID)
+
+        content.userInfo["room_id"] = "!room:example.org"
+        #expect(NSERequestPolicy.action(isTargetConfigured: true,
+                                       hasHandledFirstNotificationSinceBoot: false,
+                                       content: content) == .missingEventID)
+
+        content.userInfo["event_id"] = "$event"
+        #expect(NSERequestPolicy.action(isTargetConfigured: true,
+                                       hasHandledFirstNotificationSinceBoot: false,
+                                       content: content) == .missingClientID)
+
+        content.userInfo["pusher_notification_client_identifier"] = "client"
+        #expect(NSERequestPolicy.action(isTargetConfigured: true,
+                                       hasHandledFirstNotificationSinceBoot: false,
+                                       content: content) == .process(roomID: "!room:example.org",
+                                                                    eventID: "$event",
+                                                                    clientID: "client"))
+    }
+
+    @Test
     func replacementContentCopiesOnlyValidContractMetadata() {
         let content = makeContent(userInfo: ["badge_contract": expectedBadgeContract,
                                              "badge_total": 5,
@@ -375,6 +501,26 @@ struct NotificationBadgePolicyTests {
         userInfo["badge_total"] = total
         userInfo["unread_count"] = unreadCount
         return makeContent(userInfo: userInfo, badge: badge)
+    }
+
+    private func sensitiveContentWithBadge(total: Int) -> UNMutableNotificationContent {
+        let content = makeContent(contract: expectedBadgeContract, total: total)
+        content.title = "Sensitive title"
+        content.body = "Sensitive message"
+        content.sound = .default
+        return content
+    }
+
+    private func expectBadgeOnlyCompletion(_ content: UNNotificationContent, total: Int) {
+        #expect(content.badge == NSNumber(value: total))
+        #expect(content.userInfo.count == 2)
+        #expect(content.userInfo["badge_contract"] as? String == expectedBadgeContract)
+        #expect(content.userInfo["badge_total"] as? NSNumber == NSNumber(value: total))
+        #expect(content.title.isEmpty)
+        #expect(content.body.isEmpty)
+        #expect(content.sound == nil)
+        #expect(content.roomID == nil)
+        #expect(content.eventID == nil)
     }
 }
 
