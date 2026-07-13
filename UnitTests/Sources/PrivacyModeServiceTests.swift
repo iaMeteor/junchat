@@ -13,6 +13,10 @@ import Testing
 
 @Suite(.serialized)
 struct PrivacyModeHTTPTransportTests {
+    private var recorder: PrivacyModeURLProtocolRecorder {
+        PrivacyModeURLProtocol.recorder
+    }
+
     @Test
     func resolvesPathPrefixedHomeserverAndEncodesIdentifiers() async throws {
         let session = makeURLSession()
@@ -22,12 +26,12 @@ struct PrivacyModeHTTPTransportTests {
                                                                  homeserverURL: "https://matrix.example.org/prefix/")
                                                  },
                                                  urlSession: session)
-        PrivacyModeURLProtocol.response = (200, Data(#"{"enabled":true}"#.utf8))
+        recorder.setResponse(statusCode: 200, data: Data(#"{"enabled":true}"#.utf8))
 
         let result = await transport.load(roomID: "!room/part:example.org")
 
         #expect(result == .success(.present(enabled: true)))
-        let request = try #require(PrivacyModeURLProtocol.lastRequest)
+        let request = try #require(recorder.snapshot.lastRequest)
         #expect(request.url?.absoluteString == "https://matrix.example.org/prefix/_matrix/client/v3/user/%40alice%2Fops%3Aexample.org/rooms/%21room%2Fpart%3Aexample.org/account_data/com.heyujk.junchat.privacy_mode")
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer secret-token")
     }
@@ -35,23 +39,23 @@ struct PrivacyModeHTTPTransportTests {
     @Test
     func distinguishesAbsentFromExplicitFalse() async {
         let transport = makeTransport()
-        PrivacyModeURLProtocol.response = (404, Data())
+        recorder.setResponse(statusCode: 404, data: Data())
         #expect(await transport.load(roomID: "!room:example.org") == .success(.absent))
 
-        PrivacyModeURLProtocol.response = (200, Data(#"{"enabled":false}"#.utf8))
+        recorder.setResponse(statusCode: 200, data: Data(#"{"enabled":false}"#.utf8))
         #expect(await transport.load(roomID: "!room:example.org") == .success(.present(enabled: false)))
     }
 
     @Test
     func retriesOnceAfterImmediateNetworkFailure() async {
         let transport = makeTransport()
-        PrivacyModeURLProtocol.results = [
+        recorder.setResults([
             .failure(URLError(.timedOut)),
             .response(statusCode: 200, data: Data(#"{"enabled":true}"#.utf8))
-        ]
+        ])
 
         #expect(await transport.load(roomID: "!room:example.org") == .success(.present(enabled: true)))
-        #expect(PrivacyModeURLProtocol.requestCount == 2)
+        #expect(recorder.snapshot.requestCount == 2)
     }
 
     @Test
@@ -62,7 +66,7 @@ struct PrivacyModeHTTPTransportTests {
                                             homeserverURL: "https://old.example.org/prefix")
         let client = ClientSDKMock(configuration: configuration)
         let transport = PrivacyModeHTTPTransport(client: client, urlSession: makeURLSession())
-        PrivacyModeURLProtocol.response = (200, Data(#"{"enabled":true}"#.utf8))
+        recorder.setResponse(statusCode: 200, data: Data(#"{"enabled":true}"#.utf8))
 
         _ = await transport.load(roomID: "!room:example.org")
         client.sessionReturnValue = makeSession(accessToken: "refreshed-token",
@@ -70,9 +74,10 @@ struct PrivacyModeHTTPTransportTests {
                                                 homeserverURL: "https://new.example.org/base")
         _ = await transport.load(roomID: "!room:example.org")
 
-        #expect(PrivacyModeURLProtocol.requests.count == 2)
-        let firstRequest = try #require(PrivacyModeURLProtocol.requests.first)
-        let secondRequest = try #require(PrivacyModeURLProtocol.requests.last)
+        let requests = recorder.snapshot.requests
+        #expect(requests.count == 2)
+        let firstRequest = try #require(requests.first)
+        let secondRequest = try #require(requests.last)
         #expect(firstRequest.value(forHTTPHeaderField: "Authorization") == "Bearer first-token")
         #expect(firstRequest.url?.host == "old.example.org")
         #expect(secondRequest.value(forHTTPHeaderField: "Authorization") == "Bearer refreshed-token")
@@ -83,7 +88,7 @@ struct PrivacyModeHTTPTransportTests {
     @Test
     func cancellingAnInFlightGetDoesNotRetry() async throws {
         let transport = makeTransport()
-        PrivacyModeURLProtocol.results = [.pending]
+        recorder.setResults([.pending])
 
         let task = Task { await transport.load(roomID: "!room:example.org") }
         try await waitForRequestCount(1)
@@ -93,13 +98,13 @@ struct PrivacyModeHTTPTransportTests {
             Issue.record("Expected the cancelled GET to return cancellation.")
             return
         }
-        #expect(PrivacyModeURLProtocol.requestCount == 1)
+        #expect(recorder.snapshot.requestCount == 1)
     }
 
     @Test
     func cancellingAnInFlightPutDoesNotRetry() async throws {
         let transport = makeTransport()
-        PrivacyModeURLProtocol.results = [.pending]
+        recorder.setResults([.pending])
 
         let task = Task { await transport.setEnabled(true, roomID: "!room:example.org") }
         try await waitForRequestCount(1)
@@ -109,7 +114,35 @@ struct PrivacyModeHTTPTransportTests {
             Issue.record("Expected the cancelled PUT to return cancellation.")
             return
         }
-        #expect(PrivacyModeURLProtocol.requestCount == 1)
+        #expect(recorder.snapshot.requestCount == 1)
+    }
+
+    @Test
+    func recordsConcurrentRetryAndCancellationDeterministically() async throws {
+        let transport = makeTransport()
+        recorder.setResults([
+            .failure(URLError(.timedOut)),
+            .pending,
+            .pending
+        ])
+
+        let loadTask = Task { await transport.load(roomID: "!load:example.org") }
+        let setTask = Task { await transport.setEnabled(true, roomID: "!set:example.org") }
+        try await waitForRequestCount(3)
+
+        loadTask.cancel()
+        setTask.cancel()
+
+        #expect(await loadTask.value == .failure(.cancelled))
+        guard case .failure(.cancelled) = await setTask.value else {
+            Issue.record("Expected the concurrent PUT to return cancellation.")
+            return
+        }
+        let snapshot = recorder.snapshot
+        #expect(snapshot.requestCount == 3)
+        #expect(snapshot.requests.count == 3)
+        #expect(Set(snapshot.requests.map(\.httpMethod)) == ["GET", "PUT"])
+        #expect(snapshot.remainingResultCount == 0)
     }
 
     @Test
@@ -129,10 +162,10 @@ struct PrivacyModeHTTPTransportTests {
                                      privacyModeURLSession: urlSession)
         let userSession = await store.buildUserSessionWithClient(ClientProxyMock(.init(userID: "@persisted:old.example.org")),
                                                                  client: client)
-        PrivacyModeURLProtocol.response = (200, Data(#"{"enabled":false}"#.utf8))
+        recorder.setResponse(statusCode: 200, data: Data(#"{"enabled":false}"#.utf8))
 
         #expect(await userSession.privacyModeService.load(roomID: "!room:example.org") == .success(false))
-        let request = try #require(PrivacyModeURLProtocol.lastRequest)
+        let request = try #require(recorder.snapshot.lastRequest)
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer current-token")
         #expect(request.url?.host == "current.example.org")
         #expect(request.url?.absoluteString.contains("/user/%40current%3Aexample.org/") == true)
@@ -141,17 +174,17 @@ struct PrivacyModeHTTPTransportTests {
     @Test
     func rejectsMalformedAndOversizedResponses() async {
         let transport = makeTransport(maximumResponseSize: 32)
-        PrivacyModeURLProtocol.response = (200, Data(#"{"enabled":"yes"}"#.utf8))
+        recorder.setResponse(statusCode: 200, data: Data(#"{"enabled":"yes"}"#.utf8))
         #expect(await transport.load(roomID: "!room:example.org") == .failure(.malformedResponse))
 
-        PrivacyModeURLProtocol.response = (200, Data(repeating: 0x20, count: 33))
+        recorder.setResponse(statusCode: 200, data: Data(repeating: 0x20, count: 33))
         #expect(await transport.load(roomID: "!room:example.org") == .failure(.responseTooLarge))
     }
 
     @Test
     func rejectsOversizedPutResponse() async {
         let transport = makeTransport(maximumResponseSize: 32)
-        PrivacyModeURLProtocol.response = (200, Data(repeating: 0x20, count: 33))
+        recorder.setResponse(statusCode: 200, data: Data(repeating: 0x20, count: 33))
 
         let result = await transport.setEnabled(true, roomID: "!room:example.org")
         guard case .failure(.responseTooLarge) = result else {
@@ -163,8 +196,8 @@ struct PrivacyModeHTTPTransportTests {
     @Test
     func rejectsPutResponseWithOversizedContentLength() async {
         let transport = makeTransport(maximumResponseSize: 32)
-        PrivacyModeURLProtocol.response = (200, Data())
-        PrivacyModeURLProtocol.responseHeaders = ["Content-Length": "33"]
+        recorder.setResponse(statusCode: 200, data: Data())
+        recorder.setResponseHeaders(["Content-Length": "33"])
 
         let result = await transport.setEnabled(true, roomID: "!room:example.org")
         guard case .failure(.responseTooLarge) = result else {
@@ -184,11 +217,7 @@ struct PrivacyModeHTTPTransportTests {
     }
 
     private func makeURLSession() -> URLSession {
-        PrivacyModeURLProtocol.lastRequest = nil
-        PrivacyModeURLProtocol.requestCount = 0
-        PrivacyModeURLProtocol.requests = []
-        PrivacyModeURLProtocol.results = []
-        PrivacyModeURLProtocol.responseHeaders = nil
+        recorder.reset()
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [PrivacyModeURLProtocol.self]
         return URLSession(configuration: configuration)
@@ -205,10 +234,10 @@ struct PrivacyModeHTTPTransportTests {
     }
 
     private func waitForRequestCount(_ expectedCount: Int) async throws {
-        for _ in 0..<100 where PrivacyModeURLProtocol.requestCount < expectedCount {
+        for _ in 0..<100 where recorder.snapshot.requestCount < expectedCount {
             try await Task.sleep(for: .milliseconds(5))
         }
-        #expect(PrivacyModeURLProtocol.requestCount == expectedCount)
+        #expect(recorder.snapshot.requestCount == expectedCount)
     }
 }
 
@@ -372,6 +401,7 @@ struct PrivacyModeServiceTests {
         async let firstResult = firstService.load(roomID: roomID)
         async let secondResult = secondService.load(roomID: roomID)
         #expect(await [firstResult, secondResult] == [.success(true), .success(true)])
+        #expect(await remoteState.loadCount == 1)
         #expect(await remoteState.setInvocations == [true])
     }
 
@@ -523,7 +553,12 @@ private actor PendingMigrationPutTransport: PrivacyModeTransportProtocol {
 
 private actor PrivacyModeRemoteStateStore {
     private(set) var enabled: Bool?
+    private(set) var loadCount = 0
     private(set) var setInvocations = [Bool]()
+
+    func recordLoad() {
+        loadCount += 1
+    }
 
     func setEnabled(_ enabled: Bool) {
         self.enabled = enabled
@@ -545,6 +580,7 @@ private actor PrivacyModeRemoteStateTransport: PrivacyModeTransportProtocol {
     }
 
     func load(roomID: String) async -> Result<PrivacyModeRemoteState, PrivacyModeTransportError> {
+        await remoteState.recordLoad()
         let state = if let forcedLoadState {
             forcedLoadState
         } else if let enabled = await remoteState.enabled {
@@ -562,19 +598,92 @@ private actor PrivacyModeRemoteStateTransport: PrivacyModeTransportProtocol {
     }
 }
 
-private final class PrivacyModeURLProtocol: URLProtocol {
+private final class PrivacyModeURLProtocolRecorder: @unchecked Sendable {
     enum Result {
         case failure(Error)
         case pending
         case response(statusCode: Int, data: Data)
     }
 
-    static var response = (statusCode: 200, data: Data())
-    static var results = [Result]()
-    static var lastRequest: URLRequest?
-    static var requestCount = 0
-    static var requests = [URLRequest]()
-    static var responseHeaders: [String: String]?
+    enum Action {
+        case failure(Error)
+        case pending
+        case response(statusCode: Int, data: Data, headers: [String: String]?)
+    }
+
+    struct Snapshot {
+        let requestCount: Int
+        let requests: [URLRequest]
+        let lastRequest: URLRequest?
+        let remainingResultCount: Int
+    }
+
+    private let lock = NSLock()
+    private var response = (statusCode: 200, data: Data())
+    private var results = [Result]()
+    private var requests = [URLRequest]()
+    private var responseHeaders: [String: String]?
+
+    var snapshot: Snapshot {
+        lock.lock()
+        defer { lock.unlock() }
+        return Snapshot(requestCount: requests.count,
+                        requests: requests,
+                        lastRequest: requests.last,
+                        remainingResultCount: results.count)
+    }
+
+    func reset() {
+        lock.lock()
+        defer { lock.unlock() }
+        response = (200, Data())
+        results.removeAll()
+        requests.removeAll()
+        responseHeaders = nil
+    }
+
+    func setResponse(statusCode: Int, data: Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        response = (statusCode, data)
+    }
+
+    func setResults(_ results: [Result]) {
+        lock.lock()
+        defer { lock.unlock() }
+        self.results = results
+    }
+
+    func setResponseHeaders(_ responseHeaders: [String: String]?) {
+        lock.lock()
+        defer { lock.unlock() }
+        self.responseHeaders = responseHeaders
+    }
+
+    func record(_ request: URLRequest) -> Action {
+        lock.lock()
+        defer { lock.unlock() }
+
+        requests.append(request)
+        if !results.isEmpty {
+            switch results.removeFirst() {
+            case .failure(let error):
+                return .failure(error)
+            case .pending:
+                return .pending
+            case .response(let statusCode, let data):
+                response = (statusCode, data)
+            }
+        }
+
+        return .response(statusCode: response.statusCode,
+                         data: response.data,
+                         headers: responseHeaders)
+    }
+}
+
+private final class PrivacyModeURLProtocol: URLProtocol {
+    static let recorder = PrivacyModeURLProtocolRecorder()
 
     override static func canInit(with request: URLRequest) -> Bool {
         true
@@ -585,31 +694,28 @@ private final class PrivacyModeURLProtocol: URLProtocol {
     }
 
     override func startLoading() {
-        Self.lastRequest = request
-        Self.requestCount += 1
-        Self.requests.append(request)
-        if !Self.results.isEmpty {
-            switch Self.results.removeFirst() {
-            case .failure(let error):
-                client?.urlProtocol(self, didFailWithError: error)
-                return
-            case .pending:
-                return
-            case .response(let statusCode, let data):
-                Self.response = (statusCode, data)
-            }
+        switch Self.recorder.record(request) {
+        case .failure(let error):
+            client?.urlProtocol(self, didFailWithError: error)
+        case .pending:
+            return
+        case .response(let statusCode, let data, let headers):
+            respond(statusCode: statusCode, data: data, headers: headers)
         }
+    }
+
+    override func stopLoading() { }
+
+    private func respond(statusCode: Int, data: Data, headers: [String: String]?) {
         guard let url = request.url,
-              let response = HTTPURLResponse(url: url, statusCode: Self.response.statusCode, httpVersion: nil, headerFields: Self.responseHeaders) else {
+              let response = HTTPURLResponse(url: url, statusCode: statusCode, httpVersion: nil, headerFields: headers) else {
             client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
             return
         }
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Self.response.data)
+        client?.urlProtocol(self, didLoad: data)
         client?.urlProtocolDidFinishLoading(self)
     }
-
-    override func stopLoading() { }
 }
 
 private actor PrivacyModeTransportMock: PrivacyModeTransportProtocol {

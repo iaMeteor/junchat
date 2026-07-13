@@ -28,12 +28,19 @@ actor PrivacyModeService: PrivacyModeServiceProtocol {
     }
 
     func load(roomID: String) async -> Result<Bool, PrivacyModeServiceError> {
-        guard let result = await operationCoordinator.perform(userID: userID, roomID: roomID, operation: { [self] in
+        guard let result = await operationCoordinator.performLoad(userID: userID, roomID: roomID, operation: { [self] in
             await loadCoordinated(roomID: roomID)
         }) else {
             return .failure(.cancelled)
         }
+        if case .success(let enabled) = result {
+            cachedValues[roomID] = enabled
+        }
         return result
+    }
+
+    func cancelLoadAndWait(roomID: String) async {
+        await operationCoordinator.cancelLoadAndWait(userID: userID, roomID: roomID)
     }
 
     func toggle(roomID: String) async -> Result<Bool, PrivacyModeServiceError> {

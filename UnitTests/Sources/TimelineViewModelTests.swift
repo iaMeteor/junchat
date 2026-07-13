@@ -909,6 +909,172 @@ final class TimelineViewModelTests {
     }
 
     @Test
+    func sharedRoomScreenPrivacyLoadMigratesBeforeSending() async throws {
+        let recorder = PrivacyModeSendOrderRecorder()
+        let transport = HeldLegacyMigrationTransport(recorder: recorder)
+        let migrationStore = TimelinePrivacyModeMigrationStore(roomID: "MockRoomIdentifier")
+        let coordinator = PrivacyModeOperationCoordinator()
+        let roomScreenService = await PrivacyModeService(userID: "@alice:example.org",
+                                                         transport: transport,
+                                                         migrationStore: migrationStore,
+                                                         operationCoordinator: coordinator)
+        let timelineService = await PrivacyModeService(userID: "@alice:example.org",
+                                                       transport: transport,
+                                                       migrationStore: migrationStore,
+                                                       operationCoordinator: coordinator)
+        let roomScreenViewModel = makeRoomScreenViewModel(privacyModeService: roomScreenService)
+        try await transport.waitUntilLoadStarts()
+
+        let timelineController = PrivacyModeSendOrderTimelineController(recorder: recorder)
+        let timelineViewModel = makeViewModel(timelineController: timelineController,
+                                              privacyModeService: timelineService,
+                                              appSettings: AppSettings())
+        timelineViewModel.process(composerAction: .sendMessage(plain: "shared authority",
+                                                               html: nil,
+                                                               mode: .default,
+                                                               intentionalMentions: .init(userIDs: [], atRoom: false)))
+
+        try await Task.sleep(for: .milliseconds(20))
+        await transport.completeHeldLoad()
+        try await recorder.waitForEvent("send")
+
+        let events = await recorder.events
+        let loadCount = await transport.loadCount
+        #expect(events == ["load-start", "migration-put", "send"])
+        #expect(loadCount == 1)
+        #expect(await transport.setCount == 1)
+        _ = roomScreenViewModel
+    }
+
+    @Test
+    func roomScreenPrivacyLoadIsCancelledAndJoinedOnPreSendTimeout() async throws {
+        let recorder = PrivacyModeSendOrderRecorder()
+        let transport = HeldLegacyMigrationTransport(recorder: recorder)
+        let migrationStore = TimelinePrivacyModeMigrationStore(roomID: "MockRoomIdentifier")
+        let coordinator = PrivacyModeOperationCoordinator()
+        let roomScreenService = await PrivacyModeService(userID: "@alice:example.org",
+                                                         transport: transport,
+                                                         migrationStore: migrationStore,
+                                                         operationCoordinator: coordinator)
+        let timelineService = await PrivacyModeService(userID: "@alice:example.org",
+                                                       transport: transport,
+                                                       migrationStore: migrationStore,
+                                                       operationCoordinator: coordinator)
+        let roomScreenViewModel = makeRoomScreenViewModel(privacyModeService: roomScreenService)
+        try await transport.waitUntilLoadStarts()
+
+        let timelineController = PrivacyModeSendOrderTimelineController(recorder: recorder)
+        let timelineViewModel = makeViewModel(timelineController: timelineController,
+                                              privacyModeService: timelineService,
+                                              appSettings: AppSettings(),
+                                              privacyModeAuthorityTimeout: .milliseconds(10))
+        timelineViewModel.process(composerAction: .sendMessage(plain: "bounded shared authority",
+                                                               html: nil,
+                                                               mode: .default,
+                                                               intentionalMentions: .init(userIDs: [], atRoom: false)))
+
+        try await recorder.waitForEvent("send")
+        await transport.completeHeldLoad()
+        try await Task.sleep(for: .milliseconds(50))
+
+        let events = await recorder.events
+        let loadCount = await transport.loadCount
+        #expect(events == ["load-start", "load-cancelled", "send"])
+        #expect(loadCount == 1)
+        #expect(await transport.setCount == 0)
+        _ = roomScreenViewModel
+    }
+
+    @Test
+    func viewModelTeardownBeforePrivacyAuthorityCompletesDoesNotSendMessage() async throws {
+        let recorder = PrivacyModeSendOrderRecorder()
+        let privacyModeService = LifecyclePrivacyModeService(recorder: recorder)
+        let timelineController = PrivacyModeSendOrderTimelineController(recorder: recorder)
+        var viewModel: TimelineViewModel? = makeViewModel(timelineController: timelineController,
+                                                          privacyModeService: privacyModeService,
+                                                          appSettings: AppSettings())
+        weak var weakViewModel: TimelineViewModel?
+        weakViewModel = viewModel
+
+        viewModel?.process(composerAction: .sendMessage(plain: "cancelled message",
+                                                        html: nil,
+                                                        mode: .default,
+                                                        intentionalMentions: .init(userIDs: [], atRoom: false)))
+        try await privacyModeService.waitUntilLoadCount(1)
+
+        viewModel = nil
+        try await Task.sleep(for: .milliseconds(20))
+        let wasReleasedBeforeAuthorityCompletion = weakViewModel == nil
+        await privacyModeService.completeLoads()
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(wasReleasedBeforeAuthorityCompletion)
+        #expect(weakViewModel == nil)
+        #expect(await recorder.events == ["load-start", "load-cancelled"])
+        #expect(timelineController.timelineItems.isEmpty)
+    }
+
+    @Test
+    func viewModelTeardownBeforePrivacyAuthorityCompletesDoesNotSendReply() async throws {
+        let recorder = PrivacyModeSendOrderRecorder()
+        let privacyModeService = LifecyclePrivacyModeService(recorder: recorder)
+        let timelineController = PrivacyModeSendOrderTimelineController(recorder: recorder)
+        var viewModel: TimelineViewModel? = makeViewModel(timelineController: timelineController,
+                                                          privacyModeService: privacyModeService,
+                                                          appSettings: AppSettings())
+        weak var weakViewModel: TimelineViewModel?
+        weakViewModel = viewModel
+
+        viewModel?.process(composerAction: .sendMessage(plain: "cancelled reply",
+                                                        html: nil,
+                                                        mode: .reply(eventID: "event-id",
+                                                                     replyDetails: .notLoaded(eventID: "event-id"),
+                                                                     isThread: false),
+                                                        intentionalMentions: .init(userIDs: [], atRoom: false)))
+        try await privacyModeService.waitUntilLoadCount(1)
+
+        viewModel = nil
+        try await Task.sleep(for: .milliseconds(20))
+        let wasReleasedBeforeAuthorityCompletion = weakViewModel == nil
+        await privacyModeService.completeLoads()
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(wasReleasedBeforeAuthorityCompletion)
+        #expect(weakViewModel == nil)
+        #expect(await recorder.events == ["load-start", "load-cancelled"])
+        #expect(timelineController.timelineItems.isEmpty)
+    }
+
+    @Test
+    func repeatedSendsKeepIndependentPrivacyAuthorityTasks() async throws {
+        let recorder = PrivacyModeSendOrderRecorder()
+        let privacyModeService = LifecyclePrivacyModeService(recorder: recorder)
+        let timelineController = PrivacyModeSendOrderTimelineController(recorder: recorder)
+        let viewModel = makeViewModel(timelineController: timelineController,
+                                      privacyModeService: privacyModeService,
+                                      appSettings: AppSettings())
+
+        viewModel.process(composerAction: .sendMessage(plain: "first message",
+                                                       html: nil,
+                                                       mode: .default,
+                                                       intentionalMentions: .init(userIDs: [], atRoom: false)))
+        viewModel.process(composerAction: .sendMessage(plain: "second message",
+                                                       html: nil,
+                                                       mode: .default,
+                                                       intentionalMentions: .init(userIDs: [], atRoom: false)))
+        try await privacyModeService.waitUntilLoadCount(2)
+
+        await privacyModeService.completeLoads()
+        try await recorder.waitForEventCount(6)
+
+        let events = await recorder.events
+        #expect(events.filter { $0 == "load-cancelled" }.isEmpty)
+        #expect(events.filter { $0 == "send" }.count == 2)
+        #expect(timelineController.timelineItems.count == 2)
+        _ = viewModel
+    }
+
+    @Test
     func emergencyOverrideStillPerformsPreSendAuthorityMigration() async throws {
         let recorder = PrivacyModeSendOrderRecorder()
         let privacyModeService = PrivacyModeSendOrderService(recorder: recorder,
@@ -1011,6 +1177,18 @@ final class TimelineViewModelTests {
                           privacyMessageLifetime: privacyMessageLifetime,
                           privacyModeAuthorityTimeout: privacyModeAuthorityTimeout)
     }
+
+    private func makeRoomScreenViewModel(privacyModeService: PrivacyModeServiceProtocol) -> RoomScreenViewModel {
+        RoomScreenViewModel(userSession: UserSessionMock(.init(clientProxy: ClientProxyMock(.init()),
+                                                               privacyModeService: privacyModeService)),
+                            roomProxy: JoinedRoomProxyMock(.init(id: "MockRoomIdentifier", hasOngoingCall: false)),
+                            initialSelectedPinnedEventID: nil,
+                            ongoingCallRoomIDPublisher: .init(.init(nil)),
+                            appSettings: AppSettings(),
+                            appHooks: AppHooks(),
+                            analyticsService: ServiceLocator.shared.analytics,
+                            userIndicatorController: userIndicatorControllerMock)
+    }
 }
 
 private actor PrivacyModeSendOrderRecorder {
@@ -1025,6 +1203,94 @@ private actor PrivacyModeSendOrderRecorder {
             try await Task.sleep(for: .milliseconds(5))
         }
         #expect(events.count == count)
+    }
+
+    func waitForEvent(_ event: String) async throws {
+        for _ in 0..<100 where !events.contains(event) {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(events.contains(event))
+    }
+}
+
+private actor TimelinePrivacyModeMigrationStore: PrivacyModeMigrationStoreProtocol {
+    private let roomID: String
+    private var ownerUserID: String?
+    private var isPending = true
+
+    init(roomID: String) {
+        self.roomID = roomID
+    }
+
+    func claimLegacyRoomIDs(for userID: String) -> Set<String> {
+        if ownerUserID == nil {
+            ownerUserID = userID
+        }
+        return ownerUserID == userID && isPending ? [roomID] : []
+    }
+
+    func consumeLegacyRoomID(_ roomID: String, for userID: String) {
+        guard ownerUserID == userID, self.roomID == roomID else {
+            return
+        }
+        isPending = false
+    }
+}
+
+private actor HeldLegacyMigrationTransport: PrivacyModeTransportProtocol {
+    private let recorder: PrivacyModeSendOrderRecorder
+    private var heldLoadContinuation: CheckedContinuation<Result<PrivacyModeRemoteState, PrivacyModeTransportError>, Never>?
+    private var enabled: Bool?
+    private(set) var loadCount = 0
+    private(set) var setCount = 0
+
+    init(recorder: PrivacyModeSendOrderRecorder) {
+        self.recorder = recorder
+    }
+
+    func load(roomID: String) async -> Result<PrivacyModeRemoteState, PrivacyModeTransportError> {
+        loadCount += 1
+        await recorder.record("load-start")
+        if loadCount > 1 {
+            return enabled.map { .success(.present(enabled: $0)) } ?? .success(.absent)
+        }
+
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                heldLoadContinuation = continuation
+            }
+        } onCancel: {
+            Task { await self.cancelHeldLoad() }
+        }
+    }
+
+    func setEnabled(_ enabled: Bool, roomID: String) async -> Result<Void, PrivacyModeTransportError> {
+        self.enabled = enabled
+        setCount += 1
+        await recorder.record("migration-put")
+        return .success(())
+    }
+
+    func waitUntilLoadStarts() async throws {
+        for _ in 0..<100 where heldLoadContinuation == nil {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(heldLoadContinuation != nil)
+    }
+
+    func completeHeldLoad() {
+        let continuation = heldLoadContinuation
+        heldLoadContinuation = nil
+        continuation?.resume(returning: .success(.absent))
+    }
+
+    private func cancelHeldLoad() async {
+        guard let continuation = heldLoadContinuation else {
+            return
+        }
+        heldLoadContinuation = nil
+        await recorder.record("load-cancelled")
+        continuation.resume(returning: .failure(.cancelled))
     }
 }
 
@@ -1048,12 +1314,71 @@ private actor PrivacyModeSendOrderService: PrivacyModeServiceProtocol {
         return loadResult
     }
 
+    func cancelLoadAndWait(roomID: String) { }
+
     func toggle(roomID: String) -> Result<Bool, PrivacyModeServiceError> {
         .success(false)
     }
 
     func cachedValue(roomID: String) -> Bool? {
         storedCachedValue
+    }
+}
+
+private actor LifecyclePrivacyModeService: PrivacyModeServiceProtocol {
+    private let recorder: PrivacyModeSendOrderRecorder
+    private var loadContinuations = [UUID: CheckedContinuation<Result<Bool, PrivacyModeServiceError>, Never>]()
+    private var loadCount = 0
+
+    init(recorder: PrivacyModeSendOrderRecorder) {
+        self.recorder = recorder
+    }
+
+    func load(roomID: String) async -> Result<Bool, PrivacyModeServiceError> {
+        let loadID = UUID()
+        loadCount += 1
+        await recorder.record("load-start")
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                loadContinuations[loadID] = continuation
+            }
+        } onCancel: {
+            Task { await self.cancelLoad(id: loadID) }
+        }
+    }
+
+    func cancelLoadAndWait(roomID: String) { }
+
+    func toggle(roomID: String) -> Result<Bool, PrivacyModeServiceError> {
+        .success(false)
+    }
+
+    func cachedValue(roomID: String) -> Bool? {
+        nil
+    }
+
+    func waitUntilLoadCount(_ expectedCount: Int) async throws {
+        for _ in 0..<100 where loadCount < expectedCount {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(loadCount == expectedCount)
+    }
+
+    func completeLoads() async {
+        let continuations = loadContinuations.values
+        loadContinuations.removeAll()
+        for continuation in continuations {
+            await recorder.record("load-completed")
+            continuation.resume(returning: .success(true))
+        }
+    }
+
+    private func cancelLoad(id: UUID) async {
+        guard let continuation = loadContinuations.removeValue(forKey: id) else {
+            return
+        }
+        await recorder.record("load-cancelled")
+        continuation.resume(returning: .failure(.cancelled))
     }
 }
 
@@ -1077,6 +1402,8 @@ private actor PendingCancellablePrivacyModeService: PrivacyModeServiceProtocol {
             return .failure(.cancelled)
         }
     }
+
+    func cancelLoadAndWait(roomID: String) { }
 
     func toggle(roomID: String) -> Result<Bool, PrivacyModeServiceError> {
         .success(false)

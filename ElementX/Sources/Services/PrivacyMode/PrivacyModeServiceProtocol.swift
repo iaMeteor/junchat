@@ -39,6 +39,7 @@ enum PrivacyModeServiceError: Error, Equatable {
 
 protocol PrivacyModeServiceProtocol: Sendable {
     func load(roomID: String) async -> Result<Bool, PrivacyModeServiceError>
+    func cancelLoadAndWait(roomID: String) async
     func toggle(roomID: String) async -> Result<Bool, PrivacyModeServiceError>
     func cachedValue(roomID: String) async -> Bool?
 }

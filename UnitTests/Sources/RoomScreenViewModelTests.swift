@@ -761,6 +761,8 @@ private actor PendingInitialPrivacyModeService: PrivacyModeServiceProtocol {
         }
     }
 
+    func cancelLoadAndWait(roomID: String) { }
+
     func toggle(roomID: String) -> Result<Bool, PrivacyModeServiceError> {
         .success(true)
     }

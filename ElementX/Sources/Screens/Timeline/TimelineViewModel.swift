@@ -53,6 +53,7 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
 
     private var paginateBackwardsTask: Task<Void, Never>?
     private var paginateForwardsTask: Task<Void, Never>?
+    private var sendMessageTasks = [UUID: Task<Void, Never>]()
     private var pendingPrivacyMessageBodies = [String]()
 
     init(roomProxy: JoinedRoomProxyProtocol,
@@ -162,6 +163,12 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
         trackComposerMode(.default)
     }
 
+    deinit {
+        for task in sendMessageTasks.values {
+            task.cancel()
+        }
+    }
+
     // MARK: - Public
 
     override func process(viewAction: TimelineViewAction) {
@@ -249,12 +256,10 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
     func process(composerAction: ComposerToolbarViewModelAction) {
         switch composerAction {
         case .sendMessage(let message, let html, let mode, let intentionalMentions):
-            Task {
-                await sendCurrentMessage(message,
-                                         html: html,
-                                         mode: mode,
-                                         intentionalMentions: intentionalMentions)
-            }
+            startSendingCurrentMessage(message,
+                                       html: html,
+                                       mode: mode,
+                                       intentionalMentions: intentionalMentions)
         case .editLastMessage:
             editLastMessage()
         case .attach(let attachment):
@@ -833,35 +838,100 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
         return nil
     }
 
-    private func handleJoinCommand(message: String) async {
+    private static func handleJoinCommand(message: String,
+                                          clientProxy: ClientProxyProtocol,
+                                          actionsSubject: PassthroughSubject<TimelineViewModelAction, Never>) async {
         guard let alias = String(message.dropFirst(SlashCommand.join.rawValue.count))
             .components(separatedBy: .whitespacesAndNewlines)
             .first,
-            case let .success(resolvedAlias) = await userSession.clientProxy.resolveRoomAlias(alias) else {
+            case let .success(resolvedAlias) = await clientProxy.resolveRoomAlias(alias),
+            !Task.isCancelled else {
             return
         }
 
         actionsSubject.send(.displayRoom(roomID: resolvedAlias.roomId, via: resolvedAlias.servers))
     }
 
-    private func sendCurrentMessage(_ message: String, html: String?, mode: ComposerMode, intentionalMentions: IntentionalMentions) async {
+    private func startSendingCurrentMessage(_ message: String, html: String?, mode: ComposerMode, intentionalMentions: IntentionalMentions) {
         guard !message.isEmpty else {
             fatalError("This message should never be empty")
         }
 
         actionsSubject.send(.composer(action: .clear))
+
+        let command = slashCommand(message: message)
+        let requiresPrivacyModeAuthority = switch mode {
+        case .reply:
+            true
+        case .default:
+            command == nil
+        case .edit, .recordVoiceMessage, .previewVoiceMessage:
+            false
+        }
+
+        let taskID = UUID()
+        let emergencyPrivacyModeEnabled = appSettings.junchatEmergencyPrivacyModeEnabled
+        let privacyModeService = userSession.privacyModeService
+        let clientProxy = userSession.clientProxy
+        let roomID = timelineController.roomID
+        let authorityTimeout = privacyModeAuthorityTimeout
+        let timelineController = timelineController
+        let actionsSubject = actionsSubject
+
+        sendMessageTasks[taskID] = Task { [weak self] in
+            let privacyModeEnabled: Bool?
+            if requiresPrivacyModeAuthority {
+                privacyModeEnabled = await Self.resolvePrivacyModeEnabled(emergencyPrivacyModeEnabled: emergencyPrivacyModeEnabled,
+                                                                          privacyModeService: privacyModeService,
+                                                                          roomID: roomID,
+                                                                          authorityTimeout: authorityTimeout)
+                guard privacyModeEnabled != nil else {
+                    self?.sendMessageTasks[taskID] = nil
+                    return
+                }
+            } else {
+                privacyModeEnabled = nil
+            }
+
+            guard !Task.isCancelled else {
+                self?.sendMessageTasks[taskID] = nil
+                return
+            }
+
+            let shouldTrackPrivacyControlledMessage = await Self.sendCurrentMessage(message,
+                                                                                    html: html,
+                                                                                    mode: mode,
+                                                                                    intentionalMentions: intentionalMentions,
+                                                                                    privacyModeEnabled: privacyModeEnabled,
+                                                                                    command: command,
+                                                                                    timelineController: timelineController,
+                                                                                    clientProxy: clientProxy,
+                                                                                    actionsSubject: actionsSubject)
+            if !Task.isCancelled {
+                if shouldTrackPrivacyControlledMessage {
+                    self?.trackPrivacyControlledMessage(for: message)
+                }
+                self?.scrollToBottom()
+            }
+            self?.sendMessageTasks[taskID] = nil
+        }
+    }
+
+    private static func sendCurrentMessage(_ message: String,
+                                           html: String?,
+                                           mode: ComposerMode,
+                                           intentionalMentions: IntentionalMentions,
+                                           privacyModeEnabled: Bool?,
+                                           command: SlashCommand?,
+                                           timelineController: TimelineControllerProtocol,
+                                           clientProxy: ClientProxyProtocol,
+                                           actionsSubject: PassthroughSubject<TimelineViewModelAction, Never>) async -> Bool {
+        guard !Task.isCancelled else { return false }
         var shouldRedactSentMessage = false
-        var privacyModeEnabled = false
 
         switch mode {
         case .reply(let eventID, _, _):
-            guard let resolvedPrivacyModeEnabled = await resolvePrivacyModeEnabled() else {
-                return
-            }
-            guard !Task.isCancelled else {
-                return
-            }
-            privacyModeEnabled = resolvedPrivacyModeEnabled
+            guard privacyModeEnabled != nil else { return false }
             await timelineController.sendMessage(message,
                                                  html: html,
                                                  inReplyToEventID: eventID,
@@ -879,17 +949,11 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
                                                  html: html,
                                                  intentionalMentions: intentionalMentions)
         case .default:
-            switch slashCommand(message: message) {
+            switch command {
             case .join:
-                await handleJoinCommand(message: message)
+                await handleJoinCommand(message: message, clientProxy: clientProxy, actionsSubject: actionsSubject)
             case .none:
-                guard let resolvedPrivacyModeEnabled = await resolvePrivacyModeEnabled() else {
-                    return
-                }
-                guard !Task.isCancelled else {
-                    return
-                }
-                privacyModeEnabled = resolvedPrivacyModeEnabled
+                guard privacyModeEnabled != nil else { return false }
                 await timelineController.sendMessage(message,
                                                      html: html,
                                                      inReplyToEventID: nil,
@@ -900,18 +964,13 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
             fatalError("invalid composer mode.")
         }
 
-        if shouldRedactSentMessage, privacyModeEnabled {
-            trackPrivacyControlledMessage(for: message)
-        }
-
-        scrollToBottom()
+        return shouldRedactSentMessage && privacyModeEnabled == true
     }
 
-    private func resolvePrivacyModeEnabled() async -> Bool? {
-        let emergencyPrivacyModeEnabled = appSettings.junchatEmergencyPrivacyModeEnabled
-        let privacyModeService = userSession.privacyModeService
-        let roomID = timelineController.roomID
-
+    private static func resolvePrivacyModeEnabled(emergencyPrivacyModeEnabled: Bool,
+                                                  privacyModeService: PrivacyModeServiceProtocol,
+                                                  roomID: String,
+                                                  authorityTimeout: Duration) async -> Bool? {
         if let cachedValue = await privacyModeService.cachedValue(roomID: roomID) {
             return Task.isCancelled ? nil : emergencyPrivacyModeEnabled || cachedValue
         }
@@ -935,8 +994,10 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
                     }
                 }
 
-                group.addTask { [privacyModeAuthorityTimeout] in
-                    try await Task.sleep(for: privacyModeAuthorityTimeout)
+                group.addTask {
+                    try await Task.sleep(for: authorityTimeout)
+                    try Task.checkCancellation()
+                    await privacyModeService.cancelLoadAndWait(roomID: roomID)
                     throw PrivacyModeAuthorityResolutionError.timedOut
                 }
 

@@ -30,6 +30,8 @@ actor PrivacyModeServiceMock: PrivacyModeServiceProtocol {
         return result
     }
 
+    func cancelLoadAndWait(roomID: String) { }
+
     func toggle(roomID: String) -> Result<Bool, PrivacyModeServiceError> {
         toggleRoomIDReceivedInvocations.append(roomID)
         let result = toggleResults.count == 1 ? toggleResults[0] : toggleResults.removeFirst()
