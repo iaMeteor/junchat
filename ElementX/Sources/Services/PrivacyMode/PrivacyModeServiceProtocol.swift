@@ -13,6 +13,7 @@ enum PrivacyModeRemoteState: Equatable {
 }
 
 enum PrivacyModeTransportError: Error, Equatable {
+    case cancelled
     case invalidURL
     case invalidResponse
     case httpStatus(Int)

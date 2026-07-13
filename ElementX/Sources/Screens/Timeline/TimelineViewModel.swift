@@ -844,9 +844,11 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
 
         actionsSubject.send(.composer(action: .clear))
         var shouldRedactSentMessage = false
+        var privacyModeEnabled = false
 
         switch mode {
         case .reply(let eventID, _, _):
+            privacyModeEnabled = await isPrivacyModeEnabled()
             await timelineController.sendMessage(message,
                                                  html: html,
                                                  inReplyToEventID: eventID,
@@ -868,6 +870,7 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
             case .join:
                 await handleJoinCommand(message: message)
             case .none:
+                privacyModeEnabled = await isPrivacyModeEnabled()
                 await timelineController.sendMessage(message,
                                                      html: html,
                                                      inReplyToEventID: nil,
@@ -878,7 +881,7 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
             fatalError("invalid composer mode.")
         }
 
-        if shouldRedactSentMessage, await isPrivacyModeEnabled() {
+        if shouldRedactSentMessage, privacyModeEnabled {
             trackPrivacyControlledMessage(for: message)
         }
 
@@ -886,15 +889,14 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
     }
 
     private func isPrivacyModeEnabled() async -> Bool {
-        if appSettings.junchatEmergencyPrivacyModeEnabled {
-            return true
-        }
+        let emergencyPrivacyModeEnabled = appSettings.junchatEmergencyPrivacyModeEnabled
 
         switch await userSession.privacyModeService.load(roomID: timelineController.roomID) {
         case .success(let enabled):
-            return enabled
+            return emergencyPrivacyModeEnabled || enabled
         case .failure:
-            return await userSession.privacyModeService.cachedValue(roomID: timelineController.roomID) ?? false
+            let cachedValue = await userSession.privacyModeService.cachedValue(roomID: timelineController.roomID) ?? false
+            return emergencyPrivacyModeEnabled || cachedValue
         }
     }
 

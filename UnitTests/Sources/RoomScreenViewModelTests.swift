@@ -416,6 +416,37 @@ final class RoomScreenViewModelTests {
     }
 
     @Test
+    func privacyModeSyncUsesCachedServerValueWhenLoadFails() async throws {
+        let privacyModeService = PrivacyModeServiceMock(loadResults: [.failure(.transport(.network))],
+                                                        cachedValues: ["MyRoomID": true])
+        let viewModel = makePrivacyModeViewModel(privacyModeService: privacyModeService)
+        self.viewModel = viewModel
+
+        let deferred = deferFulfillment(viewModel.context.$viewState) { $0.isPrivacyModeEnabled }
+        try await deferred.fulfill()
+
+        #expect(viewModel.state.isPrivacyModeEnabled)
+        #expect(await privacyModeService.loadRoomIDReceivedInvocations == ["MyRoomID"])
+    }
+
+    @Test
+    func staleInitialPrivacyLoadCannotOverwriteSuccessfulToggle() async throws {
+        let privacyModeService = PendingInitialPrivacyModeService()
+        let viewModel = makePrivacyModeViewModel(privacyModeService: privacyModeService)
+        self.viewModel = viewModel
+        try await privacyModeService.waitUntilLoadStarts()
+
+        let enabled = deferFulfillment(viewModel.context.$viewState) { $0.isPrivacyModeEnabled }
+        viewModel.context.send(viewAction: .togglePrivacyMode)
+        try await enabled.fulfill()
+
+        await privacyModeService.resolveInitialLoad(with: .success(false))
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(viewModel.state.isPrivacyModeEnabled)
+    }
+
+    @Test
     func declineCallInvitationHidesOverlayAndDeclinesIncomingCall() async throws {
         let (declineStream, declineContinuation) = AsyncStream.makeStream(of: Void.self)
         let deferredDecline = deferFulfillment(declineStream) { _ in true }
@@ -704,5 +735,49 @@ final class RoomScreenViewModelTests {
             viewState.roomHistorySharingState == .worldReadable
         }
         try await deferredWorldReadable.fulfill()
+    }
+
+    private func makePrivacyModeViewModel(privacyModeService: PrivacyModeServiceProtocol) -> RoomScreenViewModel {
+        RoomScreenViewModel(userSession: UserSessionMock(.init(clientProxy: ClientProxyMock(.init()),
+                                                               privacyModeService: privacyModeService)),
+                            roomProxy: JoinedRoomProxyMock(.init(id: "MyRoomID", hasOngoingCall: false)),
+                            initialSelectedPinnedEventID: nil,
+                            ongoingCallRoomIDPublisher: .init(.init(nil)),
+                            appSettings: AppSettings(),
+                            appHooks: AppHooks(),
+                            analyticsService: ServiceLocator.shared.analytics,
+                            userIndicatorController: ServiceLocator.shared.userIndicatorController)
+    }
+}
+
+private actor PendingInitialPrivacyModeService: PrivacyModeServiceProtocol {
+    private var initialLoadContinuation: CheckedContinuation<Result<Bool, PrivacyModeServiceError>, Never>?
+    private var initialLoadStarted = false
+
+    func load(roomID: String) async -> Result<Bool, PrivacyModeServiceError> {
+        initialLoadStarted = true
+        return await withCheckedContinuation { continuation in
+            initialLoadContinuation = continuation
+        }
+    }
+
+    func toggle(roomID: String) -> Result<Bool, PrivacyModeServiceError> {
+        .success(true)
+    }
+
+    func cachedValue(roomID: String) -> Bool? {
+        nil
+    }
+
+    func waitUntilLoadStarts() async throws {
+        for _ in 0..<100 where !initialLoadStarted {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(initialLoadStarted)
+    }
+
+    func resolveInitialLoad(with result: Result<Bool, PrivacyModeServiceError>) {
+        initialLoadContinuation?.resume(returning: result)
+        initialLoadContinuation = nil
     }
 }

@@ -22,6 +22,8 @@ class RoomScreenViewModel: RoomScreenViewModelType, RoomScreenViewModelProtocol 
     private let analyticsService: AnalyticsService
     private let userIndicatorController: UserIndicatorControllerProtocol
     private var privacyModeServiceValue = false
+    private var privacyModeOperationGeneration = 0
+    private var privacyModeOperationTask: Task<Void, Never>?
     private let elementCallService: ElementCallServiceProtocol?
 
     private var initialSelectedPinnedEventID: String?
@@ -197,9 +199,7 @@ class RoomScreenViewModel: RoomScreenViewModelType, RoomScreenViewModelProtocol 
             }
             .store(in: &cancellables)
 
-        Task { [weak self] in
-            await self?.syncJunchatPrivacyModeState()
-        }
+        syncJunchatPrivacyModeState()
 
         roomProxy.infoPublisher
             .receive(on: DispatchQueue.main)
@@ -397,31 +397,53 @@ class RoomScreenViewModel: RoomScreenViewModelType, RoomScreenViewModelProtocol 
     }
 
     private func togglePrivacyMode() {
-        Task { [weak self] in
+        let generation = beginPrivacyModeOperation()
+        privacyModeOperationTask = Task { [weak self] in
             guard let self else { return }
 
             switch await privacyModeService.toggle(roomID: roomProxy.id) {
             case .success(let enabled):
+                guard !Task.isCancelled else { return }
                 await MainActor.run {
+                    guard generation == self.privacyModeOperationGeneration else { return }
                     self.privacyModeServiceValue = enabled
                     self.state.isPrivacyModeEnabled = self.appSettings.junchatEmergencyPrivacyModeEnabled || enabled
                 }
             case .failure:
+                guard !Task.isCancelled else { return }
+                let isLatestOperation = await MainActor.run { generation == self.privacyModeOperationGeneration }
+                guard isLatestOperation else { return }
                 userIndicatorController.submitIndicator(.init(id: Self.errorIndicatorIdentifier, type: .toast, title: L10n.errorUnknown))
             }
         }
     }
 
-    private func syncJunchatPrivacyModeState() async {
-        switch await privacyModeService.load(roomID: roomProxy.id) {
-        case .success(let enabled):
-            await MainActor.run {
-                privacyModeServiceValue = enabled
-                state.isPrivacyModeEnabled = appSettings.junchatEmergencyPrivacyModeEnabled || enabled
+    private func syncJunchatPrivacyModeState() {
+        let generation = beginPrivacyModeOperation()
+        privacyModeOperationTask = Task { [weak self] in
+            guard let self else { return }
+
+            let enabled: Bool?
+            switch await privacyModeService.load(roomID: roomProxy.id) {
+            case .success(let loadedValue):
+                enabled = loadedValue
+            case .failure:
+                enabled = await privacyModeService.cachedValue(roomID: roomProxy.id)
             }
-        case .failure:
-            break
+
+            guard let enabled, !Task.isCancelled else { return }
+            await MainActor.run {
+                guard generation == self.privacyModeOperationGeneration else { return }
+                self.privacyModeServiceValue = enabled
+                self.state.isPrivacyModeEnabled = self.appSettings.junchatEmergencyPrivacyModeEnabled || enabled
+            }
         }
+    }
+
+    private func beginPrivacyModeOperation() -> Int {
+        privacyModeOperationTask?.cancel()
+        privacyModeOperationGeneration += 1
+        return privacyModeOperationGeneration
     }
 
     private func setupPinnedEventsTimelineItemProviderIfNeeded() {

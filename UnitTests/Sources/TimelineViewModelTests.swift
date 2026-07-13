@@ -792,6 +792,76 @@ final class TimelineViewModelTests {
     }
 
     @Test
+    func privacyAuthorityResolvesBeforeSendingMessagesAndReplies() async throws {
+        let recorder = PrivacyModeSendOrderRecorder()
+        let privacyModeService = PrivacyModeSendOrderService(recorder: recorder)
+        let timelineController = PrivacyModeSendOrderTimelineController(recorder: recorder)
+        let viewModel = makeViewModel(timelineController: timelineController,
+                                      privacyModeService: privacyModeService,
+                                      appSettings: AppSettings())
+
+        viewModel.process(composerAction: .sendMessage(plain: "message",
+                                                       html: nil,
+                                                       mode: .default,
+                                                       intentionalMentions: .init(userIDs: [], atRoom: false)))
+        try await recorder.waitForEventCount(2)
+
+        viewModel.process(composerAction: .sendMessage(plain: "reply",
+                                                       html: nil,
+                                                       mode: .reply(eventID: "event-id",
+                                                                    replyDetails: .notLoaded(eventID: "event-id"),
+                                                                    isThread: false),
+                                                       intentionalMentions: .init(userIDs: [], atRoom: false)))
+        try await recorder.waitForEventCount(4)
+
+        #expect(await recorder.events == ["privacy-load", "send", "privacy-load", "reply"])
+        _ = viewModel
+    }
+
+    @Test
+    func privacyAuthorityFailureDoesNotPreventOfflineSendQueueing() async throws {
+        let recorder = PrivacyModeSendOrderRecorder()
+        let privacyModeService = PrivacyModeSendOrderService(recorder: recorder,
+                                                             loadResult: .failure(.transport(.network)))
+        let timelineController = PrivacyModeSendOrderTimelineController(recorder: recorder)
+        let viewModel = makeViewModel(timelineController: timelineController,
+                                      privacyModeService: privacyModeService,
+                                      appSettings: AppSettings())
+
+        viewModel.process(composerAction: .sendMessage(plain: "offline message",
+                                                       html: nil,
+                                                       mode: .default,
+                                                       intentionalMentions: .init(userIDs: [], atRoom: false)))
+        try await recorder.waitForEventCount(2)
+
+        #expect(await recorder.events == ["privacy-load", "send"])
+        #expect(timelineController.timelineItems.count == 1)
+        _ = viewModel
+    }
+
+    @Test
+    func emergencyOverrideStillPerformsPreSendAuthorityMigration() async throws {
+        let recorder = PrivacyModeSendOrderRecorder()
+        let privacyModeService = PrivacyModeSendOrderService(recorder: recorder,
+                                                             loadResult: .success(false))
+        let timelineController = PrivacyModeSendOrderTimelineController(recorder: recorder)
+        let appSettings = AppSettings()
+        appSettings.junchatEmergencyPrivacyModeEnabled = true
+        let viewModel = makeViewModel(timelineController: timelineController,
+                                      privacyModeService: privacyModeService,
+                                      appSettings: appSettings)
+
+        viewModel.process(composerAction: .sendMessage(plain: "emergency message",
+                                                       html: nil,
+                                                       mode: .default,
+                                                       intentionalMentions: .init(userIDs: [], atRoom: false)))
+        try await recorder.waitForEventCount(2)
+
+        #expect(await recorder.events == ["privacy-load", "send"])
+        _ = viewModel
+    }
+
+    @Test
     func bulkRedactionSelectionRedactsSelectedMessages() async throws {
         let items = [
             TextRoomTimelineItem(eventID: "bulk-1", sender: "bob"),
@@ -869,6 +939,65 @@ final class TimelineViewModelTests {
                           linkMetadataProvider: LinkMetadataProvider(),
                           timelineControllerFactory: TimelineControllerFactoryMock(.init()),
                           privacyMessageLifetime: privacyMessageLifetime)
+    }
+}
+
+private actor PrivacyModeSendOrderRecorder {
+    private(set) var events = [String]()
+
+    func record(_ event: String) {
+        events.append(event)
+    }
+
+    func waitForEventCount(_ count: Int) async throws {
+        for _ in 0..<100 where events.count < count {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(events.count == count)
+    }
+}
+
+private actor PrivacyModeSendOrderService: PrivacyModeServiceProtocol {
+    private let recorder: PrivacyModeSendOrderRecorder
+    private let loadResult: Result<Bool, PrivacyModeServiceError>
+
+    init(recorder: PrivacyModeSendOrderRecorder,
+         loadResult: Result<Bool, PrivacyModeServiceError> = .success(true)) {
+        self.recorder = recorder
+        self.loadResult = loadResult
+    }
+
+    func load(roomID: String) async -> Result<Bool, PrivacyModeServiceError> {
+        await recorder.record("privacy-load")
+        return loadResult
+    }
+
+    func toggle(roomID: String) -> Result<Bool, PrivacyModeServiceError> {
+        .success(false)
+    }
+
+    func cachedValue(roomID: String) -> Bool? {
+        true
+    }
+}
+
+private final class PrivacyModeSendOrderTimelineController: MockTimelineController {
+    private let recorder: PrivacyModeSendOrderRecorder
+
+    init(recorder: PrivacyModeSendOrderRecorder) {
+        self.recorder = recorder
+        super.init(timelineItems: [])
+    }
+
+    override func sendMessage(_ message: String,
+                              html: String?,
+                              inReplyToEventID: String?,
+                              intentionalMentions: IntentionalMentions) async {
+        await recorder.record(inReplyToEventID == nil ? "send" : "reply")
+        await super.sendMessage(message,
+                                html: html,
+                                inReplyToEventID: inReplyToEventID,
+                                intentionalMentions: intentionalMentions)
     }
 }
 

@@ -78,6 +78,7 @@
 		09693596AA3CA4E598C0D2F1 /* ThreadTimelineScreenCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73FEE625AB52042049DB9268 /* ThreadTimelineScreenCoordinator.swift */; };
 		09713669577CDA8D012EE380 /* MatrixRustSDK in Frameworks */ = {isa = PBXBuildFile; productRef = 6647C55D93508C7CE9D954A5 /* MatrixRustSDK */; };
 		09D3D7D115318CAD131B4FE7 /* ResolveVerifiedUserSendFailureScreenViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57084488B03BDB33C7B7CA0E /* ResolveVerifiedUserSendFailureScreenViewModelTests.swift */; };
+		09D5C27BA4F131615CB8A96C /* PrivacyModeOperationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4ED2DC674968846B891E7BA7 /* PrivacyModeOperationCoordinator.swift */; };
 		09E1A358EA4205480AEF4698 /* AdvancedSettingsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = F229480685F30BCB96C439EC /* AdvancedSettingsScreen.swift */; };
 		0AB4FF7645175FF1F6E942CC /* DeferredFulfillment.swift in Sources */ = {isa = PBXBuildFile; fileRef = B91AD590B0B40718A0AA0C61 /* DeferredFulfillment.swift */; };
 		0ACAA31FD0399CEEBA3ECC21 /* UserDetailsEditScreenViewModelProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85149F56BA333619900E2410 /* UserDetailsEditScreenViewModelProtocol.swift */; };
@@ -2144,6 +2145,7 @@
 		4E600B315B920B9687F8EE1B /* ComposerDraftServiceMock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerDraftServiceMock.swift; sourceTree = "<group>"; };
 		4E625B0EB2F86B37C14EF7E6 /* SettingsScreenViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsScreenViewModel.swift; sourceTree = "<group>"; };
 		4E7F7A975514E850A834B29F /* PaginationIndicatorRoomTimelineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaginationIndicatorRoomTimelineView.swift; sourceTree = "<group>"; };
+		4ED2DC674968846B891E7BA7 /* PrivacyModeOperationCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacyModeOperationCoordinator.swift; sourceTree = "<group>"; };
 		4F5F0662483ED69791D63B16 /* et */ = {isa = PBXFileReference; lastKnownFileType = text.plist.stringsdict; name = et; path = et.lproj/Localizable.stringsdict; sourceTree = "<group>"; };
 		4F75EF13F49DD2204E760910 /* FileRoomTimelineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileRoomTimelineView.swift; sourceTree = "<group>"; };
 		4FA29BAE9B0F2D90E57B261C /* UserSessionFlowCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserSessionFlowCoordinatorTests.swift; sourceTree = "<group>"; };
@@ -3598,6 +3600,7 @@
 			children = (
 				9F479B1CBEDE48421AF0D5B3 /* PrivacyModeHTTPTransport.swift */,
 				69D0E21E36999B9AD6E1C86A /* PrivacyModeMigrationStore.swift */,
+				4ED2DC674968846B891E7BA7 /* PrivacyModeOperationCoordinator.swift */,
 				92ED02C35A33E166C5167E61 /* PrivacyModeService.swift */,
 				EDE4A2623B609FB8D6F8C342 /* PrivacyModeServiceProtocol.swift */,
 			);
@@ -9012,6 +9015,7 @@
 				BDCF42966007770A33D90E15 /* PreviewScrollView.swift in Sources */,
 				7F3CB7838DC58FAD23FE15AC /* PrivacyModeHTTPTransport.swift in Sources */,
 				FF1FBBF3818A0EE54E008AF6 /* PrivacyModeMigrationStore.swift in Sources */,
+				09D5C27BA4F131615CB8A96C /* PrivacyModeOperationCoordinator.swift in Sources */,
 				B5293948264FB431E010C072 /* PrivacyModeService.swift in Sources */,
 				96D8A222B2308CAAFA37A6E3 /* PrivacyModeServiceMock.swift in Sources */,
 				417D785F9A9A25E70577AFBE /* PrivacyModeServiceProtocol.swift in Sources */,

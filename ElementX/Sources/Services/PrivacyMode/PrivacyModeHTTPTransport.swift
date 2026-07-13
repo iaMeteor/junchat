@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import MatrixRustSDK
 
 struct PrivacyModeHTTPTransport: PrivacyModeTransportProtocol {
     private struct ResponseData {
@@ -20,32 +21,36 @@ struct PrivacyModeHTTPTransport: PrivacyModeTransportProtocol {
     private static let accountDataType = "com.heyujk.junchat.privacy_mode"
     private static let unreservedPathCharacters = CharacterSet.alphanumerics.union(.init(charactersIn: "-._~"))
 
-    private let homeserverURL: String
-    private let userID: String
-    private let accessToken: String
+    private let sessionProvider: @Sendable () throws -> Session
     private let urlSession: URLSession
     private let maximumResponseSize: Int
 
-    init(homeserverURL: String,
-         userID: String,
-         accessToken: String,
+    init(client: ClientProtocol,
          urlSession: URLSession = .shared,
          maximumResponseSize: Int = 4096) {
-        self.homeserverURL = homeserverURL
-        self.userID = userID
-        self.accessToken = accessToken
+        self.init(sessionProvider: { try client.session() },
+                  urlSession: urlSession,
+                  maximumResponseSize: maximumResponseSize)
+    }
+
+    init(sessionProvider: @escaping @Sendable () throws -> Session,
+         urlSession: URLSession = .shared,
+         maximumResponseSize: Int = 4096) {
+        self.sessionProvider = sessionProvider
         self.urlSession = urlSession
         self.maximumResponseSize = max(0, maximumResponseSize)
     }
 
     func load(roomID: String) async -> Result<PrivacyModeRemoteState, PrivacyModeTransportError> {
-        guard let url = accountDataURL(roomID: roomID) else {
+        let session: Session
+        do {
+            session = try sessionProvider()
+        } catch {
+            return .failure(.network)
+        }
+        guard let request = request(roomID: roomID, session: session) else {
             return .failure(.invalidURL)
         }
-
-        var request = URLRequest(url: url)
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
 
         let responseResult = await responseDataWithRetry(for: request)
         guard case .success(let responseData) = responseResult else {
@@ -65,14 +70,17 @@ struct PrivacyModeHTTPTransport: PrivacyModeTransportProtocol {
     }
 
     func setEnabled(_ enabled: Bool, roomID: String) async -> Result<Void, PrivacyModeTransportError> {
-        guard let url = accountDataURL(roomID: roomID) else {
+        let session: Session
+        do {
+            session = try sessionProvider()
+        } catch {
+            return .failure(.network)
+        }
+        guard var request = request(roomID: roomID, session: session) else {
             return .failure(.invalidURL)
         }
 
-        var request = URLRequest(url: url)
         request.httpMethod = "PUT"
-        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try? JSONEncoder().encode(Payload(enabled: enabled))
 
@@ -87,8 +95,18 @@ struct PrivacyModeHTTPTransport: PrivacyModeTransportProtocol {
         return .success(())
     }
 
-    private func accountDataURL(roomID: String) -> URL? {
-        guard var components = URLComponents(string: homeserverURL),
+    private func request(roomID: String, session: Session) -> URLRequest? {
+        guard let url = accountDataURL(roomID: roomID, session: session) else {
+            return nil
+        }
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        return request
+    }
+
+    private func accountDataURL(roomID: String, session: Session) -> URL? {
+        guard var components = URLComponents(string: session.homeserverUrl),
               ["http", "https"].contains(components.scheme?.lowercased()),
               components.host != nil,
               components.query == nil,
@@ -97,7 +115,7 @@ struct PrivacyModeHTTPTransport: PrivacyModeTransportProtocol {
         }
 
         let basePath = components.percentEncodedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        let pathComponents = [basePath, "_matrix", "client", "v3", "user", encoded(userID), "rooms", encoded(roomID), "account_data", encoded(Self.accountDataType)]
+        let pathComponents = [basePath, "_matrix", "client", "v3", "user", encoded(session.userId), "rooms", encoded(roomID), "account_data", encoded(Self.accountDataType)]
             .filter { !$0.isEmpty }
         components.percentEncodedPath = "/" + pathComponents.joined(separator: "/")
         return components.url
@@ -135,6 +153,9 @@ struct PrivacyModeHTTPTransport: PrivacyModeTransportProtocol {
             }
             return .success(.init(data: data, response: httpResponse))
         } catch {
+            if error is CancellationError || (error as? URLError)?.code == .cancelled || Task.isCancelled {
+                return .failure(.cancelled)
+            }
             return .failure(.network)
         }
     }
