@@ -268,6 +268,7 @@ class OnboardingFlowCoordinator: FlowCoordinatorProtocol {
             case .recoveryKey:
                 presentRecoveryKeyScreen()
             case .skip:
+                guard stateMachine.state == .identityConfirmation else { return }
                 appSettings.hasRunIdentityConfirmationOnboarding = true
                 stateMachine.tryEvent(.nextSkippingIdentityConfirmed)
             case .reset:

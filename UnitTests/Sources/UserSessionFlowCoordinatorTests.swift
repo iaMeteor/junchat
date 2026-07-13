@@ -125,27 +125,51 @@ struct UserSessionFlowCoordinatorTests {
         let (userDefaults, suiteName) = try makeVerificationPromptUserDefaults()
         defer { userDefaults.removePersistentDomain(forName: suiteName) }
         let decisionStore = VerificationPromptDecisionStore(userDefaults: userDefaults)
-        let legacyAppSettings = AppSettings()
-        let previousLegacyValue = legacyAppSettings.hasRunIdentityConfirmationOnboarding
-        defer { legacyAppSettings.hasRunIdentityConfirmationOnboarding = previousLegacyValue }
-        legacyAppSettings.hasRunIdentityConfirmationOnboarding = true
+        let sharedUserDefaults = AppSettings.sharedUserDefaults
+        let legacyKey = "hasRunIdentityConfirmationOnboarding"
+        let suiteLegacyObject = sharedUserDefaults.object(forKey: legacyKey)
+        defer {
+            if let suiteLegacyObject {
+                sharedUserDefaults.set(suiteLegacyObject, forKey: legacyKey)
+            } else {
+                sharedUserDefaults.removeObject(forKey: legacyKey)
+            }
+        }
+        sharedUserDefaults.removeObject(forKey: legacyKey)
 
-        #expect(makeOnboardingFlowCoordinator(userID: "@alice:example.org",
-                                              verificationState: .unverified,
-                                              appSettings: legacyAppSettings,
-                                              decisionStore: decisionStore).shouldStart)
+        do {
+            let previousLegacyObject = sharedUserDefaults.object(forKey: legacyKey)
+            defer {
+                if let previousLegacyObject {
+                    sharedUserDefaults.set(previousLegacyObject, forKey: legacyKey)
+                } else {
+                    sharedUserDefaults.removeObject(forKey: legacyKey)
+                }
+            }
 
-        decisionStore.hidePermanently(for: "@alice:example.org")
+            let legacyAppSettings = AppSettings()
+            legacyAppSettings.hasRunIdentityConfirmationOnboarding = true
+            #expect(sharedUserDefaults.object(forKey: legacyKey) as? Bool == true)
 
-        #expect(!makeOnboardingFlowCoordinator(userID: "@alice:example.org",
-                                               verificationState: .unverified,
-                                               decisionStore: decisionStore).shouldStart)
-        #expect(makeOnboardingFlowCoordinator(userID: "@bob:example.org",
-                                              verificationState: .unverified,
-                                              decisionStore: decisionStore).shouldStart)
-        #expect(!makeOnboardingFlowCoordinator(userID: "@bob:example.org",
-                                               verificationState: .verified,
-                                               decisionStore: decisionStore).shouldStart)
+            #expect(makeOnboardingFlowCoordinator(userID: "@alice:example.org",
+                                                  verificationState: .unverified,
+                                                  appSettings: legacyAppSettings,
+                                                  decisionStore: decisionStore).shouldStart)
+
+            decisionStore.hidePermanently(for: "@alice:example.org")
+
+            #expect(!makeOnboardingFlowCoordinator(userID: "@alice:example.org",
+                                                   verificationState: .unverified,
+                                                   decisionStore: decisionStore).shouldStart)
+            #expect(makeOnboardingFlowCoordinator(userID: "@bob:example.org",
+                                                  verificationState: .unverified,
+                                                  decisionStore: decisionStore).shouldStart)
+            #expect(!makeOnboardingFlowCoordinator(userID: "@bob:example.org",
+                                                   verificationState: .verified,
+                                                   decisionStore: decisionStore).shouldStart)
+        }
+
+        #expect(sharedUserDefaults.object(forKey: legacyKey) == nil)
     }
 
     @Test
@@ -166,6 +190,60 @@ struct UserSessionFlowCoordinatorTests {
 
         decisionStore.hidePermanently(for: "@alice:example.org")
         #expect(!coordinator.shouldStart)
+    }
+
+    @Test
+    func staleIdentitySkipAfterVerificationDoesNotAdvanceOnboarding() async throws {
+        let (userDefaults, suiteName) = try makeVerificationPromptUserDefaults()
+        defer { userDefaults.removePersistentDomain(forName: suiteName) }
+        let decisionStore = VerificationPromptDecisionStore(userDefaults: userDefaults)
+        let appSettings = AppSettings()
+        let sharedUserDefaults = AppSettings.sharedUserDefaults
+        let legacyKey = "hasRunIdentityConfirmationOnboarding"
+        let previousLegacyObject = sharedUserDefaults.object(forKey: legacyKey)
+        let previousAnalyticsConsentState = appSettings.analyticsConsentState
+        let previousNotificationPermissionsValue = appSettings.hasRunNotificationPermissionsOnboarding
+        defer {
+            appSettings.analyticsConsentState = previousAnalyticsConsentState
+            appSettings.hasRunNotificationPermissionsOnboarding = previousNotificationPermissionsValue
+            if let previousLegacyObject {
+                sharedUserDefaults.set(previousLegacyObject, forKey: legacyKey)
+            } else {
+                sharedUserDefaults.removeObject(forKey: legacyKey)
+            }
+        }
+
+        let securityStateSubject = CurrentValueSubject<SessionSecurityState, Never>(.init(verificationState: .unverified,
+                                                                                          recoveryState: .enabled))
+        let navigationStackCoordinator = NavigationStackCoordinator()
+        let coordinator = makeOnboardingFlowCoordinator(userID: "@alice:example.org",
+                                                        verificationState: .unverified,
+                                                        appSettings: appSettings,
+                                                        decisionStore: decisionStore,
+                                                        securityStateSubject: securityStateSubject,
+                                                        navigationStackCoordinator: navigationStackCoordinator)
+        var dismissCount = 0
+        let actionCancellable = coordinator.actions.sink { action in
+            guard case .dismiss = action else { return }
+            dismissCount += 1
+        }
+        let firstDismiss = deferFulfillment(coordinator.actions) { action in
+            if case .dismiss = action {
+                return true
+            }
+            return false
+        }
+
+        coordinator.start()
+        let staleIdentityCoordinator = try #require(navigationStackCoordinator.rootCoordinator as? IdentityConfirmationScreenCoordinator)
+        securityStateSubject.send(.init(verificationState: .verified, recoveryState: .enabled))
+        try await firstDismiss.fulfill()
+        #expect(dismissCount == 1)
+
+        staleIdentityCoordinator.send(viewAction: .skip)
+
+        #expect(dismissCount == 1)
+        withExtendedLifetime(actionCancellable) { }
     }
 
     @Test
@@ -890,18 +968,20 @@ struct UserSessionFlowCoordinatorTests {
                                                verificationState: SessionVerificationState,
                                                appSettings: AppSettings = AppSettings(),
                                                decisionStore: VerificationPromptDecisionStoreProtocol,
-                                               securityStateSubject: CurrentValueSubject<SessionSecurityState, Never>? = nil) -> OnboardingFlowCoordinator {
+                                               securityStateSubject: CurrentValueSubject<SessionSecurityState, Never>? = nil,
+                                               navigationStackCoordinator: NavigationStackCoordinator? = nil) -> OnboardingFlowCoordinator {
         appSettings.analyticsConsentState = .optedOut
         appSettings.hasRunNotificationPermissionsOnboarding = true
 
         let userSession = UserSessionMock(.init(clientProxy: ClientProxyMock(.init(userID: userID))))
         let resolvedSecurityStateSubject = securityStateSubject ?? .init(.init(verificationState: verificationState,
                                                                                recoveryState: .enabled))
+        let resolvedNavigationStackCoordinator = navigationStackCoordinator ?? NavigationStackCoordinator()
         userSession.sessionSecurityStatePublisher = resolvedSecurityStateSubject.asCurrentValuePublisher()
 
         return OnboardingFlowCoordinator(isNewLogin: false,
                                          appLockService: AppLockServiceMock(),
-                                         navigationStackCoordinator: NavigationStackCoordinator(),
+                                         navigationStackCoordinator: resolvedNavigationStackCoordinator,
                                          flowParameters: makeCommonFlowParameters(userSession: userSession,
                                                                                   appSettings: appSettings),
                                          verificationPromptDecisionStore: decisionStore)
