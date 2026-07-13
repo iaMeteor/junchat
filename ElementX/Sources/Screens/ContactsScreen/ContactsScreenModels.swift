@@ -14,11 +14,16 @@ enum ContactsScreenViewModelAction: Equatable {
 struct ContactsScreenViewState: BindableState {
     var contacts: [UserProfileProxy] = []
     var isLoading = false
+    var hasLoadError = false
     var processingUserID: String?
     var bindings = ContactsScreenViewStateBindings()
     
     var isEmpty: Bool {
-        !isLoading && contacts.isEmpty
+        !isLoading && !hasLoadError && contacts.isEmpty
+    }
+
+    var isInitialLoading: Bool {
+        isLoading && contacts.isEmpty
     }
 }
 
@@ -33,6 +38,5 @@ enum ContactsScreenViewAction {
 }
 
 enum ContactsScreenAlertType: Hashable {
-    case failedLoadingContacts
     case failedStartingChat
 }

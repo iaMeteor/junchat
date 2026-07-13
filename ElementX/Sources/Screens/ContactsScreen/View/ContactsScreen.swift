@@ -24,6 +24,9 @@ struct ContactsScreen: View {
             }
             .refreshable {
                 context.send(viewAction: .refresh)
+                while context.viewState.isLoading, !Task.isCancelled {
+                    try? await Task.sleep(for: .milliseconds(50))
+                }
             }
             .onChange(of: scenePhase) { _, newPhase in
                 guard newPhase == .active else { return }
@@ -33,8 +36,11 @@ struct ContactsScreen: View {
 
     @ViewBuilder
     private var content: some View {
-        if context.viewState.isLoading {
+        if context.viewState.isInitialLoading {
             ProgressView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if context.viewState.contacts.isEmpty, context.viewState.hasLoadError {
+            loadErrorView
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if context.viewState.isEmpty {
             Text("暂无联系人")
@@ -44,6 +50,16 @@ struct ContactsScreen: View {
         } else {
             ScrollView {
                 LazyVStack(spacing: 0) {
+                    if context.viewState.isLoading {
+                        ProgressView()
+                            .padding(.vertical, 12)
+                            .frame(maxWidth: .infinity)
+                            .accessibilityLabel("正在刷新通讯录")
+                    } else if context.viewState.hasLoadError {
+                        loadErrorView
+                            .padding(.vertical, 12)
+                    }
+
                     ForEach(context.viewState.contacts, id: \.userID) { contact in
                         ListRow(label: .avatar(title: displayTitle(for: contact),
                                                description: nil,
@@ -58,6 +74,23 @@ struct ContactsScreen: View {
             }
             .scrollIndicators(.visible)
         }
+    }
+
+    private var loadErrorView: some View {
+        VStack(spacing: 12) {
+            Text("通讯录加载失败，请稍后重试。")
+                .font(.compound.bodyMD)
+                .foregroundColor(.compound.textSecondary)
+                .multilineTextAlignment(.center)
+
+            Button("重试") {
+                context.send(viewAction: .refresh)
+            }
+            .buttonStyle(.compound(.primary, size: .medium))
+        }
+        .padding(.horizontal, 24)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.updatesFrequently)
     }
 
     private func avatar(for contact: UserProfileProxy) -> some View {

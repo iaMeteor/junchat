@@ -14,6 +14,7 @@ class ContactsScreenViewModel: ContactsScreenViewModelType, ContactsScreenViewMo
     private let userSession: UserSessionProtocol
     private let contactsService: ContactsServiceProtocol
     private let userIndicatorController: UserIndicatorControllerProtocol
+    private var contactsLoadTask: Task<Void, Never>?
     
     private let actionsSubject: PassthroughSubject<ContactsScreenViewModelAction, Never> = .init()
     var actions: AnyPublisher<ContactsScreenViewModelAction, Never> {
@@ -29,6 +30,10 @@ class ContactsScreenViewModel: ContactsScreenViewModelType, ContactsScreenViewMo
         
         super.init(initialViewState: ContactsScreenViewState(), mediaProvider: userSession.mediaProvider)
     }
+
+    deinit {
+        contactsLoadTask?.cancel()
+    }
     
     override func process(viewAction: ContactsScreenViewAction) {
         switch viewAction {
@@ -41,18 +46,23 @@ class ContactsScreenViewModel: ContactsScreenViewModelType, ContactsScreenViewMo
     }
     
     private func loadContacts() {
+        guard contactsLoadTask == nil else { return }
+
         state.isLoading = true
-        Task {
-            defer { state.isLoading = false }
-            
-            switch await contactsService.contacts() {
+        state.hasLoadError = false
+        let contactsService = contactsService
+        contactsLoadTask = Task { [weak self] in
+            let result = await contactsService.contacts()
+            guard let self, !Task.isCancelled else { return }
+
+            switch result {
             case .success(let contacts):
                 state.contacts = contacts
             case .failure:
-                state.bindings.alertInfo = .init(id: .failedLoadingContacts,
-                                                 title: L10n.commonError,
-                                                 message: "通讯录加载失败，请稍后重试。")
+                state.hasLoadError = true
             }
+            state.isLoading = false
+            contactsLoadTask = nil
         }
     }
     
