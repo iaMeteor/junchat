@@ -240,7 +240,7 @@ struct CallScreenJunchatTests {
 
     @Test
     @MainActor
-    func callEndedActionDismissesAndPlaysEndedToneOnce() async throws {
+    func callEndedActionAndSubsequentStopCleanUpOnce() async throws {
         let widgetActions = PassthroughSubject<ElementCallWidgetDriverAction, Never>()
         let widgetDriver = ElementCallWidgetDriverMock()
         widgetDriver.underlyingWidgetID = "widget"
@@ -285,6 +285,7 @@ struct CallScreenJunchatTests {
         widgetActions.send(.callEnded)
         widgetActions.send(.callEnded)
         try await Task.sleep(for: .milliseconds(100))
+        viewModel.stop()
 
         #expect(endedTonePlayCount == 1)
         #expect(dismissCount == 1)

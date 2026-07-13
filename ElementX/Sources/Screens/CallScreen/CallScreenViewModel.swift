@@ -38,6 +38,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
     private var pictureInPictureRecoveryTask: Task<Void, Never>?
 
     private var hasAppliedInitialVoiceOutputDevice = false
+    private var hasCleanedUpLocalCallState = false
     private var hasCompletedCall = false
     private var hasRequestedHangup = false
 
@@ -226,6 +227,9 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
     }
 
     private func cleanUpLocalCallState() {
+        guard !hasCleanedUpLocalCallState else { return }
+        hasCleanedUpLocalCallState = true
+
         logAudioSessionSnapshot(reason: "before call cleanup")
         timeoutTask = nil
         pictureInPictureRecoveryTask?.cancel()
