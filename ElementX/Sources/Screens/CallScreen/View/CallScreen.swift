@@ -82,7 +82,7 @@ private struct CallView: UIViewRepresentable {
 
     @MainActor
     class Coordinator: NSObject, WKUIDelegate, WKNavigationDelegate, AVPictureInPictureControllerDelegate {
-        private enum PictureInPictureDelegateEvent: Sendable {
+        private enum PictureInPictureDelegateEvent {
             case willStart
             case didStart(isActive: Bool, isSuspended: Bool)
             case failedToStart(errorDescription: String)
@@ -607,6 +607,7 @@ private struct CallView: UIViewRepresentable {
                 guard let self, let viewModelContext, !isInvalidated else { return }
                 viewModelContext.javaScriptEvaluator = self.evaluateJavaScript
                 viewModelContext.requestPictureInPictureHandler = self.requestPictureInPicture
+                viewModelContext.send(viewAction: .pictureInPictureReadinessChanged)
                 viewModelContext.stopPictureInPictureHandler = self.stopPictureInPicture
             }
 
@@ -624,8 +625,8 @@ private struct CallView: UIViewRepresentable {
             configuration.allowsPictureInPictureMediaPlayback = true
 
             let liveKitBootstrapScript = WKUserScript(source: Self.junchatLiveKitBootstrapScript(),
-                                                     injectionTime: .atDocumentStart,
-                                                     forMainFrameOnly: false)
+                                                      injectionTime: .atDocumentStart,
+                                                      forMainFrameOnly: false)
             configuration.userContentController.addUserScript(liveKitBootstrapScript)
 
             if let script = viewModelContext.viewState.script {

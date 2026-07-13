@@ -149,6 +149,8 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
             MXLog.info("Call URL changed \(CallDiagnostics.urlSummary(url))")
         case .pictureInPictureStarted:
             actionsSubject.send(.pictureInPictureStarted)
+        case .pictureInPictureReadinessChanged:
+            callMediaCoordinator.pictureInPictureReadinessChanged()
         case .navigateBack:
             Task { await handleBackwardsNavigation() }
         case .pictureInPictureWillStop:
@@ -316,6 +318,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
             case .success(let url):
                 guard !Task.isCancelled, !hasCleanedUpLocalCallState else { return }
                 state.url = url
+                callMediaCoordinator.pictureInPictureReadinessChanged()
             case .failure(let error):
                 guard !Task.isCancelled, !hasCleanedUpLocalCallState else { return }
                 MXLog.error("Failed starting ElementCall Widget Driver with \(CallDiagnostics.errorSummary(error))")
@@ -449,11 +452,14 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         let reason = recoveryAttempt.reason.rawValue
         let attempt = recoveryAttempt.attempt
         logAudioSessionSnapshot(reason: "before PiP recovery attempt \(attempt) \(reason)")
-        guard state.url != nil,
-              isPictureInPictureAllowed,
-              state.bindings.requestPictureInPictureHandler != nil else {
+        guard isPictureInPictureAllowed else {
             MXLog.info("[JunchatCall] skip picture in picture recovery reason=\(reason) attempt=\(attempt) hasURL=\(state.url != nil) hasHandler=\(state.bindings.requestPictureInPictureHandler != nil)")
             return .retry
+        }
+        guard state.url != nil,
+              state.bindings.requestPictureInPictureHandler != nil else {
+            MXLog.info("[JunchatCall] waiting for picture in picture readiness reason=\(reason) attempt=\(attempt) hasURL=\(state.url != nil) hasHandler=\(state.bindings.requestPictureInPictureHandler != nil)")
+            return .waitingForReadiness
         }
 
         switch await requestPictureInPicture() {

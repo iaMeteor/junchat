@@ -222,6 +222,41 @@ struct CallMediaCoordinatorTests {
     }
 
     @Test
+    func pictureInPictureReadinessWaitsAreBoundedAndPreserveRetryAttempts() async throws {
+        let coordinator = CallMediaCoordinator(voiceOnly: true,
+                                               playConnectedTone: false,
+                                               audioSessionController: .init(audioSession: AudioSessionMock()),
+                                               connectedTonePlayer: { },
+                                               ringbackTonePlayer: TestCallRingbackTonePlayer(),
+                                               setProximityMonitoringEnabled: { _ in },
+                                               allowsPictureInPicture: true,
+                                               applicationStateProvider: { .background },
+                                               pictureInPictureRetryDelay: .milliseconds(1),
+                                               pictureInPictureMaxAttempts: 2,
+                                               pictureInPictureMaxReadinessWaits: 3)
+        var isReady = false
+        var readyResults = [CallPictureInPictureAttemptResult.retry, .succeeded]
+        var attempts = [CallPictureInPictureRecoveryAttempt]()
+        coordinator.startLifecycleHandling { _ in
+        } pictureInPictureAttemptHandler: { attempt in
+            attempts.append(attempt)
+            return isReady ? readyResults.removeFirst() : .waitingForReadiness
+        }
+
+        coordinator.schedulePictureInPictureRecovery(reason: .remoteMediaConnected)
+        await waitUntil { attempts.count == 3 }
+        try await Task.sleep(for: .milliseconds(20))
+
+        #expect(attempts.map(\.attempt) == [1, 1, 1])
+
+        isReady = true
+        coordinator.pictureInPictureReadinessChanged()
+        await waitUntil { readyResults.isEmpty }
+
+        #expect(attempts.map(\.attempt) == [1, 1, 1, 1, 2])
+    }
+
+    @Test
     func stopIsIdempotent() {
         let audioSession = AudioSessionMock()
         let ringbackTonePlayer = TestCallRingbackTonePlayer()
@@ -245,9 +280,9 @@ struct CallMediaCoordinatorTests {
     }
 
     private func waitUntil(_ condition: () -> Bool) async {
-        for _ in 0..<20 {
+        for _ in 0..<100 {
             guard !condition() else { return }
-            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(1))
         }
         #expect(condition())
     }

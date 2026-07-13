@@ -40,6 +40,7 @@ enum CallPictureInPictureAttemptResult: Equatable {
     case succeeded
     case retry
     case waitingForTransition
+    case waitingForReadiness
 }
 
 typealias CallMediaLifecycleEventHandler = @MainActor (CallMediaLifecycleEvent) async -> Void
@@ -118,6 +119,7 @@ protocol CallMediaCoordinatorProtocol: AnyObject {
     func handleMediaServicesReset()
     @discardableResult func remoteMediaConnected() -> Bool
     func schedulePictureInPictureRecovery(reason: CallMediaRecoveryReason, forceFirstAttempt: Bool)
+    func pictureInPictureReadinessChanged()
     func stop()
 }
 
@@ -129,6 +131,16 @@ extension CallMediaCoordinatorProtocol {
 
 @MainActor
 final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
+    private struct PictureInPictureRecoveryState {
+        let id = UUID()
+        let reason: CallMediaRecoveryReason
+        let forceFirstAttempt: Bool
+        var attempt = 1
+        var transitionWaits = 0
+        var readinessWaits = 0
+        var isWaitingForReadiness = false
+    }
+
     private let voiceOnly: Bool
     private let playConnectedTone: Bool
     private let audioSessionController: CallAudioSessionController
@@ -141,6 +153,7 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
     private let pictureInPictureRetryDelay: Duration
     private let pictureInPictureMaxAttempts: Int
     private let pictureInPictureMaxTransitionWaits: Int
+    private let pictureInPictureMaxReadinessWaits: Int
 
     private(set) var selectedOutput = CallAudioOutputSelection.nativeEarpiece
     private(set) var currentAudioEnabled = true
@@ -155,6 +168,9 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
     private var routeRecoveryTask: Task<Void, Never>?
     private var lifecycleRecoveryTask: Task<Void, Never>?
     private var pictureInPictureRecoveryTask: Task<Void, Never>?
+    private var pictureInPictureRecoveryTaskID: UUID?
+    private var pictureInPictureRecoveryState: PictureInPictureRecoveryState?
+    private var pictureInPictureReadinessVersion = 0
 
     init(voiceOnly: Bool,
          playConnectedTone: Bool,
@@ -167,7 +183,8 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
          applicationStateProvider: @escaping @MainActor () -> UIApplication.State = { UIApplication.shared.applicationState },
          pictureInPictureRetryDelay: Duration = .milliseconds(350),
          pictureInPictureMaxAttempts: Int = 6,
-         pictureInPictureMaxTransitionWaits: Int = 30) {
+         pictureInPictureMaxTransitionWaits: Int = 30,
+         pictureInPictureMaxReadinessWaits: Int = 30) {
         self.voiceOnly = voiceOnly
         self.playConnectedTone = playConnectedTone
         self.audioSessionController = audioSessionController
@@ -180,6 +197,7 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
         self.pictureInPictureRetryDelay = pictureInPictureRetryDelay
         self.pictureInPictureMaxAttempts = pictureInPictureMaxAttempts
         self.pictureInPictureMaxTransitionWaits = pictureInPictureMaxTransitionWaits
+        self.pictureInPictureMaxReadinessWaits = max(1, pictureInPictureMaxReadinessWaits)
     }
 
     func startLifecycleHandling(eventHandler: @escaping CallMediaLifecycleEventHandler,
@@ -277,10 +295,23 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
     func schedulePictureInPictureRecovery(reason: CallMediaRecoveryReason, forceFirstAttempt: Bool) {
         guard !hasStopped, allowsPictureInPicture, pictureInPictureAttemptHandler != nil else { return }
 
-        pictureInPictureRecoveryTask?.cancel()
-        pictureInPictureRecoveryTask = Task { @MainActor [weak self] in
-            await self?.recoverPictureInPicture(reason: reason, forceFirstAttempt: forceFirstAttempt)
+        pictureInPictureRecoveryState = .init(reason: reason, forceFirstAttempt: forceFirstAttempt)
+        startPictureInPictureRecoveryTask()
+    }
+
+    func pictureInPictureReadinessChanged() {
+        guard !hasStopped, allowsPictureInPicture else { return }
+
+        pictureInPictureReadinessVersion &+= 1
+        guard var recoveryState = pictureInPictureRecoveryState,
+              recoveryState.isWaitingForReadiness else {
+            return
         }
+
+        recoveryState.readinessWaits = 0
+        recoveryState.isWaitingForReadiness = false
+        pictureInPictureRecoveryState = recoveryState
+        startPictureInPictureRecoveryTask()
     }
 
     func stop() {
@@ -294,6 +325,8 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
         lifecycleRecoveryTask = nil
         pictureInPictureRecoveryTask?.cancel()
         pictureInPictureRecoveryTask = nil
+        pictureInPictureRecoveryTaskID = nil
+        pictureInPictureRecoveryState = nil
         lifecycleEventHandler = nil
         pictureInPictureAttemptHandler = nil
         audioSessionController.deactivateAfterCall()
@@ -372,35 +405,94 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
         }
     }
 
-    private func recoverPictureInPicture(reason: CallMediaRecoveryReason, forceFirstAttempt: Bool) async {
+    private func startPictureInPictureRecoveryTask() {
+        guard let recoveryState = pictureInPictureRecoveryState else { return }
+
+        pictureInPictureRecoveryTask?.cancel()
+        let taskID = UUID()
+        pictureInPictureRecoveryTaskID = taskID
+        pictureInPictureRecoveryTask = Task { @MainActor [weak self] in
+            await self?.recoverPictureInPicture(recoveryID: recoveryState.id, taskID: taskID)
+        }
+    }
+
+    private func recoverPictureInPicture(recoveryID: UUID, taskID: UUID) async {
+        defer {
+            if pictureInPictureRecoveryTaskID == taskID {
+                pictureInPictureRecoveryTask = nil
+                pictureInPictureRecoveryTaskID = nil
+            }
+        }
+
         guard let pictureInPictureAttemptHandler else { return }
 
-        var attempt = 1
-        var transitionWaits = 0
-        recoveryLoop: while attempt <= pictureInPictureMaxAttempts {
-            guard !Task.isCancelled, !hasStopped else { return }
+        while true {
+            guard !Task.isCancelled,
+                  !hasStopped,
+                  var recoveryState = pictureInPictureRecoveryState,
+                  recoveryState.id == recoveryID else {
+                return
+            }
 
             let applicationState = applicationStateProvider()
-            guard applicationState != .active || (forceFirstAttempt && attempt == 1) else { return }
+            guard applicationState != .active || (recoveryState.forceFirstAttempt && recoveryState.attempt == 1) else {
+                pictureInPictureRecoveryState = nil
+                return
+            }
 
-            switch await pictureInPictureAttemptHandler(.init(reason: reason, attempt: attempt)) {
+            let readinessVersion = pictureInPictureReadinessVersion
+            let result = await pictureInPictureAttemptHandler(.init(reason: recoveryState.reason,
+                                                                    attempt: recoveryState.attempt))
+            guard !Task.isCancelled,
+                  !hasStopped,
+                  pictureInPictureRecoveryState?.id == recoveryID else {
+                return
+            }
+
+            switch result {
             case .succeeded:
+                pictureInPictureRecoveryState = nil
                 return
             case .retry:
-                attempt += 1
-                transitionWaits = 0
+                recoveryState.attempt += 1
+                recoveryState.transitionWaits = 0
+                recoveryState.readinessWaits = 0
+                recoveryState.isWaitingForReadiness = false
+                guard recoveryState.attempt <= pictureInPictureMaxAttempts else {
+                    pictureInPictureRecoveryState = nil
+                    MXLog.warning("[JunchatCall] unable to recover call picture in picture while inactive reason=\(recoveryState.reason.rawValue)")
+                    return
+                }
             case .waitingForTransition:
-                transitionWaits += 1
-                guard transitionWaits <= pictureInPictureMaxTransitionWaits else {
-                    break recoveryLoop
+                recoveryState.transitionWaits += 1
+                recoveryState.readinessWaits = 0
+                recoveryState.isWaitingForReadiness = false
+                guard recoveryState.transitionWaits <= pictureInPictureMaxTransitionWaits else {
+                    pictureInPictureRecoveryState = nil
+                    MXLog.warning("[JunchatCall] unable to recover call picture in picture while inactive reason=\(recoveryState.reason.rawValue)")
+                    return
+                }
+            case .waitingForReadiness:
+                recoveryState.transitionWaits = 0
+                recoveryState.isWaitingForReadiness = true
+
+                if readinessVersion != pictureInPictureReadinessVersion {
+                    recoveryState.readinessWaits = 0
+                    recoveryState.isWaitingForReadiness = false
+                    pictureInPictureRecoveryState = recoveryState
+                    continue
+                }
+
+                recoveryState.readinessWaits += 1
+                pictureInPictureRecoveryState = recoveryState
+                guard recoveryState.readinessWaits < pictureInPictureMaxReadinessWaits else {
+                    MXLog.info("[JunchatCall] waiting for picture in picture readiness reason=\(recoveryState.reason.rawValue) attempt=\(recoveryState.attempt)")
+                    return
                 }
             }
 
-            guard attempt <= pictureInPictureMaxAttempts else { break }
+            pictureInPictureRecoveryState = recoveryState
             try? await Task.sleep(for: pictureInPictureRetryDelay)
         }
-
-        guard !Task.isCancelled, !hasStopped else { return }
-        MXLog.warning("[JunchatCall] unable to recover call picture in picture while inactive reason=\(reason.rawValue)")
     }
 }

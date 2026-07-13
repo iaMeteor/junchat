@@ -555,6 +555,67 @@ struct CallScreenJunchatTests {
 
     @Test
     @MainActor
+    func pictureInPictureRecoveryResumesAsURLAndRequestHandlerBecomeReady() async throws {
+        let widgetDriver = ElementCallWidgetDriverMock()
+        widgetDriver.underlyingWidgetID = "widget"
+        widgetDriver.underlyingMessagePublisher = .init()
+        widgetDriver.underlyingActions = Empty().eraseToAnyPublisher()
+        var releaseStart: CheckedContinuation<Result<URL, ElementCallWidgetDriverError>, Never>?
+        widgetDriver.startBaseURLClientIDColorSchemeVoiceOnlyRageshakeURLAnalyticsConfigurationClosure = { _, _, _, _, _, _ in
+            await withCheckedContinuation { releaseStart = $0 }
+        }
+
+        let roomProxy = JoinedRoomProxyMock(.init(id: "room-id", name: "Call Room"))
+        roomProxy.elementCallWidgetDriverDeviceIDReturnValue = widgetDriver
+        let appSettings = AppSettings()
+        let callMediaCoordinator = CallMediaCoordinator(voiceOnly: true,
+                                                        playConnectedTone: false,
+                                                        audioSessionController: .init(audioSession: AudioSessionMock()),
+                                                        connectedTonePlayer: { },
+                                                        ringbackTonePlayer: CallRingbackTonePlayerMock(),
+                                                        setProximityMonitoringEnabled: { _ in },
+                                                        allowsPictureInPicture: true,
+                                                        applicationStateProvider: { .background },
+                                                        pictureInPictureRetryDelay: .milliseconds(1),
+                                                        pictureInPictureMaxAttempts: 1,
+                                                        pictureInPictureMaxReadinessWaits: 1)
+        let viewModel = CallScreenViewModel(elementCallService: ElementCallServiceMock(.init()),
+                                            configuration: .init(roomProxy: roomProxy,
+                                                                 clientProxy: ClientProxyMock(.init(deviceID: "device-id")),
+                                                                 clientID: "com.heyujk.junchat",
+                                                                 elementCallBaseURL: URL.homeDirectory,
+                                                                 elementCallBaseURLOverride: nil,
+                                                                 voiceOnly: true,
+                                                                 colorScheme: .dark),
+                                            allowPictureInPicture: true,
+                                            appHooks: AppHooks(),
+                                            appSettings: appSettings,
+                                            analyticsService: AnalyticsService(client: AnalyticsClientMock(), appSettings: appSettings),
+                                            callConnectedTonePlayer: { },
+                                            callEndedTonePlayer: { },
+                                            callMediaCoordinator: callMediaCoordinator)
+
+        await waitUntil { releaseStart != nil }
+        callMediaCoordinator.schedulePictureInPictureRecovery(reason: .remoteMediaConnected)
+        try await Task.sleep(for: .milliseconds(20))
+
+        releaseStart?.resume(returning: .success(.userDirectory))
+        await waitUntil { viewModel.context.viewState.url != nil }
+
+        var pictureInPictureRequests = 0
+        viewModel.context.requestPictureInPictureHandler = {
+            pictureInPictureRequests += 1
+            return .success(())
+        }
+        viewModel.process(viewAction: .pictureInPictureReadinessChanged)
+        await waitUntil { pictureInPictureRequests == 1 }
+
+        #expect(pictureInPictureRequests == 1)
+        viewModel.stop()
+    }
+
+    @Test
+    @MainActor
     func failedBackNavigationPictureInPictureKeepsCallVisible() async throws {
         let widgetDriver = ElementCallWidgetDriverMock()
         widgetDriver.underlyingWidgetID = "widget"
@@ -725,6 +786,17 @@ struct CallScreenJunchatTests {
     private func jsonObject(_ string: String) throws -> [String: Any] {
         let data = try #require(string.data(using: .utf8))
         return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    @MainActor
+    private func waitUntil(_ condition: () -> Bool,
+                           sourceLocation: SourceLocation = #_sourceLocation) async {
+        for _ in 0..<100 {
+            guard !condition() else { return }
+            await Task.yield()
+        }
+
+        #expect(condition(), sourceLocation: sourceLocation)
     }
 }
 
