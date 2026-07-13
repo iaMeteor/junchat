@@ -618,6 +618,12 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
         endedCallDismissalWorkItem?.cancel()
         endedCallDismissalWorkItem = nil
 
+        if presentedCallScreenRoomID == configuration.callRoomID, isCallScreenOverlayPresented {
+            MXLog.info("Returning to call while setup is in progress.")
+            callScreenCoordinator?.stopPictureInPicture()
+            return
+        }
+
         if flowParameters.ongoingCallRoomIDPublisher.value == configuration.callRoomID {
             if isCallScreenOverlayPresented {
                 MXLog.info("Returning to existing call.")

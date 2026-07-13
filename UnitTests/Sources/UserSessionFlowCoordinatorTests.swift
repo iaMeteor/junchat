@@ -205,6 +205,22 @@ struct UserSessionFlowCoordinatorTests {
     }
 
     @Test
+    mutating func repeatedSameRoomCallPresentationDuringSetupReusesTheOverlay() async throws {
+        userSessionFlowCoordinator.handleAppRoute(.call(roomID: "1", isVoiceCall: true), animated: false)
+        try await waitUntil { callScreenCoordinatorFactory.makeCount == 1 }
+        let firstCoordinator = tabCoordinator?.overlayCoordinator
+
+        #expect(ongoingCallRoomIDSubject.value == nil)
+        #expect(firstCoordinator != nil)
+
+        userSessionFlowCoordinator.handleAppRoute(.call(roomID: "1", isVoiceCall: true), animated: false)
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(callScreenCoordinatorFactory.makeCount == 1)
+        #expect(tabCoordinator?.overlayCoordinator === firstCoordinator)
+    }
+
+    @Test
     mutating func callScreenIsDismissedWhenOnlyOwnCallMembershipRemains() async throws {
         userSessionFlowCoordinator.handleAppRoute(.call(roomID: "1", isVoiceCall: true), animated: false)
         try await Task.sleep(for: .milliseconds(100))
@@ -508,9 +524,11 @@ struct UserSessionFlowCoordinatorTests {
 @MainActor
 private final class CallScreenCoordinatorTestFactory {
     var override: (any CallScreenCoordinatorProtocol)?
+    private(set) var makeCount = 0
 
     func make(parameters: CallScreenCoordinatorParameters) -> any CallScreenCoordinatorProtocol {
-        override ?? CallScreenCoordinator(parameters: parameters)
+        makeCount += 1
+        return override ?? CallScreenCoordinator(parameters: parameters)
     }
 }
 
