@@ -91,6 +91,22 @@ final class NotificationContentCompletionRegistry: @unchecked Sendable {
     }
 }
 
+final class NSEFirstNotificationTracker: @unchecked Sendable {
+    private let lock = NSLock()
+    private var hasClaimedFirstNotification = false
+
+    func claim() -> Bool {
+        lock.withLock {
+            guard !hasClaimedFirstNotification else {
+                return false
+            }
+
+            hasClaimedFirstNotification = true
+            return true
+        }
+    }
+}
+
 enum NSERequestPolicy {
     enum Action: Equatable {
         case deliverOfflineNotification
@@ -101,11 +117,13 @@ enum NSERequestPolicy {
         case process(roomID: String, eventID: String, clientID: String)
     }
 
-    static func action(isTargetConfigured: Bool,
-                       hasHandledFirstNotificationSinceBoot: Bool,
-                       content: UNNotificationContent) -> Action {
-        guard isTargetConfigured else {
-            return hasHandledFirstNotificationSinceBoot ? .deliverOfflineReplacement : .deliverOfflineNotification
+    static func offlineAction(firstNotificationTracker: NSEFirstNotificationTracker) -> Action {
+        firstNotificationTracker.claim() ? .deliverOfflineNotification : .deliverOfflineReplacement
+    }
+
+    static func configuredAction(shouldDeliverOffline: Bool, content: UNNotificationContent) -> Action {
+        guard !shouldDeliverOffline else {
+            return .deliverOfflineNotification
         }
 
         guard let roomID = content.roomID else {
@@ -152,9 +170,9 @@ class NotificationServiceExtension: UNNotificationServiceExtension {
 
     private static var targetConfiguration: Target.ConfigurationResult?
 
-    private static var hasHandledFirstNotificationSinceBoot = false
     private static let firstNotificationThreshold: TimeInterval = 15 * 60
     private static let notificationContentCompletions = NotificationContentCompletionRegistry()
+    private static let firstNotificationTracker = NSEFirstNotificationTracker()
 
     private let settings: CommonSettingsProtocol = AppSettings()
     private let appHooks: AppHooks
@@ -213,16 +231,19 @@ class NotificationServiceExtension: UNNotificationServiceExtension {
         let roomID: String
         let eventID: String
         let clientID: String
-        let action = NSERequestPolicy.action(isTargetConfigured: Self.targetConfiguration != nil,
-                                             hasHandledFirstNotificationSinceBoot: Self.hasHandledFirstNotificationSinceBoot,
-                                             content: request.content)
+        let isTargetConfigured = Self.targetConfiguration != nil
+        let action = if isTargetConfigured {
+            NSERequestPolicy.configuredAction(shouldDeliverOffline: shouldDeliverReceivedWhileOfflineNotification(),
+                                              content: request.content)
+        } else {
+            NSERequestPolicy.offlineAction(firstNotificationTracker: Self.firstNotificationTracker)
+        }
 
         switch action {
         case .deliverOfflineNotification:
-            // MXLog isn't configured:
+            // Don't log until the app hooks have been run:
             // swiftlint:disable:next print_deprecation
-            print("Device is locked after reboot.")
-            Self.hasHandledFirstNotificationSinceBoot = true
+            print(isTargetConfigured ? "Device is unlocked but may have missed notifications while offline." : "Device is locked after reboot.")
             let offlineCompletionContent = NSERequestPolicy.offlineCompletionContent(for: request.content)
             deliverReceivedWhileOfflineNotification(for: request)
             return completion.complete(with: offlineCompletionContent)
@@ -251,15 +272,6 @@ class NotificationServiceExtension: UNNotificationServiceExtension {
             roomID = resolvedRoomID
             eventID = resolvedEventID
             clientID = resolvedClientID
-        }
-
-        guard !shouldDeliverReceivedWhileOfflineNotification() else {
-            // Don't log until the app hooks have been run:
-            // swiftlint:disable:next print_deprecation
-            print("Device is unlocked but may have missed notifications while offline.")
-            let offlineCompletionContent = NSERequestPolicy.offlineCompletionContent(for: request.content)
-            deliverReceivedWhileOfflineNotification(for: request)
-            return completion.complete(with: offlineCompletionContent)
         }
 
         guard let credentials = keychainController.restorationTokens().first(where: { $0.restorationToken.pusherNotificationClientIdentifier == clientID }) else {
@@ -317,12 +329,9 @@ class NotificationServiceExtension: UNNotificationServiceExtension {
     /// Note that this only handles the first-boot case. When the SDK is able to compute the unread count, we should start to use the NSE,
     /// remote-notifications (content-available) and background app refreshes to fetch and deliver our notifications as a more robust solution.
     private func shouldDeliverReceivedWhileOfflineNotification() -> Bool {
-        if Self.hasHandledFirstNotificationSinceBoot {
-            // If we've already handled the first notification in this process there's no need to continue.
+        guard Self.firstNotificationTracker.claim() else {
             return false
         }
-
-        Self.hasHandledFirstNotificationSinceBoot = true
 
         guard let currentBootTime = BootDetectionManager.systemBootTime() else {
             // There's not much we can do if the boot time is unknown, so don't show the offline notification.

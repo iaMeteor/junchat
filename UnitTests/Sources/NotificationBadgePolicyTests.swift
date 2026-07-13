@@ -388,10 +388,9 @@ struct NotificationBadgePolicyTests {
     @Test
     func firstLockedOfflineRequestBypassesMissingIdentifiersWithBadgeOnlyCompletion() {
         let content = sensitiveContentWithBadge(total: 9)
+        let tracker = NSEFirstNotificationTracker()
 
-        let action = NSERequestPolicy.action(isTargetConfigured: false,
-                                             hasHandledFirstNotificationSinceBoot: false,
-                                             content: content)
+        let action = NSERequestPolicy.offlineAction(firstNotificationTracker: tracker)
         let completionContent = NSERequestPolicy.offlineCompletionContent(for: content)
 
         #expect(action == .deliverOfflineNotification)
@@ -401,10 +400,10 @@ struct NotificationBadgePolicyTests {
     @Test
     func repeatedLockedOfflineRequestBypassesMissingIdentifiersWithBadgeOnlyCompletion() {
         let content = sensitiveContentWithBadge(total: 10)
+        let tracker = NSEFirstNotificationTracker()
 
-        let action = NSERequestPolicy.action(isTargetConfigured: false,
-                                             hasHandledFirstNotificationSinceBoot: true,
-                                             content: content)
+        _ = NSERequestPolicy.offlineAction(firstNotificationTracker: tracker)
+        let action = NSERequestPolicy.offlineAction(firstNotificationTracker: tracker)
         let completionContent = NSERequestPolicy.offlineCompletionContent(for: content)
 
         #expect(action == .deliverOfflineReplacement)
@@ -415,10 +414,9 @@ struct NotificationBadgePolicyTests {
     func lockedLegacyCountOnlyRequestUsesOfflineFallbackBeforeIdentifierValidation() {
         let content = makeContent(unreadCount: 11)
         content.body = "Sensitive legacy message"
+        let tracker = NSEFirstNotificationTracker()
 
-        let action = NSERequestPolicy.action(isTargetConfigured: false,
-                                             hasHandledFirstNotificationSinceBoot: false,
-                                             content: content)
+        let action = NSERequestPolicy.offlineAction(firstNotificationTracker: tracker)
         let completionContent = NSERequestPolicy.offlineCompletionContent(for: content)
 
         #expect(action == .deliverOfflineNotification)
@@ -428,29 +426,50 @@ struct NotificationBadgePolicyTests {
     }
 
     @Test
+    func configuredBootFallbackPrecedesMissingIdentifiers() {
+        let content = sensitiveContentWithBadge(total: 12)
+
+        let action = NSERequestPolicy.configuredAction(shouldDeliverOffline: true, content: content)
+        let completionContent = NSERequestPolicy.offlineCompletionContent(for: content)
+
+        #expect(action == .deliverOfflineNotification)
+        expectBadgeOnlyCompletion(completionContent, total: 12)
+    }
+
+    @Test
+    func firstNotificationTrackerAllowsOnlyOneConcurrentClaim() {
+        let tracker = NSEFirstNotificationTracker()
+        let claims = LockedBadgeRecorder()
+
+        DispatchQueue.concurrentPerform(iterations: 64) { _ in
+            if tracker.claim() {
+                claims.append(NSNumber(value: 1))
+            }
+        }
+
+        #expect(claims.badges == [1])
+    }
+
+    @Test
     func configuredRequestsKeepRoomEventClientValidationOrder() {
         let content = makeContent()
 
-        #expect(NSERequestPolicy.action(isTargetConfigured: true,
-                                       hasHandledFirstNotificationSinceBoot: false,
-                                       content: content) == .missingRoomID)
+        #expect(NSERequestPolicy.configuredAction(shouldDeliverOffline: false,
+                                                 content: content) == .missingRoomID)
 
         content.userInfo["room_id"] = "!room:example.org"
-        #expect(NSERequestPolicy.action(isTargetConfigured: true,
-                                       hasHandledFirstNotificationSinceBoot: false,
-                                       content: content) == .missingEventID)
+        #expect(NSERequestPolicy.configuredAction(shouldDeliverOffline: false,
+                                                 content: content) == .missingEventID)
 
         content.userInfo["event_id"] = "$event"
-        #expect(NSERequestPolicy.action(isTargetConfigured: true,
-                                       hasHandledFirstNotificationSinceBoot: false,
-                                       content: content) == .missingClientID)
+        #expect(NSERequestPolicy.configuredAction(shouldDeliverOffline: false,
+                                                 content: content) == .missingClientID)
 
         content.userInfo["pusher_notification_client_identifier"] = "client"
-        #expect(NSERequestPolicy.action(isTargetConfigured: true,
-                                       hasHandledFirstNotificationSinceBoot: false,
-                                       content: content) == .process(roomID: "!room:example.org",
-                                                                    eventID: "$event",
-                                                                    clientID: "client"))
+        #expect(NSERequestPolicy.configuredAction(shouldDeliverOffline: false,
+                                                 content: content) == .process(roomID: "!room:example.org",
+                                                                              eventID: "$event",
+                                                                              clientID: "client"))
     }
 
     @Test
