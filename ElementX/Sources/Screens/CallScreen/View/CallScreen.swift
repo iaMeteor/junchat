@@ -739,16 +739,17 @@ private struct CallView: UIViewRepresentable {
                 guard let body = message.body as? [String: String],
                       let level = body["level"],
                       let logMessage = body["message"] else { return }
+                let summary = CallDiagnostics.textSummary(logMessage)
 
                 switch level {
                 case "log", "debug":
-                    MXLog.debug("[ElementCall]: \(logMessage)")
+                    MXLog.debug("[ElementCall] \(summary)")
                 case "info":
-                    MXLog.info("[ElementCall]: \(logMessage)")
+                    MXLog.info("[ElementCall] \(summary)")
                 case "warn":
-                    MXLog.warning("[ElementCall]: \(logMessage)")
+                    MXLog.warning("[ElementCall] \(summary)")
                 case "error":
-                    MXLog.error("[ElementCall]: \(logMessage)")
+                    MXLog.error("[ElementCall] \(summary)")
                 default:
                     break
                 }
@@ -770,11 +771,11 @@ private struct CallView: UIViewRepresentable {
         func webView(_ webView: WKWebView, decideMediaCapturePermissionsFor origin: WKSecurityOrigin, initiatedBy frame: WKFrameInfo, type: WKMediaCaptureType) async -> WKPermissionDecision {
             // Allow if the origin is local, otherwise don't allow permissions for domains different than what the call was started on
             guard origin.protocol == "file" || origin.host == url.host else {
-                MXLog.warning("[JunchatCallWebView] deny media capture type=\(String(describing: type)) origin=\(origin.protocol)://\(origin.host) expectedHost=\(url.host ?? "nil")")
+                MXLog.warning("[JunchatCallWebView] deny media capture type=\(String(describing: type)) originIsLocal=false hostMatches=false")
                 return .deny
             }
 
-            MXLog.info("[JunchatCallWebView] grant media capture type=\(String(describing: type)) origin=\(origin.protocol)://\(origin.host)")
+            MXLog.info("[JunchatCallWebView] grant media capture type=\(String(describing: type)) originIsLocal=\(origin.protocol == "file") hostMatches=\(origin.host == url.host)")
             viewModelContext?.send(viewAction: .mediaCapturePermissionGranted)
             return .grant
         }
@@ -808,7 +809,7 @@ private struct CallView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            MXLog.info("[JunchatCallWebView] didFinish url=\(webView.url?.absoluteString ?? "nil")")
+            MXLog.info("[JunchatCallWebView] didFinish \(CallDiagnostics.urlSummary(webView.url))")
             viewModelContext?.send(viewAction: .urlChanged(webView.url))
         }
 
@@ -871,7 +872,7 @@ private struct CallView: UIViewRepresentable {
 
         nonisolated func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController,
                                                     failedToStartPictureInPictureWithError error: Error) {
-            pictureInPictureDelegateEventProcessor.send(.failedToStart(errorDescription: String(describing: error)))
+            pictureInPictureDelegateEventProcessor.send(.failedToStart(errorDescription: CallDiagnostics.errorSummary(error)))
         }
 
         nonisolated func pictureInPictureControllerWillStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
@@ -964,7 +965,7 @@ private struct CallView: UIViewRepresentable {
                 MXLog.info("canEnterPip returned \(canEnterPictureInPicture)")
                 return .success(canEnterPictureInPicture)
             } catch {
-                MXLog.error("Error checking canEnterPip: \(error)")
+                MXLog.error("Error checking canEnterPip: \(CallDiagnostics.errorSummary(error))")
                 return .failure(.pictureInPictureNotAvailable)
             }
         }

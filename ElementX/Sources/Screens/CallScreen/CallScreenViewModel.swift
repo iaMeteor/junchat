@@ -96,7 +96,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
                 switch action {
                 case let .setAudioEnabled(enabled, roomID):
                     guard roomID == configuration.callRoomID else {
-                        MXLog.error("Received mute request for a different room: \(roomID) != \(configuration.callRoomID)")
+                        MXLog.error("Received mute request for a different room")
                         return
                     }
 
@@ -143,7 +143,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         switch viewAction {
         case .urlChanged(let url):
             guard let url else { return }
-            MXLog.info("URL changed to: \(url)")
+            MXLog.info("Call URL changed \(CallDiagnostics.urlSummary(url))")
         case .pictureInPictureStarted:
             actionsSubject.send(.pictureInPictureStarted)
         case .navigateBack:
@@ -151,7 +151,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         case .pictureInPictureWillStop:
             actionsSubject.send(.pictureInPictureStopped)
         case .endCall:
-            MXLog.info("[JunchatCall] end call requested by user room=\(configuration.callRoomID)")
+            MXLog.info("[JunchatCall] end call requested by user")
             requestHangup()
             completeCall()
         case .mediaCapturePermissionGranted:
@@ -171,7 +171,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
 
     func stop() {
         if hasCompletedCall {
-            MXLog.info("[JunchatCall] skip hangup on stop because call is already complete room=\(configuration.callRoomID)")
+            MXLog.info("[JunchatCall] skip hangup on stop because call is already complete")
         } else {
             requestHangup()
         }
@@ -192,7 +192,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
 
     private func requestHangup() {
         guard !hasRequestedHangup else {
-            MXLog.info("[JunchatCall] skip duplicate hangup request room=\(configuration.callRoomID)")
+            MXLog.info("[JunchatCall] skip duplicate hangup request")
             return
         }
 
@@ -223,21 +223,21 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         case .forward:
             break
         case .acknowledge(let response):
-            MXLog.info("[JunchatCall] suppress own empty call.member from widget room=\(configuration.callRoomID) device=\(deviceID)")
+            MXLog.info("[JunchatCall] suppress own empty call.member from widget")
             await postJSONToWidget(response)
             return
         }
 
         if let decodedMessage = try? DecodedWidgetMessage.decode(message: message) {
             if decodedMessage.isJunchatCallConnected {
-                MXLog.info("[JunchatCall] widget reported remote media connected room=\(configuration.callRoomID)")
+                MXLog.info("[JunchatCall] widget reported remote media connected")
                 await handleRemoteMediaConnectedIfNeeded()
                 return
             }
 
             if timeoutTask != nil, decodedMessage.hasLoaded {
                 // This means that the call room was joined succesfully, we can stop the timeout task
-                MXLog.info("[JunchatCall] widget loaded room=\(configuration.callRoomID)")
+                MXLog.info("[JunchatCall] widget loaded")
                 timeoutTask = nil
             }
         }
@@ -251,7 +251,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         case .forward(let message):
             await postJSONToWidget(message)
         case .acknowledge(let response):
-            MXLog.info("[JunchatCall] suppress own empty call.member to widget room=\(configuration.callRoomID) device=\(deviceID)")
+            MXLog.info("[JunchatCall] suppress own empty call.member to widget")
             await widgetDriver.handleMessage(response)
         }
     }
@@ -269,7 +269,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
             return
         }
 
-        MXLog.info("[JunchatCall] completeCall room=\(configuration.callRoomID)")
+        MXLog.info("[JunchatCall] completeCall")
         hasCompletedCall = true
         cleanUpLocalCallState()
         callEndedTonePlayer()
@@ -280,7 +280,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         Task { [weak self] in
             guard let self else { return }
 
-            MXLog.info("[JunchatCall] setupCall start room=\(configuration.callRoomID) voice=\(configuration.voiceOnly) playConnectedTone=\(configuration.playConnectedTone)")
+            MXLog.info("[JunchatCall] setupCall start voice=\(configuration.voiceOnly) playConnectedTone=\(configuration.playConnectedTone)")
 
             let baseURL = if let baseURLOverride = configuration.elementCallBaseURLOverride {
                 baseURLOverride
@@ -311,7 +311,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
             case .success(let url):
                 state.url = url
             case .failure(let error):
-                MXLog.error("Failed starting ElementCall Widget Driver with error: \(error)")
+                MXLog.error("Failed starting ElementCall Widget Driver with \(CallDiagnostics.errorSummary(error))")
                 state.bindings.alertInfo = .init(id: UUID(),
                                                  title: L10n.errorUnknown,
                                                  primaryButton: .init(title: L10n.actionOk) {
@@ -403,7 +403,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         case .audioRouteChanged:
             await recoverPreferredVoiceOutputOnWeb(reason: "audio route changed")
         case .lifecycleRecovery(let reason):
-            MXLog.info("[JunchatCall] recover call media after \(reason.rawValue) room=\(configuration.callRoomID)")
+            MXLog.info("[JunchatCall] recover call media after \(reason.rawValue)")
             logAudioSessionSnapshot(reason: "after lifecycle route recovery \(reason.rawValue)")
             await recoverPreferredVoiceOutputOnWeb(reason: reason.rawValue)
             guard !Task.isCancelled, !hasCleanedUpLocalCallState else { return }
@@ -415,7 +415,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
     private func handleRemoteMediaConnectedIfNeeded() async {
         guard callMediaCoordinator.remoteMediaConnected() else { return }
 
-        MXLog.info("[JunchatCall] remote media connected room=\(configuration.callRoomID)")
+        MXLog.info("[JunchatCall] remote media connected")
         logAudioSessionSnapshot(reason: "before remote media connected recovery")
         logAudioSessionSnapshot(reason: "after remote media connected recovery")
         await recoverPreferredVoiceOutputOnWeb(reason: "remote media connected")
@@ -444,17 +444,17 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         guard state.url != nil,
               isPictureInPictureAllowed,
               state.bindings.requestPictureInPictureHandler != nil else {
-            MXLog.info("[JunchatCall] skip picture in picture recovery reason=\(reason) attempt=\(attempt) hasURL=\(state.url != nil) hasHandler=\(state.bindings.requestPictureInPictureHandler != nil) room=\(configuration.callRoomID)")
+            MXLog.info("[JunchatCall] skip picture in picture recovery reason=\(reason) attempt=\(attempt) hasURL=\(state.url != nil) hasHandler=\(state.bindings.requestPictureInPictureHandler != nil)")
             return false
         }
 
         switch await requestPictureInPicture() {
         case .success:
-            MXLog.info("[JunchatCall] started picture in picture recovery reason=\(reason) attempt=\(attempt) room=\(configuration.callRoomID)")
+            MXLog.info("[JunchatCall] started picture in picture recovery reason=\(reason) attempt=\(attempt)")
             logAudioSessionSnapshot(reason: "after successful PiP recovery attempt \(attempt) \(reason)")
             return true
         case .failure(let error):
-            MXLog.warning("[JunchatCall] unable to start picture in picture recovery reason=\(reason) attempt=\(attempt) error=\(error) room=\(configuration.callRoomID)")
+            MXLog.warning("[JunchatCall] unable to start picture in picture recovery reason=\(reason) attempt=\(attempt) \(CallDiagnostics.errorSummary(error))")
             logAudioSessionSnapshot(reason: "after failed PiP recovery attempt \(attempt) \(reason)")
             return false
         }
@@ -462,9 +462,9 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
 
     private func logAudioSessionSnapshot(reason: String) {
         let session = AVAudioSession.sharedInstance()
-        let outputs = session.currentRoute.outputs.map { "\($0.portType.rawValue):\($0.portName):\($0.uid)" }.joined(separator: ",")
-        let inputs = session.currentRoute.inputs.map { "\($0.portType.rawValue):\($0.portName):\($0.uid)" }.joined(separator: ",")
-        let availableInputs = session.availableInputs?.map { "\($0.portType.rawValue):\($0.portName):\($0.uid)" }.joined(separator: ",") ?? "nil"
+        let outputs = session.currentRoute.outputs.map(\.portType.rawValue).joined(separator: ",")
+        let inputs = session.currentRoute.inputs.map(\.portType.rawValue).joined(separator: ",")
+        let availableInputs = session.availableInputs?.map(\.portType.rawValue).joined(separator: ",") ?? "nil"
         let appState = UIApplication.shared.applicationState.rawValue
         let snapshot = [
             "[JunchatCallAudio]",
@@ -480,8 +480,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
             "otherAudio=\(session.isOtherAudioPlaying)",
             "selectedNativeOutput=\(callMediaCoordinator.selectedOutput)",
             "remoteConnected=\(callMediaCoordinator.hasRemoteMediaConnected)",
-            "audioEnabled=\(callMediaCoordinator.currentAudioEnabled)",
-            "room=\(configuration.callRoomID)"
+            "audioEnabled=\(callMediaCoordinator.currentAudioEnabled)"
         ].joined(separator: " ")
         MXLog.info(snapshot)
     }
@@ -507,7 +506,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         do {
             data = try JSONEncoder().encode(message)
         } catch {
-            MXLog.error("Failed encoding widget message with error: \(error)")
+            MXLog.error("Failed encoding widget message with \(CallDiagnostics.errorSummary(error))")
             return
         }
 
@@ -523,9 +522,9 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         do {
             let message = "postMessage(\(json), '*')"
             let result = try await state.bindings.javaScriptEvaluator?(message)
-            MXLog.debug("Evaluated javascript: \(json) with result: \(String(describing: result))")
+            MXLog.debug("Evaluated widget javascript \(CallDiagnostics.jsonSummary(json)) result=\(CallDiagnostics.valueSummary(result))")
         } catch {
-            MXLog.error("Received javascript evaluation error: \(error)")
+            MXLog.error("Received javascript evaluation \(CallDiagnostics.errorSummary(error))")
         }
     }
 
@@ -557,9 +556,9 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
 
         do {
             let result = try await state.bindings.javaScriptEvaluator?(javaScript)
-            MXLog.info("[JunchatCall] recovered preferred voice output on web after \(reason) result=\(String(describing: result)) room=\(configuration.callRoomID)")
+            MXLog.info("[JunchatCall] recovered preferred voice output on web after \(reason) result=\(CallDiagnostics.valueSummary(result))")
         } catch {
-            MXLog.error("[JunchatCall] failed recovering preferred voice output on web after \(reason): \(error)")
+            MXLog.error("[JunchatCall] failed recovering preferred voice output on web after \(reason) \(CallDiagnostics.errorSummary(error))")
         }
 
         logAudioSessionSnapshot(reason: "after preferred voice output web recovery \(reason)")
@@ -585,9 +584,9 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
             if shouldApplyInitialVoiceOutputDevice {
                 hasAppliedInitialVoiceOutputDevice = true
             }
-            MXLog.debug("Evaluated audio output devices javascript with result: \(String(describing: result))")
+            MXLog.debug("Evaluated audio output devices javascript result=\(CallDiagnostics.valueSummary(result))")
         } catch {
-            MXLog.error("Received javascript evaluation error: \(error)")
+            MXLog.error("Received javascript evaluation \(CallDiagnostics.errorSummary(error))")
         }
     }
 }
