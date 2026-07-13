@@ -6,8 +6,8 @@
 // Please see LICENSE files in the repository root for full details.
 //
 
-import AVKit
 import AudioToolbox
+import AVKit
 import CallKit
 import Combine
 import SwiftUI
@@ -15,78 +15,14 @@ import UIKit
 
 typealias CallScreenViewModelType = StateStoreViewModel<CallScreenViewState, CallScreenViewAction>
 
-enum CallAudioOutputSelection {
-    case nativeEarpiece
-    case nativeSpeaker
-    case system
-}
-
-enum CallAudioRoutePolicy {
-    static func shouldEnableProximityMonitoring(voiceOnly: Bool,
-                                                selectedOutput: CallAudioOutputSelection,
-                                                remoteMediaConnected: Bool) -> Bool {
-        voiceOnly && remoteMediaConnected && selectedOutput == .nativeEarpiece
-    }
-
-    static func shouldApplyInitialVoiceOutputDevice(voiceOnly: Bool,
-                                                    selectedOutput: CallAudioOutputSelection,
-                                                    hasAppliedInitialVoiceOutputDevice: Bool,
-                                                    forcePreferInitialEarpiece: Bool,
-                                                    portType: AVAudioSession.Port) -> Bool {
-        let canUseBuiltInRoutes = portType == .builtInSpeaker || portType == .builtInReceiver
-
-        return voiceOnly &&
-            selectedOutput == .nativeEarpiece &&
-            (!hasAppliedInitialVoiceOutputDevice || forcePreferInitialEarpiece) &&
-            canUseBuiltInRoutes
-    }
-}
-
-protocol CallRingbackTonePlaying: AnyObject {
-    func start()
-    func stop()
-}
-
-final class DefaultCallRingbackTonePlayer: CallRingbackTonePlaying {
-    private var timer: Timer?
-
-    func start() {
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            guard timer == nil else { return }
-
-            playTone()
-            let timer = Timer(timeInterval: 3.0, repeats: true) { [weak self] _ in
-                self?.playTone()
-            }
-            RunLoop.main.add(timer, forMode: .common)
-            self.timer = timer
-        }
-    }
-
-    func stop() {
-        DispatchQueue.main.async { [weak self] in
-            self?.timer?.invalidate()
-            self?.timer = nil
-        }
-    }
-
-    private func playTone() {
-        AudioServicesPlaySystemSound(1151)
-    }
-}
-
 class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol {
     private let elementCallService: ElementCallServiceProtocol
     private let configuration: ElementCallConfiguration
     private let isPictureInPictureAllowed: Bool
     private let appSettings: AppSettings
     private let analyticsService: AnalyticsService
-    private let callAudioSessionController: CallAudioSessionController
-    private let callConnectedTonePlayer: () -> Void
+    private let callMediaCoordinator: CallMediaCoordinatorProtocol
     private let callEndedTonePlayer: () -> Void
-    private let callRingbackTonePlayer: CallRingbackTonePlaying
-    private let setProximityMonitoringEnabled: (Bool) -> Void
     private let applicationStateProvider: @MainActor () -> UIApplication.State
     private let deviceID: String
 
@@ -102,12 +38,8 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
     private var pictureInPictureRecoveryTask: Task<Void, Never>?
 
     private var hasAppliedInitialVoiceOutputDevice = false
-    private var hasPlayedCallConnectedTone = false
     private var hasCompletedCall = false
     private var hasRequestedHangup = false
-    private var hasRemoteMediaConnected = false
-    private var currentAudioEnabled = true
-    private var selectedNativeOutput: CallAudioOutputSelection = .nativeEarpiece
 
     /// Designated initialiser
     /// - Parameters:
@@ -126,16 +58,19 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
          callEndedTonePlayer: @escaping () -> Void = CallScreenViewModel.playDefaultCallEndedTone,
          callRingbackTonePlayer: CallRingbackTonePlaying = DefaultCallRingbackTonePlayer(),
          setProximityMonitoringEnabled: @escaping (Bool) -> Void = { UIDevice.current.isProximityMonitoringEnabled = $0 },
-         applicationStateProvider: @escaping @MainActor () -> UIApplication.State = { UIApplication.shared.applicationState }) {
+         applicationStateProvider: @escaping @MainActor () -> UIApplication.State = { UIApplication.shared.applicationState },
+         callMediaCoordinator: CallMediaCoordinatorProtocol? = nil) {
         self.elementCallService = elementCallService
         self.configuration = configuration
         self.appSettings = appSettings
         self.analyticsService = analyticsService
-        self.callAudioSessionController = callAudioSessionController
-        self.callConnectedTonePlayer = callConnectedTonePlayer
+        self.callMediaCoordinator = callMediaCoordinator ?? CallMediaCoordinator(voiceOnly: configuration.voiceOnly,
+                                                                                 playConnectedTone: configuration.playConnectedTone,
+                                                                                 audioSessionController: callAudioSessionController,
+                                                                                 connectedTonePlayer: callConnectedTonePlayer,
+                                                                                 ringbackTonePlayer: callRingbackTonePlayer,
+                                                                                 setProximityMonitoringEnabled: setProximityMonitoringEnabled)
         self.callEndedTonePlayer = callEndedTonePlayer
-        self.callRingbackTonePlayer = callRingbackTonePlayer
-        self.setProximityMonitoringEnabled = setProximityMonitoringEnabled
         self.applicationStateProvider = applicationStateProvider
         isPictureInPictureAllowed = allowPictureInPicture
 
@@ -158,7 +93,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
                         return
                     }
 
-                    currentAudioEnabled = enabled
+                    self.callMediaCoordinator.updateAudioEnabled(enabled)
                     Task {
                         await self.setAudioEnabled(enabled)
                     }
@@ -188,7 +123,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
                 case .callEnded:
                     completeCall()
                 case .mediaStateChanged(let audioEnabled, _):
-                    currentAudioEnabled = audioEnabled
+                    self.callMediaCoordinator.updateAudioEnabled(audioEnabled)
                     elementCallService.setAudioEnabled(audioEnabled, roomID: configuration.callRoomID)
                 }
             }
@@ -206,8 +141,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
             .publisher(for: AVAudioSession.interruptionNotification)
             .sink { [weak self] notification in
                 guard let self else { return }
-                callAudioSessionController.handleInterruption(notification: notification)
-                guard isAudioSessionInterruptionEnded(notification) else { return }
+                guard self.callMediaCoordinator.handleInterruption(notification) else { return }
                 recoverCallMediaAfterLifecycleEvent(reason: "audio interruption ended")
             }
             .store(in: &cancellables)
@@ -216,7 +150,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
             .publisher(for: AVAudioSession.mediaServicesWereResetNotification)
             .sink { [weak self] _ in
                 guard let self else { return }
-                callAudioSessionController.handleMediaServicesReset()
+                self.callMediaCoordinator.handleMediaServicesReset()
                 recoverCallMediaAfterLifecycleEvent(reason: "media services reset")
             }
             .store(in: &cancellables)
@@ -256,8 +190,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
             completeCall()
         case .mediaCapturePermissionGranted:
             logAudioSessionSnapshot(reason: "before media capture permission grant handling")
-            callAudioSessionController.activateForCall()
-            restoreVoiceCallNativeOutputIfNeeded()
+            callMediaCoordinator.mediaCapturePermissionGranted()
             logAudioSessionSnapshot(reason: "after media capture permission grant handling")
             Task {
                 await recoverPreferredVoiceOutputOnWeb(reason: "media capture permission granted")
@@ -297,10 +230,8 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         timeoutTask = nil
         pictureInPictureRecoveryTask?.cancel()
         pictureInPictureRecoveryTask = nil
-        callAudioSessionController.deactivateAfterCall()
+        callMediaCoordinator.stop()
         elementCallService.tearDownCallSession()
-        callRingbackTonePlayer.stop()
-        setProximityMonitoringEnabled(false)
         logAudioSessionSnapshot(reason: "after call cleanup")
     }
 
@@ -346,24 +277,12 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         }
     }
 
-    nonisolated private static func playDefaultCallConnectedTone() {
+    private nonisolated static func playDefaultCallConnectedTone() {
         AudioServicesPlaySystemSound(1104)
     }
 
-    nonisolated private static func playDefaultCallEndedTone() {
+    private nonisolated static func playDefaultCallEndedTone() {
         AudioServicesPlaySystemSound(1053)
-    }
-
-    private func playCallConnectedToneIfNeeded() {
-        callRingbackTonePlayer.stop()
-        guard configuration.playConnectedTone, !hasPlayedCallConnectedTone else {
-            MXLog.info("[JunchatCall] skip connected tone room=\(configuration.callRoomID) playConnectedTone=\(configuration.playConnectedTone) hasPlayed=\(hasPlayedCallConnectedTone)")
-            return
-        }
-
-        hasPlayedCallConnectedTone = true
-        MXLog.info("[JunchatCall] play connected tone room=\(configuration.callRoomID)")
-        callConnectedTonePlayer()
     }
 
     private func completeCall() {
@@ -422,9 +341,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
                 return
             }
 
-            startRingbackToneIfNeeded()
-            callAudioSessionController.activateForCall()
-            restoreVoiceCallNativeOutputIfNeeded()
+            callMediaCoordinator.prepareForCall()
 
             await elementCallService.setupCallSession(roomID: configuration.roomProxy.id,
                                                       roomDisplayName: configuration.roomProxy.infoPublisher.value.displayName ?? configuration.roomProxy.id)
@@ -442,8 +359,8 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         }
     }
 
-    nonisolated private static let nativeEarpieceID = "earpiece-id"
-    nonisolated private static let nativeSpeakerID = "junchat-native-speaker"
+    private nonisolated static let nativeEarpieceID = "earpiece-id"
+    private nonisolated static let nativeSpeakerID = "junchat-native-speaker"
 
     nonisolated static func junchatAudioOutputJavaScript(portType: AVAudioSession.Port,
                                                          uid: String,
@@ -474,7 +391,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         """
     }
 
-    nonisolated private static func javaScriptStringLiteral(_ value: String) -> String {
+    private nonisolated static func javaScriptStringLiteral(_ value: String) -> String {
         guard let data = try? JSONEncoder().encode(value),
               let string = String(data: data, encoding: .utf8) else {
             return "\"\""
@@ -484,94 +401,46 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
     }
 
     private func handleOutputDeviceSelected(deviceID: String) {
+        let selectedOutput: CallAudioOutputSelection
         if deviceID == Self.nativeEarpieceID {
-            selectedNativeOutput = .nativeEarpiece
+            selectedOutput = .nativeEarpiece
             MXLog.info("Selected native earpiece output")
-            callAudioSessionController.routeAudioToNativeEarpiece()
         } else if deviceID == Self.nativeSpeakerID {
-            selectedNativeOutput = .nativeSpeaker
+            selectedOutput = .nativeSpeaker
             MXLog.info("Selected native speaker output")
-            callAudioSessionController.routeAudioToSpeaker()
         } else {
-            selectedNativeOutput = .system
-            MXLog.info("Selected system output device: \(deviceID)")
+            selectedOutput = .system
+            MXLog.info("Selected system output device")
         }
 
-        applyProximityMonitoringPolicy()
-        logAudioSessionSnapshot(reason: "after output device selected \(deviceID)")
-    }
-
-    private func restoreVoiceCallNativeOutputIfNeeded() {
-        guard configuration.voiceOnly else {
-            applyProximityMonitoringPolicy()
-            return
-        }
-
-        switch selectedNativeOutput {
-        case .nativeEarpiece:
-            callAudioSessionController.routeAudioToNativeEarpiece()
-        case .nativeSpeaker:
-            callAudioSessionController.routeAudioToSpeaker()
-        case .system:
-            break
-        }
-        applyProximityMonitoringPolicy()
+        callMediaCoordinator.selectOutput(selectedOutput)
+        logAudioSessionSnapshot(reason: "after output device selected")
     }
 
     private func recoverCallMediaAfterLifecycleEvent(reason: String) {
         guard !hasCompletedCall else { return }
         MXLog.info("[JunchatCall] recover call media after \(reason) room=\(configuration.callRoomID)")
         logAudioSessionSnapshot(reason: "before lifecycle recovery \(reason)")
-        callAudioSessionController.activateForCall()
-        restoreVoiceCallNativeOutputIfNeeded()
+        callMediaCoordinator.recoverAfterLifecycleEvent()
         logAudioSessionSnapshot(reason: "after lifecycle route recovery \(reason)")
 
         Task { [weak self] in
             guard let self else { return }
             await recoverPreferredVoiceOutputOnWeb(reason: reason)
-            await setAudioEnabled(currentAudioEnabled)
+            await setAudioEnabled(callMediaCoordinator.currentAudioEnabled)
             logAudioSessionSnapshot(reason: "after lifecycle web recovery \(reason)")
             await ensurePictureInPictureForInactiveCall(reason: reason)
         }
     }
 
-    private func isAudioSessionInterruptionEnded(_ notification: Notification) -> Bool {
-        guard let rawType = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
-              let type = AVAudioSession.InterruptionType(rawValue: rawType) else {
-            return true
-        }
-
-        return type == .ended
-    }
-
     private func handleRemoteMediaConnectedIfNeeded() async {
-        guard !hasRemoteMediaConnected else {
-            return
-        }
-        hasRemoteMediaConnected = true
+        guard callMediaCoordinator.remoteMediaConnected() else { return }
+
         MXLog.info("[JunchatCall] remote media connected room=\(configuration.callRoomID)")
         logAudioSessionSnapshot(reason: "before remote media connected recovery")
-        restoreVoiceCallNativeOutputIfNeeded()
-        applyProximityMonitoringPolicy()
-        playCallConnectedToneIfNeeded()
         logAudioSessionSnapshot(reason: "after remote media connected recovery")
         await recoverPreferredVoiceOutputOnWeb(reason: "remote media connected")
         schedulePictureInPictureRecovery(reason: "remote media connected")
-    }
-
-    private func applyProximityMonitoringPolicy() {
-        setProximityMonitoringEnabled(CallAudioRoutePolicy.shouldEnableProximityMonitoring(voiceOnly: configuration.voiceOnly,
-                                                                                           selectedOutput: selectedNativeOutput,
-                                                                                           remoteMediaConnected: hasRemoteMediaConnected))
-    }
-
-    private func startRingbackToneIfNeeded() {
-        guard configuration.playConnectedTone else {
-            MXLog.info("[JunchatCall] not starting ringback room=\(configuration.callRoomID)")
-            return
-        }
-        MXLog.info("[JunchatCall] start ringback room=\(configuration.callRoomID)")
-        callRingbackTonePlayer.start()
     }
 
     private func handleBackwardsNavigation() async {
@@ -646,7 +515,24 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         let inputs = session.currentRoute.inputs.map { "\($0.portType.rawValue):\($0.portName):\($0.uid)" }.joined(separator: ",")
         let availableInputs = session.availableInputs?.map { "\($0.portType.rawValue):\($0.portName):\($0.uid)" }.joined(separator: ",") ?? "nil"
         let appState = UIApplication.shared.applicationState.rawValue
-        MXLog.info("[JunchatCallAudio] reason=\(reason) appState=\(appState) category=\(session.category.rawValue) mode=\(session.mode.rawValue) options=\(session.categoryOptions.rawValue) outputs=[\(outputs)] inputs=[\(inputs)] availableInputs=[\(availableInputs)] secondarySilenced=\(session.secondaryAudioShouldBeSilencedHint) otherAudio=\(session.isOtherAudioPlaying) selectedNativeOutput=\(selectedNativeOutput) remoteConnected=\(hasRemoteMediaConnected) audioEnabled=\(currentAudioEnabled) room=\(configuration.callRoomID)")
+        let snapshot = [
+            "[JunchatCallAudio]",
+            "reason=\(reason)",
+            "appState=\(appState)",
+            "category=\(session.category.rawValue)",
+            "mode=\(session.mode.rawValue)",
+            "options=\(session.categoryOptions.rawValue)",
+            "outputs=[\(outputs)]",
+            "inputs=[\(inputs)]",
+            "availableInputs=[\(availableInputs)]",
+            "secondarySilenced=\(session.secondaryAudioShouldBeSilencedHint)",
+            "otherAudio=\(session.isOtherAudioPlaying)",
+            "selectedNativeOutput=\(callMediaCoordinator.selectedOutput)",
+            "remoteConnected=\(callMediaCoordinator.hasRemoteMediaConnected)",
+            "audioEnabled=\(callMediaCoordinator.currentAudioEnabled)",
+            "room=\(configuration.callRoomID)"
+        ].joined(separator: " ")
+        MXLog.info(snapshot)
     }
 
     private func setAudioEnabled(_ enabled: Bool) async {
@@ -701,13 +587,13 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         await updateOutputsListOnWeb(forcePreferInitialEarpiece: true)
 
         guard configuration.voiceOnly,
-              selectedNativeOutput == .nativeEarpiece,
+              callMediaCoordinator.selectedOutput == .nativeEarpiece,
               let currentOutput = AVAudioSession.sharedInstance().currentRoute.outputs.first,
               currentOutput.portType == .builtInSpeaker || currentOutput.portType == .builtInReceiver else {
             return
         }
 
-        callAudioSessionController.routeAudioToNativeEarpiece()
+        callMediaCoordinator.restoreSelectedOutput()
         let javaScript = """
         (() => {
             if (!window.controls?.setAudioDevice) {
@@ -725,7 +611,6 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
             MXLog.error("[JunchatCall] failed recovering preferred voice output on web after \(reason): \(error)")
         }
 
-        applyProximityMonitoringPolicy()
         logAudioSessionSnapshot(reason: "after preferred voice output web recovery \(reason)")
     }
 
@@ -735,7 +620,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         }
 
         let shouldApplyInitialVoiceOutputDevice = CallAudioRoutePolicy.shouldApplyInitialVoiceOutputDevice(voiceOnly: configuration.voiceOnly,
-                                                                                                           selectedOutput: selectedNativeOutput,
+                                                                                                           selectedOutput: callMediaCoordinator.selectedOutput,
                                                                                                            hasAppliedInitialVoiceOutputDevice: hasAppliedInitialVoiceOutputDevice,
                                                                                                            forcePreferInitialEarpiece: forcePreferInitialEarpiece,
                                                                                                            portType: currentOutput.portType)
