@@ -57,14 +57,6 @@ struct ContactsService: ContactsServiceProtocol {
     }
 }
 
-struct JunchatContactsResponse: Decodable {
-    let contacts: [JunchatContact]
-}
-
-struct JunchatContactsVisibilityResponse: Codable {
-    let hidden: Bool
-}
-
 struct JunchatContact: Decodable {
     let userID: String
     let displayName: String?

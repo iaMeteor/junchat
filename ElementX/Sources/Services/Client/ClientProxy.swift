@@ -18,6 +18,7 @@ class ClientProxy: ClientProxyProtocol {
     private let networkMonitor: NetworkMonitorProtocol
     private let appSettings: AppSettings
     private let analyticsService: AnalyticsService
+    private let junchatContactsService: JunchatContactsService
     
     let mediaLoader: MediaLoaderProtocol
     private let clientQueue: DispatchQueue
@@ -126,8 +127,6 @@ class ClientProxy: ClientProxyProtocol {
               events: [:])
     }
     
-    private static let junchatContactsVisibilityAccountDataType = "com.heyujk.junchat.contacts_visibility"
-
     private var loadCachedAvatarURLTask: Task<Void, Never>?
     private let userAvatarURLSubject = CurrentValueSubject<URL?, Never>(nil)
     var userAvatarURLPublisher: CurrentValuePublisher<URL?, Never> {
@@ -201,6 +200,7 @@ class ClientProxy: ClientProxyProtocol {
         self.networkMonitor = networkMonitor
         self.appSettings = appSettings
         self.analyticsService = analyticsService
+        junchatContactsService = .init(client: client)
         
         if appSettings.automaticBackPaginationEnabled {
             // Must be called before creating the sync service, timelines etc.
@@ -958,102 +958,29 @@ class ClientProxy: ClientProxyProtocol {
     }
     
     func junchatContacts() async -> Result<[UserProfileProxy], ClientProxyError> {
-        do {
-            let session = try client.session()
-            
-            guard let homeserverURL = URL(string: session.homeserverUrl) else {
-                MXLog.error("Failed fetching Junchat contacts: invalid homeserver URL \(session.homeserverUrl)")
-                return .failure(.invalidServerName)
-            }
-            
-            let url = homeserverURL
-                .appending(path: "_matrix")
-                .appending(path: "client")
-                .appending(path: "v3")
-                .appending(path: "junchat")
-                .appending(path: "contacts")
-            var request = URLRequest(url: url)
-            request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
-            
-            let (data, response) = try await URLSession.shared.dataWithRetry(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  200..<300 ~= httpResponse.statusCode else {
-                MXLog.error("Failed fetching Junchat contacts: invalid response \(response)")
-                return .failure(.invalidResponse)
-            }
-            
-            let contacts = try JSONDecoder().decode(JunchatContactsResponse.self, from: data)
-            return .success(contacts.contacts.map(UserProfileProxy.init(junchatContact:)))
-        } catch let error as ClientProxyError {
-            return .failure(error)
-        } catch let error as DecodingError {
-            MXLog.error("Failed decoding Junchat contacts: \(error)")
-            return .failure(.invalidResponse)
-        } catch {
-            MXLog.error("Failed fetching Junchat contacts: \(error)")
-            return .failure(.sdkError(error))
+        switch await junchatContactsService.contacts() {
+        case .success(let contacts):
+            return .success(contacts.map(UserProfileProxy.init(junchatContact:)))
+        case .failure(let error):
+            return .failure(clientProxyError(for: error))
         }
     }
     
     func junchatHideFromContactsDirectory() async -> Result<Bool, ClientProxyError> {
-        do {
-            let session = try client.session()
-            let url = try junchatAccountDataURL(session: session, type: Self.junchatContactsVisibilityAccountDataType)
-            var request = URLRequest(url: url)
-            request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
-            request.setValue("application/json", forHTTPHeaderField: "Accept")
-            
-            let (data, response) = try await URLSession.shared.dataWithRetry(for: request)
-            guard let httpResponse = response as? HTTPURLResponse else {
-                return .failure(.invalidResponse)
-            }
-            
-            if httpResponse.statusCode == 404 {
-                return .success(false)
-            }
-            
-            guard 200..<300 ~= httpResponse.statusCode else {
-                MXLog.error("Failed fetching Junchat contacts visibility: invalid response \(response)")
-                return .failure(.invalidResponse)
-            }
-            
-            let visibility = try JSONDecoder().decode(JunchatContactsVisibilityResponse.self, from: data)
-            return .success(visibility.hidden)
-        } catch let error as ClientProxyError {
-            return .failure(error)
-        } catch let error as DecodingError {
-            MXLog.error("Failed decoding Junchat contacts visibility: \(error)")
-            return .failure(.invalidResponse)
-        } catch {
-            MXLog.error("Failed fetching Junchat contacts visibility: \(error)")
-            return .failure(.sdkError(error))
+        switch await junchatContactsService.isHiddenFromDirectory() {
+        case .success(let hidden):
+            return .success(hidden)
+        case .failure(let error):
+            return .failure(clientProxyError(for: error))
         }
     }
     
     func setJunchatHideFromContactsDirectory(_ hidden: Bool) async -> Result<Void, ClientProxyError> {
-        do {
-            let session = try client.session()
-            let url = try junchatAccountDataURL(session: session, type: Self.junchatContactsVisibilityAccountDataType)
-            var request = URLRequest(url: url)
-            request.httpMethod = "PUT"
-            request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
-            request.setValue("application/json", forHTTPHeaderField: "Accept")
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try JSONEncoder().encode(JunchatContactsVisibilityResponse(hidden: hidden))
-            
-            let (_, response) = try await URLSession.shared.dataWithRetry(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  200..<300 ~= httpResponse.statusCode else {
-                MXLog.error("Failed updating Junchat contacts visibility: invalid response \(response)")
-                return .failure(.invalidResponse)
-            }
-            
+        switch await junchatContactsService.setHiddenFromDirectory(hidden) {
+        case .success:
             return .success(())
-        } catch let error as ClientProxyError {
-            return .failure(error)
-        } catch {
-            MXLog.error("Failed updating Junchat contacts visibility: \(error)")
-            return .failure(.sdkError(error))
+        case .failure(let error):
+            return .failure(clientProxyError(for: error))
         }
     }
 
@@ -1141,22 +1068,6 @@ class ClientProxy: ClientProxyProtocol {
         }
     }
     
-    private func junchatAccountDataURL(session: Session, type: String) throws -> URL {
-        guard let homeserverURL = URL(string: session.homeserverUrl) else {
-            MXLog.error("Failed building Junchat account data URL: invalid homeserver URL \(session.homeserverUrl)")
-            throw ClientProxyError.invalidServerName
-        }
-        
-        return homeserverURL
-            .appending(path: "_matrix")
-            .appending(path: "client")
-            .appending(path: "v3")
-            .appending(path: "user")
-            .appending(path: userID)
-            .appending(path: "account_data")
-            .appending(path: type)
-    }
-
     private func junchatPasswordChangeURL(session: Session) throws -> URL {
         guard let homeserverURL = URL(string: session.homeserverUrl) else {
             MXLog.error("Failed building Junchat password change URL: invalid homeserver URL \(session.homeserverUrl)")
@@ -1188,6 +1099,19 @@ class ClientProxy: ClientProxyProtocol {
         
         let uiaSession = try? JSONDecoder().decode(JunchatPasswordChangeUIAResponse.self, from: data).session
         return JunchatPasswordChangeResponse(statusCode: httpResponse.statusCode, uiaSession: uiaSession)
+    }
+
+    private func clientProxyError(for error: JunchatContactsServiceError) -> ClientProxyError {
+        switch error {
+        case .invalidURL:
+            .invalidServerName
+        case .unauthorized:
+            .forbiddenAccess
+        case .cancelled, .network:
+            .sdkError(error)
+        case .httpStatus, .invalidPagination, .invalidResponse, .malformedResponse, .rateLimited, .responseTooLarge:
+            .invalidResponse
+        }
     }
     
     // MARK: Moderation & Safety
