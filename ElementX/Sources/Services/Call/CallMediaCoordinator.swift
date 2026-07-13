@@ -7,13 +7,37 @@
 
 import AudioToolbox
 import AVFoundation
+import Combine
 import Foundation
+import UIKit
 
 enum CallAudioOutputSelection: Equatable {
     case nativeEarpiece
     case nativeSpeaker
     case system
 }
+
+enum CallMediaRecoveryReason: String, Equatable {
+    case audioInterruptionEnded = "audio interruption ended"
+    case mediaServicesReset = "media services reset"
+    case applicationWillResignActive = "app will resign active"
+    case applicationDidBecomeActive = "app became active"
+    case mediaCapturePermissionGranted = "media capture permission granted"
+    case remoteMediaConnected = "remote media connected"
+}
+
+enum CallMediaLifecycleEvent: Equatable {
+    case audioRouteChanged
+    case lifecycleRecovery(CallMediaRecoveryReason)
+}
+
+struct CallPictureInPictureRecoveryAttempt: Equatable {
+    let reason: CallMediaRecoveryReason
+    let attempt: Int
+}
+
+typealias CallMediaLifecycleEventHandler = @MainActor (CallMediaLifecycleEvent) async -> Void
+typealias CallPictureInPictureAttemptHandler = @MainActor (CallPictureInPictureRecoveryAttempt) async -> Bool
 
 enum CallAudioRoutePolicy {
     static func shouldEnableProximityMonitoring(voiceOnly: Bool,
@@ -76,6 +100,8 @@ protocol CallMediaCoordinatorProtocol: AnyObject {
     var currentAudioEnabled: Bool { get }
     var hasRemoteMediaConnected: Bool { get }
 
+    func startLifecycleHandling(eventHandler: @escaping CallMediaLifecycleEventHandler,
+                                pictureInPictureAttemptHandler: @escaping CallPictureInPictureAttemptHandler)
     func prepareForCall()
     func mediaCapturePermissionGranted()
     func selectOutput(_ output: CallAudioOutputSelection)
@@ -85,7 +111,14 @@ protocol CallMediaCoordinatorProtocol: AnyObject {
     func handleInterruption(_ notification: Notification) -> Bool
     func handleMediaServicesReset()
     @discardableResult func remoteMediaConnected() -> Bool
+    func schedulePictureInPictureRecovery(reason: CallMediaRecoveryReason, forceFirstAttempt: Bool)
     func stop()
+}
+
+extension CallMediaCoordinatorProtocol {
+    func schedulePictureInPictureRecovery(reason: CallMediaRecoveryReason) {
+        schedulePictureInPictureRecovery(reason: reason, forceFirstAttempt: false)
+    }
 }
 
 @MainActor
@@ -96,6 +129,11 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
     private let connectedTonePlayer: () -> Void
     private let ringbackTonePlayer: CallRingbackTonePlaying
     private let setProximityMonitoringEnabled: (Bool) -> Void
+    private let allowsPictureInPicture: Bool
+    private let notificationCenter: NotificationCenter
+    private let applicationStateProvider: @MainActor () -> UIApplication.State
+    private let pictureInPictureRetryDelay: Duration
+    private let pictureInPictureMaxAttempts: Int
 
     private(set) var selectedOutput = CallAudioOutputSelection.nativeEarpiece
     private(set) var currentAudioEnabled = true
@@ -103,19 +141,48 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
 
     private var hasPlayedConnectedTone = false
     private var hasStopped = false
+    private var hasStartedLifecycleHandling = false
+    private var notificationCancellables = Set<AnyCancellable>()
+    private var lifecycleEventHandler: CallMediaLifecycleEventHandler?
+    private var pictureInPictureAttemptHandler: CallPictureInPictureAttemptHandler?
+    private var routeRecoveryTask: Task<Void, Never>?
+    private var lifecycleRecoveryTask: Task<Void, Never>?
+    private var pictureInPictureRecoveryTask: Task<Void, Never>?
 
     init(voiceOnly: Bool,
          playConnectedTone: Bool,
          audioSessionController: CallAudioSessionController,
          connectedTonePlayer: @escaping () -> Void,
          ringbackTonePlayer: CallRingbackTonePlaying,
-         setProximityMonitoringEnabled: @escaping (Bool) -> Void) {
+         setProximityMonitoringEnabled: @escaping (Bool) -> Void,
+         allowsPictureInPicture: Bool = false,
+         notificationCenter: NotificationCenter = .default,
+         applicationStateProvider: @escaping @MainActor () -> UIApplication.State = { UIApplication.shared.applicationState },
+         pictureInPictureRetryDelay: Duration = .milliseconds(350),
+         pictureInPictureMaxAttempts: Int = 6) {
         self.voiceOnly = voiceOnly
         self.playConnectedTone = playConnectedTone
         self.audioSessionController = audioSessionController
         self.connectedTonePlayer = connectedTonePlayer
         self.ringbackTonePlayer = ringbackTonePlayer
         self.setProximityMonitoringEnabled = setProximityMonitoringEnabled
+        self.allowsPictureInPicture = allowsPictureInPicture
+        self.notificationCenter = notificationCenter
+        self.applicationStateProvider = applicationStateProvider
+        self.pictureInPictureRetryDelay = pictureInPictureRetryDelay
+        self.pictureInPictureMaxAttempts = pictureInPictureMaxAttempts
+    }
+
+    func startLifecycleHandling(eventHandler: @escaping CallMediaLifecycleEventHandler,
+                                pictureInPictureAttemptHandler: @escaping CallPictureInPictureAttemptHandler) {
+        guard !hasStopped else { return }
+
+        lifecycleEventHandler = eventHandler
+        self.pictureInPictureAttemptHandler = pictureInPictureAttemptHandler
+        guard !hasStartedLifecycleHandling else { return }
+
+        hasStartedLifecycleHandling = true
+        observeLifecycleNotifications()
     }
 
     func prepareForCall() {
@@ -198,10 +265,28 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
         return true
     }
 
+    func schedulePictureInPictureRecovery(reason: CallMediaRecoveryReason, forceFirstAttempt: Bool) {
+        guard !hasStopped, allowsPictureInPicture, pictureInPictureAttemptHandler != nil else { return }
+
+        pictureInPictureRecoveryTask?.cancel()
+        pictureInPictureRecoveryTask = Task { @MainActor [weak self] in
+            await self?.recoverPictureInPicture(reason: reason, forceFirstAttempt: forceFirstAttempt)
+        }
+    }
+
     func stop() {
         guard !hasStopped else { return }
 
         hasStopped = true
+        notificationCancellables.removeAll()
+        routeRecoveryTask?.cancel()
+        routeRecoveryTask = nil
+        lifecycleRecoveryTask?.cancel()
+        lifecycleRecoveryTask = nil
+        pictureInPictureRecoveryTask?.cancel()
+        pictureInPictureRecoveryTask = nil
+        lifecycleEventHandler = nil
+        pictureInPictureAttemptHandler = nil
         audioSessionController.deactivateAfterCall()
         ringbackTonePlayer.stop()
         setProximityMonitoringEnabled(false)
@@ -211,5 +296,91 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
         setProximityMonitoringEnabled(CallAudioRoutePolicy.shouldEnableProximityMonitoring(voiceOnly: voiceOnly,
                                                                                            selectedOutput: selectedOutput,
                                                                                            remoteMediaConnected: hasRemoteMediaConnected))
+    }
+
+    private func observeLifecycleNotifications() {
+        notificationCenter.publisher(for: AVAudioSession.routeChangeNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.emitAudioRouteChanged()
+            }
+            .store(in: &notificationCancellables)
+
+        notificationCenter.publisher(for: AVAudioSession.interruptionNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] notification in
+                guard let self, handleInterruption(notification) else { return }
+                recoverAfterLifecycleEvent(reason: .audioInterruptionEnded)
+            }
+            .store(in: &notificationCancellables)
+
+        notificationCenter.publisher(for: AVAudioSession.mediaServicesWereResetNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self else { return }
+                handleMediaServicesReset()
+                recoverAfterLifecycleEvent(reason: .mediaServicesReset)
+            }
+            .store(in: &notificationCancellables)
+
+        notificationCenter.publisher(for: UIApplication.willResignActiveNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.schedulePictureInPictureRecovery(reason: .applicationWillResignActive, forceFirstAttempt: true)
+            }
+            .store(in: &notificationCancellables)
+
+        notificationCenter.publisher(for: UIApplication.didBecomeActiveNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.recoverAfterLifecycleEvent(reason: .applicationDidBecomeActive)
+            }
+            .store(in: &notificationCancellables)
+    }
+
+    private func emitAudioRouteChanged() {
+        guard !hasStopped else { return }
+
+        routeRecoveryTask?.cancel()
+        routeRecoveryTask = Task { @MainActor [weak self] in
+            guard let self, !hasStopped, let lifecycleEventHandler else { return }
+            await lifecycleEventHandler(.audioRouteChanged)
+        }
+    }
+
+    private func recoverAfterLifecycleEvent(reason: CallMediaRecoveryReason) {
+        guard !hasStopped else { return }
+
+        recoverAfterLifecycleEvent()
+        lifecycleRecoveryTask?.cancel()
+        lifecycleRecoveryTask = Task { @MainActor [weak self] in
+            guard let self, !hasStopped else { return }
+            if let lifecycleEventHandler {
+                await lifecycleEventHandler(.lifecycleRecovery(reason))
+            }
+            guard !Task.isCancelled, !hasStopped else { return }
+            schedulePictureInPictureRecovery(reason: reason)
+        }
+    }
+
+    private func recoverPictureInPicture(reason: CallMediaRecoveryReason, forceFirstAttempt: Bool) async {
+        guard let pictureInPictureAttemptHandler else { return }
+
+        for attempt in 1...pictureInPictureMaxAttempts {
+            guard !Task.isCancelled, !hasStopped else { return }
+
+            let applicationState = applicationStateProvider()
+            guard applicationState != .active || (forceFirstAttempt && attempt == 1) else { return }
+
+            if await pictureInPictureAttemptHandler(.init(reason: reason, attempt: attempt)) {
+                return
+            }
+
+            guard attempt < pictureInPictureMaxAttempts else { break }
+            try? await Task.sleep(for: pictureInPictureRetryDelay)
+        }
+
+        guard !Task.isCancelled, !hasStopped else { return }
+        MXLog.warning("[JunchatCall] unable to recover call picture in picture while inactive reason=\(reason.rawValue)")
     }
 }

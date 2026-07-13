@@ -560,6 +560,9 @@ struct CallScreenJunchatTests {
 
         #expect(dismissCount == 0)
         #expect(minimizedCount == 0)
+
+        viewModel.process(viewAction: .pictureInPictureStarted)
+        #expect(minimizedCount == 1)
     }
 
     @Test

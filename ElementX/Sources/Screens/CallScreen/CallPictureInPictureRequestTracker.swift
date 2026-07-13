@@ -26,8 +26,9 @@ final class CallPictureInPictureRequestTracker {
     private enum State {
         case idle
         case starting(Attempt)
-        case timedOut(UUID)
+        case timedOut(hadPendingRequest: Bool)
         case active
+        case stopping(awaitingStartTerminal: Bool)
         case invalidated
     }
 
@@ -60,6 +61,8 @@ final class CallPictureInPictureRequestTracker {
                     continuation.resume(returning: .failure(.pictureInPictureNotAvailable))
                 case .active:
                     continuation.resume(returning: .success(()))
+                case .stopping:
+                    continuation.resume(returning: .failure(.pictureInPictureNotAvailable))
                 case .invalidated:
                     continuation.resume(returning: .failure(.pictureInPictureNotAvailable))
                 }
@@ -79,14 +82,20 @@ final class CallPictureInPictureRequestTracker {
         scheduleTimeout(for: attempt.id)
     }
 
-    func didStart() {
+    @discardableResult
+    func didStart() -> Bool {
         switch state {
         case .starting(let attempt):
             completeAttempt(id: attempt.id, with: .success(()), nextState: .active)
-        case .timedOut:
+            return false
+        case .timedOut(let hadPendingRequest):
             state = .active
+            return hadPendingRequest
+        case .stopping:
+            state = .stopping(awaitingStartTerminal: false)
+            return false
         case .idle, .active, .invalidated:
-            break
+            return false
         }
     }
 
@@ -98,20 +107,51 @@ final class CallPictureInPictureRequestTracker {
                             nextState: .idle)
         case .timedOut:
             state = .idle
+        case .stopping(let awaitingStartTerminal):
+            if awaitingStartTerminal {
+                state = .idle
+            }
         case .idle, .active, .invalidated:
             break
         }
     }
 
-    func stopped() {
+    func stopRequested() {
+        switch state {
+        case .starting(let attempt):
+            let nextState: State = attempt.beginTask == nil ? .stopping(awaitingStartTerminal: true) : .idle
+            completeAttempt(id: attempt.id,
+                            with: .failure(.pictureInPictureNotAvailable),
+                            nextState: nextState)
+        case .active:
+            state = .stopping(awaitingStartTerminal: false)
+        case .timedOut:
+            state = .stopping(awaitingStartTerminal: true)
+        case .idle, .stopping, .invalidated:
+            break
+        }
+    }
+
+    func willStop() {
+        switch state {
+        case .starting(let attempt):
+            completeAttempt(id: attempt.id,
+                            with: .failure(.pictureInPictureNotAvailable),
+                            nextState: .stopping(awaitingStartTerminal: false))
+        case .idle, .timedOut, .active, .stopping:
+            state = .stopping(awaitingStartTerminal: false)
+        case .invalidated:
+            break
+        }
+    }
+
+    func didStop() {
         switch state {
         case .starting(let attempt):
             completeAttempt(id: attempt.id,
                             with: .failure(.pictureInPictureNotAvailable),
                             nextState: .idle)
-        case .active:
-            state = .idle
-        case .timedOut:
+        case .timedOut, .active, .stopping:
             state = .idle
         case .idle, .invalidated:
             break
@@ -124,7 +164,7 @@ final class CallPictureInPictureRequestTracker {
             completeAttempt(id: attempt.id,
                             with: .failure(.pictureInPictureNotAvailable),
                             nextState: .invalidated)
-        case .idle, .timedOut, .active:
+        case .idle, .timedOut, .active, .stopping:
             state = .invalidated
         case .invalidated:
             break
@@ -202,7 +242,7 @@ final class CallPictureInPictureRequestTracker {
             return
         }
 
-        state = .timedOut(id)
+        state = .timedOut(hadPendingRequest: !attempt.waiters.isEmpty)
         attempt.waiters.values.forEach { $0.resume(returning: .failure(.pictureInPictureNotAvailable)) }
     }
 

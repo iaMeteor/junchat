@@ -98,6 +98,8 @@ private struct CallView: UIViewRepresentable {
         private let pictureInPictureViewController: AVPictureInPictureVideoCallViewController
         private let pictureInPictureRequestTracker = CallPictureInPictureRequestTracker()
         private let pictureInPictureDelegateEventProcessor = CallPictureInPictureDelegateEventProcessor<PictureInPictureDelegateEvent>()
+        private var pictureInPictureWebModeTask: Task<Void, Never>?
+        private var pictureInPictureValidationTask: Task<Void, Never>?
         private var isInvalidated = false
         private var routePickerView: AVRoutePickerView!
 
@@ -679,6 +681,10 @@ private struct CallView: UIViewRepresentable {
             pictureInPictureController?.delegate = nil
             pictureInPictureDelegateEventProcessor.invalidate()
             pictureInPictureRequestTracker.invalidate()
+            pictureInPictureWebModeTask?.cancel()
+            pictureInPictureWebModeTask = nil
+            pictureInPictureValidationTask?.cancel()
+            pictureInPictureValidationTask = nil
             pictureInPictureController?.stopPictureInPicture()
             viewModelContext?.javaScriptEvaluator = nil
             viewModelContext?.requestPictureInPictureHandler = nil
@@ -840,7 +846,7 @@ private struct CallView: UIViewRepresentable {
 
         func stopPictureInPicture() {
             MXLog.info("[JunchatCallPiP] stop requested \(pictureInPictureStateDescription())")
-            pictureInPictureRequestTracker.stopped()
+            pictureInPictureRequestTracker.stopRequested()
             pictureInPictureController?.stopPictureInPicture()
         }
 
@@ -886,37 +892,66 @@ private struct CallView: UIViewRepresentable {
                 pictureInPictureRequestTracker.willStart()
                 // We move the view via the delegate so it works when you background the app without calling requestPictureInPicture.
                 pictureInPictureViewController.view.addMatchedSubview(webView)
-                _ = try? await evaluateJavaScript("controls.enablePip()")
+                setWebPictureInPictureEnabled(true)
             case .didStart(let isActive, let isSuspended):
                 MXLog.info("[JunchatCallPiP] did start active=\(isActive) suspended=\(isSuspended)")
-                pictureInPictureRequestTracker.didStart()
-                // Double check that the controller is definitely showing a page that supports picture in picture.
-                // This is necessary as it doesn't get checked when backgrounding the app or tapping a notification.
-                guard case .success(true) = await webViewCanEnterPictureInPicture(), !isInvalidated else {
-                    guard !isInvalidated else { return }
+                let completedTimedOutRequest = pictureInPictureRequestTracker.didStart()
+                if completedTimedOutRequest, UIApplication.shared.applicationState == .active {
+                    viewModelContext?.send(viewAction: .pictureInPictureStarted)
+                }
+                validateStartedPictureInPicture()
+            case .failedToStart(let errorDescription):
+                MXLog.warning("[JunchatCallPiP] failed to start error=\(errorDescription)")
+                pictureInPictureValidationTask?.cancel()
+                pictureInPictureValidationTask = nil
+                pictureInPictureRequestTracker.didFailToStart()
+                restoreWebViewAfterPictureInPicture()
+            case .willStop(let isActive, let isSuspended):
+                MXLog.info("[JunchatCallPiP] will stop active=\(isActive) suspended=\(isSuspended)")
+                pictureInPictureValidationTask?.cancel()
+                pictureInPictureValidationTask = nil
+                pictureInPictureRequestTracker.willStop()
+                viewModelContext?.send(viewAction: .pictureInPictureWillStop)
+            case .didStop:
+                MXLog.info("[JunchatCallPiP] did stop")
+                pictureInPictureValidationTask?.cancel()
+                pictureInPictureValidationTask = nil
+                pictureInPictureRequestTracker.didStop()
+                restoreWebViewAfterPictureInPicture()
+            }
+        }
+
+        private func validateStartedPictureInPicture() {
+            pictureInPictureValidationTask?.cancel()
+            pictureInPictureValidationTask = Task { @MainActor [weak self] in
+                guard let self, !isInvalidated else { return }
+                // This is necessary as the page isn't checked when backgrounding the app or tapping a notification.
+                guard case .success(true) = await webViewCanEnterPictureInPicture() else {
+                    guard !Task.isCancelled,
+                          !isInvalidated,
+                          pictureInPictureController?.isPictureInPictureActive == true else {
+                        return
+                    }
                     MXLog.error("Picture in picture started on a webpage that doesn't support it. Ending the call.")
                     viewModelContext?.send(viewAction: .endCall)
                     return
                 }
-            case .failedToStart(let errorDescription):
-                MXLog.warning("[JunchatCallPiP] failed to start error=\(errorDescription)")
-                pictureInPictureRequestTracker.didFailToStart()
-                await restoreWebViewAfterPictureInPicture()
-            case .willStop(let isActive, let isSuspended):
-                MXLog.info("[JunchatCallPiP] will stop active=\(isActive) suspended=\(isSuspended)")
-                pictureInPictureRequestTracker.stopped()
-                viewModelContext?.send(viewAction: .pictureInPictureWillStop)
-            case .didStop:
-                MXLog.info("[JunchatCallPiP] did stop")
-                pictureInPictureRequestTracker.stopped()
-                await restoreWebViewAfterPictureInPicture()
             }
         }
 
-        private func restoreWebViewAfterPictureInPicture() async {
+        private func restoreWebViewAfterPictureInPicture() {
             guard !isInvalidated else { return }
             webViewWrapper.addMatchedSubview(webView)
-            _ = try? await evaluateJavaScript("controls.disablePip()")
+            setWebPictureInPictureEnabled(false)
+        }
+
+        private func setWebPictureInPictureEnabled(_ enabled: Bool) {
+            pictureInPictureWebModeTask?.cancel()
+            pictureInPictureWebModeTask = Task { @MainActor [weak self] in
+                guard let self, !isInvalidated else { return }
+                let function = enabled ? "enablePip" : "disablePip"
+                _ = try? await evaluateJavaScript("controls.\(function)()")
+            }
         }
 
         /// Whether the web view can do picture in picture or not (e.g. it is showing an error or the page didn't load).

@@ -71,7 +71,7 @@ struct CallPictureInPictureRequestTrackerTests {
         #expect(beginCount == 1)
         #expect(!hasCompleted)
 
-        tracker.didStart()
+        #expect(!tracker.didStart())
 
         let result = await task.value
         expectSuccess(result)
@@ -102,7 +102,7 @@ struct CallPictureInPictureRequestTrackerTests {
 
         #expect(beginCount == 1)
 
-        tracker.didStart()
+        #expect(!tracker.didStart())
 
         let firstResult = await firstTask.value
         let secondResult = await secondTask.value
@@ -193,7 +193,7 @@ struct CallPictureInPictureRequestTrackerTests {
         expectUnavailable(blockedResult)
         #expect(beginCount == 1)
 
-        tracker.didStart()
+        #expect(tracker.didStart())
 
         let activeResult = await tracker.request {
             beginCount += 1
@@ -286,7 +286,7 @@ struct CallPictureInPictureRequestTrackerTests {
     }
 
     @Test
-    func stoppedRequestCanBeginAgain() async {
+    func stopBlocksAReplacementUntilDidStop() async {
         let tracker = CallPictureInPictureRequestTracker(timeout: .seconds(1))
         var beginCount = 0
         let firstTask = Task { @MainActor in
@@ -296,11 +296,28 @@ struct CallPictureInPictureRequestTrackerTests {
             }
         }
         await waitUntil { beginCount == 1 }
-        tracker.stopped()
+        tracker.stopRequested()
 
         let firstResult = await firstTask.value
         expectUnavailable(firstResult)
 
+        let blockedResult = await tracker.request {
+            beginCount += 1
+            return .awaitingDelegate
+        }
+        expectUnavailable(blockedResult)
+        #expect(beginCount == 1)
+
+        #expect(!tracker.didStart())
+        let staleCallbackBlockedResult = await tracker.request {
+            beginCount += 1
+            return .awaitingDelegate
+        }
+        expectUnavailable(staleCallbackBlockedResult)
+        #expect(beginCount == 1)
+
+        tracker.willStop()
+        tracker.didStop()
         let secondTask = Task { @MainActor in
             await tracker.request {
                 beginCount += 1
@@ -312,6 +329,56 @@ struct CallPictureInPictureRequestTrackerTests {
 
         let secondResult = await secondTask.value
         expectSuccess(secondResult)
+        #expect(beginCount == 2)
+    }
+
+    @Test
+    func failedStartAfterStopAllowsAReplacement() async {
+        let tracker = CallPictureInPictureRequestTracker(timeout: .seconds(1))
+        var beginCount = 0
+        let firstTask = Task { @MainActor in
+            await tracker.request {
+                beginCount += 1
+                return .awaitingDelegate
+            }
+        }
+        await waitUntil { beginCount == 1 }
+        tracker.stopRequested()
+        let firstResult = await firstTask.value
+        expectUnavailable(firstResult)
+
+        tracker.didFailToStart()
+        let secondResult = await tracker.request {
+            beginCount += 1
+            return .unavailable
+        }
+
+        expectUnavailable(secondResult)
+        #expect(beginCount == 2)
+    }
+
+    @Test
+    func stoppingDuringPreflightAllowsAReplacement() async {
+        let tracker = CallPictureInPictureRequestTracker(timeout: .seconds(1))
+        var beginCount = 0
+        let firstTask = Task { @MainActor in
+            await tracker.request {
+                beginCount += 1
+                try? await Task.sleep(for: .seconds(1))
+                return .awaitingDelegate
+            }
+        }
+        await waitUntil { beginCount == 1 }
+        tracker.stopRequested()
+        let firstResult = await firstTask.value
+        expectUnavailable(firstResult)
+
+        let secondResult = await tracker.request {
+            beginCount += 1
+            return .unavailable
+        }
+
+        expectUnavailable(secondResult)
         #expect(beginCount == 2)
     }
 
@@ -393,10 +460,19 @@ struct CallPictureInPictureRequestTrackerTests {
         await waitUntil { requestEntered }
 
         #expect(beginCount == 0)
-        tracker.didStart()
+        #expect(!tracker.didStart())
 
         let result = await task.value
         expectSuccess(result)
+    }
+
+    @Test
+    func automaticStartTimeoutDoesNotReportALateManualRequest() async throws {
+        let tracker = CallPictureInPictureRequestTracker(timeout: .milliseconds(10))
+        tracker.willStart()
+        try await Task.sleep(for: .milliseconds(20))
+
+        #expect(!tracker.didStart())
     }
 
     private func waitUntil(_ condition: () -> Bool) async {

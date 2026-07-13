@@ -33,6 +33,7 @@ struct Bindings {
 
 enum CallScreenViewAction {
     case urlChanged(URL?)
+    case pictureInPictureStarted
     case navigateBack
     case pictureInPictureWillStop
     case endCall
