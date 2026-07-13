@@ -84,10 +84,7 @@ class AppCoordinator: AppCoordinatorProtocol, AuthenticationFlowCoordinatorDeleg
                                                        rageshakeURL: appSettings.bugReportRageshakeURL,
                                                        appHooks: appHooks)
         
-        let appName = InfoPlistReader.main.bundleDisplayName
-        let appVersion = InfoPlistReader.main.bundleShortVersionString
-        let appBuild = InfoPlistReader.main.bundleVersion
-        MXLog.info("\(appName) \(appVersion) (\(appBuild))")
+        Self.logAppVersion()
         
         if ProcessInfo.processInfo.environment["RESET_APP_SETTINGS"].map(Bool.init) == true {
             AppSettings.resetAllSettings()
@@ -484,6 +481,13 @@ class AppCoordinator: AppCoordinatorProtocol, AuthenticationFlowCoordinatorDeleg
         
         let normalizedVersion = components.count == 1 ? "\(rawVersion).0.0" : "\(rawVersion).0"
         return Version(normalizedVersion)
+    }
+
+    private static func logAppVersion() {
+        let appName = InfoPlistReader.main.bundleDisplayName
+        let appVersion = InfoPlistReader.main.bundleShortVersionString
+        let appBuild = InfoPlistReader.main.bundleVersion
+        MXLog.info("\(appName) \(appVersion) (\(appBuild))")
     }
     
     private func performUserSessionMigrations(_ userSession: UserSessionProtocol) async {
