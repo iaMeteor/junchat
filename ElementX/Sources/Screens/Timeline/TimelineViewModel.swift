@@ -23,6 +23,10 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
         static let toastErrorID = "RoomScreenToastError"
     }
 
+    private enum PrivacyModeAuthorityResolutionError: Error {
+        case timedOut
+    }
+
     private let roomProxy: JoinedRoomProxyProtocol
     private let timelineController: TimelineControllerProtocol
     private let userSession: UserSessionProtocol
@@ -34,6 +38,7 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
     private let emojiProvider: EmojiProviderProtocol
     private let timelineControllerFactory: TimelineControllerFactoryProtocol
     private let privacyMessageLifetime: Duration
+    private let privacyModeAuthorityTimeout: Duration
 
     private let timelineInteractionHandler: TimelineInteractionHandler
 
@@ -62,7 +67,8 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
          emojiProvider: EmojiProviderProtocol,
          linkMetadataProvider: LinkMetadataProviderProtocol,
          timelineControllerFactory: TimelineControllerFactoryProtocol,
-         privacyMessageLifetime: Duration = .seconds(180)) {
+         privacyMessageLifetime: Duration = .seconds(180),
+         privacyModeAuthorityTimeout: Duration = .seconds(1)) {
         self.roomProxy = roomProxy
         self.timelineController = timelineController
         self.userSession = userSession
@@ -74,6 +80,7 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
         self.emojiProvider = emojiProvider
         self.timelineControllerFactory = timelineControllerFactory
         self.privacyMessageLifetime = privacyMessageLifetime
+        self.privacyModeAuthorityTimeout = privacyModeAuthorityTimeout
 
         let voiceMessageRecorder = VoiceMessageRecorder(audioRecorder: AudioRecorder(), mediaPlayerProvider: mediaPlayerProvider)
 
@@ -848,7 +855,13 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
 
         switch mode {
         case .reply(let eventID, _, _):
-            privacyModeEnabled = await isPrivacyModeEnabled()
+            guard let resolvedPrivacyModeEnabled = await resolvePrivacyModeEnabled() else {
+                return
+            }
+            guard !Task.isCancelled else {
+                return
+            }
+            privacyModeEnabled = resolvedPrivacyModeEnabled
             await timelineController.sendMessage(message,
                                                  html: html,
                                                  inReplyToEventID: eventID,
@@ -870,7 +883,13 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
             case .join:
                 await handleJoinCommand(message: message)
             case .none:
-                privacyModeEnabled = await isPrivacyModeEnabled()
+                guard let resolvedPrivacyModeEnabled = await resolvePrivacyModeEnabled() else {
+                    return
+                }
+                guard !Task.isCancelled else {
+                    return
+                }
+                privacyModeEnabled = resolvedPrivacyModeEnabled
                 await timelineController.sendMessage(message,
                                                      html: html,
                                                      inReplyToEventID: nil,
@@ -888,15 +907,52 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
         scrollToBottom()
     }
 
-    private func isPrivacyModeEnabled() async -> Bool {
+    private func resolvePrivacyModeEnabled() async -> Bool? {
         let emergencyPrivacyModeEnabled = appSettings.junchatEmergencyPrivacyModeEnabled
+        let privacyModeService = userSession.privacyModeService
+        let roomID = timelineController.roomID
 
-        switch await userSession.privacyModeService.load(roomID: timelineController.roomID) {
-        case .success(let enabled):
-            return emergencyPrivacyModeEnabled || enabled
-        case .failure:
-            let cachedValue = await userSession.privacyModeService.cachedValue(roomID: timelineController.roomID) ?? false
-            return emergencyPrivacyModeEnabled || cachedValue
+        if let cachedValue = await privacyModeService.cachedValue(roomID: roomID) {
+            return Task.isCancelled ? nil : emergencyPrivacyModeEnabled || cachedValue
+        }
+
+        guard !Task.isCancelled else {
+            return nil
+        }
+
+        do {
+            // Exiting the group waits for the cancelled load, preventing migration writes after send begins.
+            let enabled = try await withThrowingTaskGroup(of: Bool.self) { group in
+                group.addTask {
+                    let result = await privacyModeService.load(roomID: roomID)
+                    try Task.checkCancellation()
+
+                    switch result {
+                    case .success(let enabled):
+                        return enabled
+                    case .failure:
+                        return await privacyModeService.cachedValue(roomID: roomID) ?? false
+                    }
+                }
+
+                group.addTask { [privacyModeAuthorityTimeout] in
+                    try await Task.sleep(for: privacyModeAuthorityTimeout)
+                    throw PrivacyModeAuthorityResolutionError.timedOut
+                }
+
+                defer { group.cancelAll() }
+                return try await group.next() ?? false
+            }
+
+            return Task.isCancelled ? nil : emergencyPrivacyModeEnabled || enabled
+        } catch PrivacyModeAuthorityResolutionError.timedOut {
+            guard !Task.isCancelled else {
+                return nil
+            }
+            let cachedValue = await privacyModeService.cachedValue(roomID: roomID) ?? false
+            return Task.isCancelled ? nil : emergencyPrivacyModeEnabled || cachedValue
+        } catch {
+            return nil
         }
     }
 

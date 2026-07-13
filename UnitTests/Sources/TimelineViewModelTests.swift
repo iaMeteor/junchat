@@ -840,6 +840,75 @@ final class TimelineViewModelTests {
     }
 
     @Test
+    func cachedPrivacyAuthoritySendsWithoutLoading() async throws {
+        let recorder = PrivacyModeSendOrderRecorder()
+        let privacyModeService = PrivacyModeSendOrderService(recorder: recorder, cachedValue: true)
+        let timelineController = PrivacyModeSendOrderTimelineController(recorder: recorder)
+        let viewModel = makeViewModel(timelineController: timelineController,
+                                      privacyModeService: privacyModeService,
+                                      appSettings: AppSettings(),
+                                      privacyModeAuthorityTimeout: .milliseconds(10))
+
+        viewModel.process(composerAction: .sendMessage(plain: "cached message",
+                                                       html: nil,
+                                                       mode: .default,
+                                                       intentionalMentions: .init(userIDs: [], atRoom: false)))
+        try await recorder.waitForEventCount(1)
+
+        #expect(await recorder.events == ["send"])
+        #expect(await privacyModeService.loadCallCount == 0)
+        _ = viewModel
+    }
+
+    @Test
+    func privacyAuthorityTimeoutCancelsAndWaitsForLoadBeforeSending() async throws {
+        let recorder = PrivacyModeSendOrderRecorder()
+        let privacyModeService = PendingCancellablePrivacyModeService(recorder: recorder)
+        let timelineController = PrivacyModeSendOrderTimelineController(recorder: recorder)
+        let viewModel = makeViewModel(timelineController: timelineController,
+                                      privacyModeService: privacyModeService,
+                                      appSettings: AppSettings(),
+                                      privacyModeAuthorityTimeout: .milliseconds(10))
+        let start = ContinuousClock.now
+
+        viewModel.process(composerAction: .sendMessage(plain: "bounded message",
+                                                       html: nil,
+                                                       mode: .default,
+                                                       intentionalMentions: .init(userIDs: [], atRoom: false)))
+        try await recorder.waitForEventCount(3)
+
+        #expect(start.duration(to: .now) < .milliseconds(250))
+        #expect(await recorder.events == ["load-start", "load-cancelled", "send"])
+        #expect(await privacyModeService.loadWasCancelled)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await recorder.events == ["load-start", "load-cancelled", "send"])
+        _ = viewModel
+    }
+
+    @Test
+    func privacyAuthorityTimeoutCancelsBeforeQueueingReply() async throws {
+        let recorder = PrivacyModeSendOrderRecorder()
+        let privacyModeService = PendingCancellablePrivacyModeService(recorder: recorder)
+        let timelineController = PrivacyModeSendOrderTimelineController(recorder: recorder)
+        let viewModel = makeViewModel(timelineController: timelineController,
+                                      privacyModeService: privacyModeService,
+                                      appSettings: AppSettings(),
+                                      privacyModeAuthorityTimeout: .milliseconds(10))
+
+        viewModel.process(composerAction: .sendMessage(plain: "bounded reply",
+                                                       html: nil,
+                                                       mode: .reply(eventID: "event-id",
+                                                                    replyDetails: .notLoaded(eventID: "event-id"),
+                                                                    isThread: false),
+                                                       intentionalMentions: .init(userIDs: [], atRoom: false)))
+        try await recorder.waitForEventCount(3)
+
+        #expect(await recorder.events == ["load-start", "load-cancelled", "reply"])
+        #expect(await privacyModeService.loadWasCancelled)
+        _ = viewModel
+    }
+
+    @Test
     func emergencyOverrideStillPerformsPreSendAuthorityMigration() async throws {
         let recorder = PrivacyModeSendOrderRecorder()
         let privacyModeService = PrivacyModeSendOrderService(recorder: recorder,
@@ -925,7 +994,8 @@ final class TimelineViewModelTests {
                                timelineController: TimelineControllerProtocol,
                                privacyModeService: PrivacyModeServiceProtocol = PrivacyModeServiceMock(),
                                appSettings: AppSettings = ServiceLocator.shared.settings,
-                               privacyMessageLifetime: Duration = .seconds(180)) -> TimelineViewModel {
+                               privacyMessageLifetime: Duration = .seconds(180),
+                               privacyModeAuthorityTimeout: Duration = .seconds(1)) -> TimelineViewModel {
         TimelineViewModel(roomProxy: roomProxy ?? JoinedRoomProxyMock(.init(name: "")),
                           focussedEventID: focussedEventID,
                           timelineController: timelineController,
@@ -938,7 +1008,8 @@ final class TimelineViewModelTests {
                           emojiProvider: EmojiProvider(appSettings: ServiceLocator.shared.settings),
                           linkMetadataProvider: LinkMetadataProvider(),
                           timelineControllerFactory: TimelineControllerFactoryMock(.init()),
-                          privacyMessageLifetime: privacyMessageLifetime)
+                          privacyMessageLifetime: privacyMessageLifetime,
+                          privacyModeAuthorityTimeout: privacyModeAuthorityTimeout)
     }
 }
 
@@ -960,14 +1031,19 @@ private actor PrivacyModeSendOrderRecorder {
 private actor PrivacyModeSendOrderService: PrivacyModeServiceProtocol {
     private let recorder: PrivacyModeSendOrderRecorder
     private let loadResult: Result<Bool, PrivacyModeServiceError>
+    private let storedCachedValue: Bool?
+    private(set) var loadCallCount = 0
 
     init(recorder: PrivacyModeSendOrderRecorder,
-         loadResult: Result<Bool, PrivacyModeServiceError> = .success(true)) {
+         loadResult: Result<Bool, PrivacyModeServiceError> = .success(true),
+         cachedValue: Bool? = nil) {
         self.recorder = recorder
         self.loadResult = loadResult
+        storedCachedValue = cachedValue
     }
 
     func load(roomID: String) async -> Result<Bool, PrivacyModeServiceError> {
+        loadCallCount += 1
         await recorder.record("privacy-load")
         return loadResult
     }
@@ -977,7 +1053,37 @@ private actor PrivacyModeSendOrderService: PrivacyModeServiceProtocol {
     }
 
     func cachedValue(roomID: String) -> Bool? {
-        true
+        storedCachedValue
+    }
+}
+
+private actor PendingCancellablePrivacyModeService: PrivacyModeServiceProtocol {
+    private let recorder: PrivacyModeSendOrderRecorder
+    private(set) var loadWasCancelled = false
+
+    init(recorder: PrivacyModeSendOrderRecorder) {
+        self.recorder = recorder
+    }
+
+    func load(roomID: String) async -> Result<Bool, PrivacyModeServiceError> {
+        await recorder.record("load-start")
+        do {
+            try await Task.sleep(for: .milliseconds(200))
+            await recorder.record("late-migration-put")
+            return .success(true)
+        } catch {
+            loadWasCancelled = true
+            await recorder.record("load-cancelled")
+            return .failure(.cancelled)
+        }
+    }
+
+    func toggle(roomID: String) -> Result<Bool, PrivacyModeServiceError> {
+        .success(false)
+    }
+
+    func cachedValue(roomID: String) -> Bool? {
+        nil
     }
 }
 
