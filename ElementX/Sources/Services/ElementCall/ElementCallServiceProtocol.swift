@@ -7,6 +7,7 @@
 //
 
 import Combine
+import Foundation
 
 enum ElementCallServiceAction {
     case receivedIncomingCallRequest
@@ -15,7 +16,12 @@ enum ElementCallServiceAction {
     case setAudioEnabled(_ enabled: Bool, roomID: String)
 }
 
+struct ElementCallSessionGeneration: Equatable {
+    private let identifier = UUID()
+}
+
 // sourcery: AutoMockable
+@MainActor
 protocol ElementCallServiceProtocol {
     var actions: AnyPublisher<ElementCallServiceAction, Never> { get }
 
@@ -25,13 +31,17 @@ protocol ElementCallServiceProtocol {
 
     func setClientProxy(_ clientProxy: ClientProxyProtocol)
 
-    func setupCallSession(roomID: String, roomDisplayName: String) async
+    func registerCallSession(generation: ElementCallSessionGeneration)
+
+    func setupCallSession(roomID: String, roomDisplayName: String, generation: ElementCallSessionGeneration) async
 
     func acceptIncomingCall(roomID: String, isVoiceCall: Bool) async
 
     func declineIncomingCall(roomID: String) async
 
     func tearDownCallSession()
+
+    func tearDownCallSession(generation: ElementCallSessionGeneration)
 
     func setAudioEnabled(_ enabled: Bool, roomID: String)
 }

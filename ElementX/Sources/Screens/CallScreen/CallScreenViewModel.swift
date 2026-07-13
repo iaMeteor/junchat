@@ -24,6 +24,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
     private let callMediaCoordinator: CallMediaCoordinatorProtocol
     private let callEndedTonePlayer: () -> Void
     private let deviceID: String
+    private let callSessionGeneration = ElementCallSessionGeneration()
 
     private let widgetDriver: ElementCallWidgetDriverProtocol
 
@@ -83,6 +84,8 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
 
         super.init(initialViewState: CallScreenViewState(script: CallScreenJavaScriptMessageName.allCasesInjectionScript,
                                                          certificateValidator: appHooks.certificateValidatorHook))
+
+        elementCallService.registerCallSession(generation: callSessionGeneration)
 
         self.callMediaCoordinator.startLifecycleHandling { [weak self] event in
             await self?.handleCallMediaLifecycleEvent(event)
@@ -217,7 +220,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         widgetDriver.stop()
         stopPictureInPicture()
         callMediaCoordinator.stop()
-        elementCallService.tearDownCallSession()
+        elementCallService.tearDownCallSession(generation: callSessionGeneration)
         logAudioSessionSnapshot(reason: "after call cleanup")
     }
 
@@ -334,7 +337,8 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
             callMediaCoordinator.prepareForCall()
 
             await elementCallService.setupCallSession(roomID: configuration.roomProxy.id,
-                                                      roomDisplayName: configuration.roomProxy.infoPublisher.value.displayName ?? configuration.roomProxy.id)
+                                                      roomDisplayName: configuration.roomProxy.infoPublisher.value.displayName ?? configuration.roomProxy.id,
+                                                      generation: callSessionGeneration)
         }
 
         timeoutTask = Task { [weak self] in

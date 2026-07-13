@@ -7140,17 +7140,17 @@ class ElementCallServiceMock: ElementCallServiceProtocol, @unchecked Sendable {
         }
         setClientProxyClosure?(clientProxy)
     }
-    //MARK: - setupCallSession
+    //MARK: - registerCallSession
 
-    var setupCallSessionRoomIDRoomDisplayNameUnderlyingCallsCount = 0
-    var setupCallSessionRoomIDRoomDisplayNameCallsCount: Int {
+    var registerCallSessionGenerationUnderlyingCallsCount = 0
+    var registerCallSessionGenerationCallsCount: Int {
         get {
             if Thread.isMainThread {
-                return setupCallSessionRoomIDRoomDisplayNameUnderlyingCallsCount
+                return registerCallSessionGenerationUnderlyingCallsCount
             } else {
                 var returnValue: Int? = nil
                 DispatchQueue.main.sync {
-                    returnValue = setupCallSessionRoomIDRoomDisplayNameUnderlyingCallsCount
+                    returnValue = registerCallSessionGenerationUnderlyingCallsCount
                 }
 
                 return returnValue!
@@ -7158,28 +7158,69 @@ class ElementCallServiceMock: ElementCallServiceProtocol, @unchecked Sendable {
         }
         set {
             if Thread.isMainThread {
-                setupCallSessionRoomIDRoomDisplayNameUnderlyingCallsCount = newValue
+                registerCallSessionGenerationUnderlyingCallsCount = newValue
             } else {
                 DispatchQueue.main.sync {
-                    setupCallSessionRoomIDRoomDisplayNameUnderlyingCallsCount = newValue
+                    registerCallSessionGenerationUnderlyingCallsCount = newValue
                 }
             }
         }
     }
-    var setupCallSessionRoomIDRoomDisplayNameCalled: Bool {
-        return setupCallSessionRoomIDRoomDisplayNameCallsCount > 0
+    var registerCallSessionGenerationCalled: Bool {
+        return registerCallSessionGenerationCallsCount > 0
     }
-    var setupCallSessionRoomIDRoomDisplayNameReceivedArguments: (roomID: String, roomDisplayName: String)?
-    var setupCallSessionRoomIDRoomDisplayNameReceivedInvocations: [(roomID: String, roomDisplayName: String)] = []
-    var setupCallSessionRoomIDRoomDisplayNameClosure: ((String, String) async -> Void)?
+    var registerCallSessionGenerationReceivedGeneration: ElementCallSessionGeneration?
+    var registerCallSessionGenerationReceivedInvocations: [ElementCallSessionGeneration] = []
+    var registerCallSessionGenerationClosure: ((ElementCallSessionGeneration) -> Void)?
 
-    func setupCallSession(roomID: String, roomDisplayName: String) async {
-        setupCallSessionRoomIDRoomDisplayNameCallsCount += 1
-        setupCallSessionRoomIDRoomDisplayNameReceivedArguments = (roomID: roomID, roomDisplayName: roomDisplayName)
+    func registerCallSession(generation: ElementCallSessionGeneration) {
+        registerCallSessionGenerationCallsCount += 1
+        registerCallSessionGenerationReceivedGeneration = generation
         DispatchQueue.main.async {
-            self.setupCallSessionRoomIDRoomDisplayNameReceivedInvocations.append((roomID: roomID, roomDisplayName: roomDisplayName))
+            self.registerCallSessionGenerationReceivedInvocations.append(generation)
         }
-        await setupCallSessionRoomIDRoomDisplayNameClosure?(roomID, roomDisplayName)
+        registerCallSessionGenerationClosure?(generation)
+    }
+    //MARK: - setupCallSession
+
+    var setupCallSessionRoomIDRoomDisplayNameGenerationUnderlyingCallsCount = 0
+    var setupCallSessionRoomIDRoomDisplayNameGenerationCallsCount: Int {
+        get {
+            if Thread.isMainThread {
+                return setupCallSessionRoomIDRoomDisplayNameGenerationUnderlyingCallsCount
+            } else {
+                var returnValue: Int? = nil
+                DispatchQueue.main.sync {
+                    returnValue = setupCallSessionRoomIDRoomDisplayNameGenerationUnderlyingCallsCount
+                }
+
+                return returnValue!
+            }
+        }
+        set {
+            if Thread.isMainThread {
+                setupCallSessionRoomIDRoomDisplayNameGenerationUnderlyingCallsCount = newValue
+            } else {
+                DispatchQueue.main.sync {
+                    setupCallSessionRoomIDRoomDisplayNameGenerationUnderlyingCallsCount = newValue
+                }
+            }
+        }
+    }
+    var setupCallSessionRoomIDRoomDisplayNameGenerationCalled: Bool {
+        return setupCallSessionRoomIDRoomDisplayNameGenerationCallsCount > 0
+    }
+    var setupCallSessionRoomIDRoomDisplayNameGenerationReceivedArguments: (roomID: String, roomDisplayName: String, generation: ElementCallSessionGeneration)?
+    var setupCallSessionRoomIDRoomDisplayNameGenerationReceivedInvocations: [(roomID: String, roomDisplayName: String, generation: ElementCallSessionGeneration)] = []
+    var setupCallSessionRoomIDRoomDisplayNameGenerationClosure: ((String, String, ElementCallSessionGeneration) async -> Void)?
+
+    func setupCallSession(roomID: String, roomDisplayName: String, generation: ElementCallSessionGeneration) async {
+        setupCallSessionRoomIDRoomDisplayNameGenerationCallsCount += 1
+        setupCallSessionRoomIDRoomDisplayNameGenerationReceivedArguments = (roomID: roomID, roomDisplayName: roomDisplayName, generation: generation)
+        DispatchQueue.main.async {
+            self.setupCallSessionRoomIDRoomDisplayNameGenerationReceivedInvocations.append((roomID: roomID, roomDisplayName: roomDisplayName, generation: generation))
+        }
+        await setupCallSessionRoomIDRoomDisplayNameGenerationClosure?(roomID, roomDisplayName, generation)
     }
     //MARK: - acceptIncomingCall
 
@@ -7297,6 +7338,47 @@ class ElementCallServiceMock: ElementCallServiceProtocol, @unchecked Sendable {
     func tearDownCallSession() {
         tearDownCallSessionCallsCount += 1
         tearDownCallSessionClosure?()
+    }
+    //MARK: - tearDownCallSession
+
+    var tearDownCallSessionGenerationUnderlyingCallsCount = 0
+    var tearDownCallSessionGenerationCallsCount: Int {
+        get {
+            if Thread.isMainThread {
+                return tearDownCallSessionGenerationUnderlyingCallsCount
+            } else {
+                var returnValue: Int? = nil
+                DispatchQueue.main.sync {
+                    returnValue = tearDownCallSessionGenerationUnderlyingCallsCount
+                }
+
+                return returnValue!
+            }
+        }
+        set {
+            if Thread.isMainThread {
+                tearDownCallSessionGenerationUnderlyingCallsCount = newValue
+            } else {
+                DispatchQueue.main.sync {
+                    tearDownCallSessionGenerationUnderlyingCallsCount = newValue
+                }
+            }
+        }
+    }
+    var tearDownCallSessionGenerationCalled: Bool {
+        return tearDownCallSessionGenerationCallsCount > 0
+    }
+    var tearDownCallSessionGenerationReceivedGeneration: ElementCallSessionGeneration?
+    var tearDownCallSessionGenerationReceivedInvocations: [ElementCallSessionGeneration] = []
+    var tearDownCallSessionGenerationClosure: ((ElementCallSessionGeneration) -> Void)?
+
+    func tearDownCallSession(generation: ElementCallSessionGeneration) {
+        tearDownCallSessionGenerationCallsCount += 1
+        tearDownCallSessionGenerationReceivedGeneration = generation
+        DispatchQueue.main.async {
+            self.tearDownCallSessionGenerationReceivedInvocations.append(generation)
+        }
+        tearDownCallSessionGenerationClosure?(generation)
     }
     //MARK: - setAudioEnabled
 

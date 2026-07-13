@@ -20,7 +20,8 @@ struct TimeProvider {
     var now: () -> Date
 }
 
-class ElementCallService: NSObject, ElementCallServiceProtocol, PKPushRegistryDelegate, CXProviderDelegate {
+@MainActor
+class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency PKPushRegistryDelegate, @preconcurrency CXProviderDelegate {
     private struct CallID: Equatable {
         let callKitID: UUID
         let roomID: String
@@ -54,6 +55,8 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, PKPushRegistryDe
     }
 
     private var endUnansweredCallTask: Task<Void, Never>?
+    private var latestCallSessionGeneration: ElementCallSessionGeneration?
+    private var ongoingCallSessionGeneration: ElementCallSessionGeneration?
 
     private var ongoingCallID: CallID? {
         didSet {
@@ -127,12 +130,22 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, PKPushRegistryDe
         self.clientProxy = clientProxy
     }
 
-    func setupCallSession(roomID: String, roomDisplayName: String) async {
+    func registerCallSession(generation: ElementCallSessionGeneration) {
+        latestCallSessionGeneration = generation
+    }
+
+    func setupCallSession(roomID: String, roomDisplayName: String, generation: ElementCallSessionGeneration) async {
+        guard latestCallSessionGeneration == generation else {
+            MXLog.info("[JunchatCall] ignoring superseded call session setup")
+            return
+        }
+
         MXLog.info("[JunchatCall] setupCallSession hasIncoming=\(incomingCallID?.roomID == roomID) hasAccepted=\(acceptedIncomingCallID?.roomID == roomID) hasOngoing=\(ongoingCallID != nil)")
 
         // Drop any ongoing calls when starting a new one
         if ongoingCallID != nil {
-            tearDownCallSession()
+            ongoingCallSessionGeneration = nil
+            tearDownOngoingCallSession(sendEndCallAction: true)
         }
 
         // If this starting from a ring reuse those identifiers
@@ -160,6 +173,10 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, PKPushRegistryDe
         if acceptedCallID != nil {
             acceptedIncomingCallID = nil
         }
+        guard latestCallSessionGeneration == generation else {
+            return
+        }
+        ongoingCallSessionGeneration = generation
         ongoingCallID = callID
 
         // Don't bother starting another CallKit session as it won't work properly
@@ -177,7 +194,25 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, PKPushRegistryDe
     }
 
     func tearDownCallSession() {
+        latestCallSessionGeneration = nil
+        ongoingCallSessionGeneration = nil
         tearDownCallSession(sendEndCallAction: true)
+    }
+
+    func tearDownCallSession(generation: ElementCallSessionGeneration) {
+        if latestCallSessionGeneration == generation {
+            latestCallSessionGeneration = nil
+            ongoingCallSessionGeneration = nil
+            tearDownCallSession(sendEndCallAction: true)
+            return
+        }
+
+        guard ongoingCallSessionGeneration == generation else {
+            return
+        }
+
+        ongoingCallSessionGeneration = nil
+        tearDownOngoingCallSession(sendEndCallAction: true)
     }
 
     func acceptIncomingCall(roomID: String, isVoiceCall: Bool) async {
@@ -298,7 +333,9 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, PKPushRegistryDe
                 MXLog.error("Failed reporting new incoming call: \(CallDiagnostics.errorSummary(error))")
             }
 
-            self?.actionsSubject.send(.receivedIncomingCallRequest)
+            Task { @MainActor [weak self] in
+                self?.actionsSubject.send(.receivedIncomingCallRequest)
+            }
 
             completion()
         }
@@ -392,6 +429,8 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, PKPushRegistryDe
             }
         }
 
+        latestCallSessionGeneration = nil
+        ongoingCallSessionGeneration = nil
         tearDownCallSession(sendEndCallAction: false)
 
         action.fulfill()
@@ -403,6 +442,12 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, PKPushRegistryDe
     private func tearDownCallSession(sendEndCallAction: Bool = true) {
         MXLog.info("[JunchatCall] tearDownCallSession sendEndCallAction=\(sendEndCallAction) hasOngoing=\(ongoingCallID != nil) hasIncoming=\(incomingCallID != nil)")
 
+        tearDownOngoingCallSession(sendEndCallAction: sendEndCallAction)
+        incomingCallID = nil
+        acceptedIncomingCallID = nil
+    }
+
+    private func tearDownOngoingCallSession(sendEndCallAction: Bool) {
         if sendEndCallAction, let ongoingCallID {
             let transaction = CXTransaction(action: CXEndCallAction(call: ongoingCallID.callKitID))
             callController.request(transaction) { error in
@@ -413,8 +458,6 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, PKPushRegistryDe
         }
 
         ongoingCallID = nil
-        incomingCallID = nil
-        acceptedIncomingCallID = nil
     }
 
     private func sendDeclineCallEvent(_ incomingCallID: CallID) async {

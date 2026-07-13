@@ -292,7 +292,9 @@ struct CallScreenJunchatTests {
         #expect(endedTonePlayCount == 1)
         #expect(dismissCount == 1)
         #expect(pictureInPictureStopCount == 1)
-        #expect(elementCallService.tearDownCallSessionCallsCount == 1)
+        #expect(elementCallService.registerCallSessionGenerationCallsCount == 1)
+        #expect(elementCallService.tearDownCallSessionGenerationCallsCount == 1)
+        #expect(elementCallService.tearDownCallSessionGenerationReceivedGeneration == elementCallService.registerCallSessionGenerationReceivedGeneration)
     }
 
     @Test
@@ -335,7 +337,10 @@ struct CallScreenJunchatTests {
         releaseStart?.resume(returning: .success(URL.userDirectory))
         try await Task.sleep(for: .milliseconds(50))
 
-        #expect(elementCallService.setupCallSessionRoomIDRoomDisplayNameCallsCount == 0)
+        #expect(elementCallService.registerCallSessionGenerationCallsCount == 1)
+        #expect(elementCallService.setupCallSessionRoomIDRoomDisplayNameGenerationCallsCount == 0)
+        #expect(elementCallService.tearDownCallSessionGenerationCallsCount == 1)
+        #expect(elementCallService.tearDownCallSessionGenerationReceivedGeneration == elementCallService.registerCallSessionGenerationReceivedGeneration)
         #expect(viewModel.context.viewState.url == nil)
         #expect(widgetDriver.stopCallsCount == 1)
     }

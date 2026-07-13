@@ -102,11 +102,50 @@ final class ElementCallServiceTests {
         #expect(callProvider.reportCallWithEndedAtReasonCallsCount == 1)
         #expect(service.incomingCallRoomIDPublisher.value == nil)
         
-        await service.setupCallSession(roomID: "!room:example.com", roomDisplayName: "welcome")
+        let generation = ElementCallSessionGeneration()
+        service.registerCallSession(generation: generation)
+        await service.setupCallSession(roomID: "!room:example.com", roomDisplayName: "welcome", generation: generation)
         
         #expect(callProvider.reportCallWithEndedAtReasonCallsCount == 1)
         #expect(service.incomingCallRoomIDPublisher.value == nil)
         #expect(service.ongoingCallRoomIDPublisher.value == "!room:example.com")
+    }
+
+    @Test
+    func stoppedCallSessionGenerationCannotPublishAnOngoingCall() async {
+        let generation = ElementCallSessionGeneration()
+        service.registerCallSession(generation: generation)
+        service.tearDownCallSession(generation: generation)
+
+        await service.setupCallSession(roomID: "!stopped:example.com",
+                                       roomDisplayName: "Stopped",
+                                       generation: generation)
+
+        #expect(service.ongoingCallRoomIDPublisher.value == nil)
+    }
+
+    @Test
+    func supersededCallSessionGenerationCannotMutateTheReplacement() async {
+        let firstGeneration = ElementCallSessionGeneration()
+        service.registerCallSession(generation: firstGeneration)
+        let replacementGeneration = ElementCallSessionGeneration()
+        service.registerCallSession(generation: replacementGeneration)
+
+        await service.setupCallSession(roomID: "!stale:example.com",
+                                       roomDisplayName: "Stale",
+                                       generation: firstGeneration)
+        #expect(service.ongoingCallRoomIDPublisher.value == nil)
+
+        await service.setupCallSession(roomID: "!replacement:example.com",
+                                       roomDisplayName: "Replacement",
+                                       generation: replacementGeneration)
+        #expect(service.ongoingCallRoomIDPublisher.value == "!replacement:example.com")
+
+        service.tearDownCallSession(generation: firstGeneration)
+        #expect(service.ongoingCallRoomIDPublisher.value == "!replacement:example.com")
+
+        service.tearDownCallSession(generation: replacementGeneration)
+        #expect(service.ongoingCallRoomIDPublisher.value == nil)
     }
     
     @Test(.disabled())
