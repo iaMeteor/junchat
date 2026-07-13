@@ -9,7 +9,15 @@
 import Combine
 import Foundation
 import MatrixRustSDK
+import MatrixSDKFFI
 import SwiftUI
+
+protocol ElementCallWidgetDriverRuntimeProtocol: AnyObject, Sendable {
+    func run() async
+    func receive() async -> String?
+    func send(message: String) async -> Bool
+    func stop()
+}
 
 struct ElementCallWidgetMessage: Codable {
     struct EmptyResponse: Codable { }
@@ -111,7 +119,13 @@ struct ElementCallWidgetMessage: Codable {
 final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked Sendable {
     struct Session {
         let url: URL
-        let sdkDriver: WidgetDriverAndHandle
+        let runtime: ElementCallWidgetDriverRuntimeProtocol
+    }
+
+    private struct RuntimeResources {
+        let runtime: ElementCallWidgetDriverRuntimeProtocol
+        let receiveTask: Task<Void, Never>?
+        let runTask: Task<Void, Never>?
     }
 
     typealias SessionBuilder = () async -> Result<Session, ElementCallWidgetDriverError>
@@ -120,8 +134,8 @@ final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked
     private let capabilitiesProvider: ElementCallWidgetCapabilitiesProvider
     private let sessionBuilder: SessionBuilder?
 
-    private let lifecycleLock = NSLock()
-    private var sdkDriver: WidgetDriverAndHandle?
+    private let lifecycleLock = NSRecursiveLock()
+    private var runtime: ElementCallWidgetDriverRuntimeProtocol?
     private var receiveTask: Task<Void, Never>?
     private var runTask: Task<Void, Never>?
     private var hasStopped = false
@@ -171,50 +185,61 @@ final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked
         }
 
         guard !Task.isCancelled else {
+            if case .success(let session) = sessionResult {
+                session.runtime.stop()
+            }
             return .failure(.cancelled)
         }
 
         switch sessionResult {
         case .success(let session):
-            return start(session: session, room: room)
+            return start(session: session)
         case .failure(let error):
             return .failure(error)
         }
     }
 
     func stop() {
-        lifecycleLock.lock()
-        guard !hasStopped else {
-            lifecycleLock.unlock()
-            return
+        let resources = lifecycleLock.withLock { () -> RuntimeResources? in
+            guard !hasStopped else {
+                return nil
+            }
+
+            hasStopped = true
+            guard let runtime else {
+                return nil
+            }
+
+            let resources = RuntimeResources(runtime: runtime, receiveTask: receiveTask, runTask: runTask)
+            self.runtime = nil
+            receiveTask = nil
+            runTask = nil
+            return resources
         }
 
-        hasStopped = true
-        let receiveTask = receiveTask
-        self.receiveTask = nil
-        let runTask = runTask
-        self.runTask = nil
-        sdkDriver = nil
-        lifecycleLock.unlock()
-
-        receiveTask?.cancel()
-        runTask?.cancel()
+        resources?.receiveTask?.cancel()
+        resources?.runTask?.cancel()
+        resources?.runtime.stop()
     }
 
     @discardableResult
     func handleMessage(_ message: String) async -> Result<Bool, ElementCallWidgetDriverError> {
-        lifecycleLock.lock()
-        let sdkDriver = sdkDriver
-        lifecycleLock.unlock()
-
-        guard let sdkDriver else {
+        guard let runtime = lifecycleLock.withLock({ hasStopped ? nil : runtime }) else {
             return .failure(.driverNotSetup)
         }
 
         if let widgetMessage = decodeHostHandledMessage(message) {
-            handleMessageIfNeeded(message)
-            if let response = widgetMessage.successResponseJSON() {
-                messagePublisher.send(response)
+            let response = widgetMessage.successResponseJSON()
+            guard withActiveRuntime(runtime, {
+                handleMessageIfNeeded(message)
+                if let response {
+                    messagePublisher.send(response)
+                }
+            }) else {
+                return .failure(.cancelled)
+            }
+
+            if let response {
                 MXLog.debug("Acknowledged host-handled Element Call message: \(CallDiagnostics.jsonSummary(response))")
             } else {
                 MXLog.error("Failed to build response for host-handled Element Call message")
@@ -222,10 +247,12 @@ final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked
             return .success(true)
         }
 
-        let result = await sdkDriver.handle.send(msg: message)
+        let result = await runtime.send(message: message)
         MXLog.debug("Sent widget message: \(CallDiagnostics.jsonSummary(message)) accepted=\(result)")
 
-        handleMessageIfNeeded(message)
+        guard withActiveRuntime(runtime, { handleMessageIfNeeded(message) }) else {
+            return .failure(.cancelled)
+        }
 
         return .success(result)
     }
@@ -292,51 +319,57 @@ final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked
             return .failure(.failedBuildingWidgetDriver)
         }
 
-        return .success(.init(url: url, sdkDriver: sdkDriver))
+        let runtime = MatrixElementCallWidgetDriverRuntime(sdkDriver: sdkDriver,
+                                                           room: room,
+                                                           capabilitiesProvider: capabilitiesProvider)
+        return .success(.init(url: url, runtime: runtime))
     }
 
-    private func start(session: Session, room: Room) -> Result<URL, ElementCallWidgetDriverError> {
-        lifecycleLock.lock()
-        guard !hasStopped, !Task.isCancelled else {
-            lifecycleLock.unlock()
-            return .failure(.cancelled)
-        }
-
-        let receiveTask = Task.detached { [weak self, sdkDriver = session.sdkDriver, messagePublisher] in
-            MXLog.debug("Started message receiving loop")
-
-            defer {
-                MXLog.debug("Stopped message receiving loop")
+    private func start(session: Session) -> Result<URL, ElementCallWidgetDriverError> {
+        let result: Result<URL, ElementCallWidgetDriverError> = lifecycleLock.withLock {
+            guard !hasStopped, !Task.isCancelled else {
+                return .failure(.cancelled)
             }
 
-            while !Task.isCancelled {
-                guard let receivedMessage = await sdkDriver.handle.recv(), !Task.isCancelled else {
-                    return
+            let runtime = session.runtime
+            self.runtime = runtime
+            receiveTask = Task.detached { [weak self, runtime] in
+                MXLog.debug("Started message receiving loop")
+
+                defer {
+                    MXLog.debug("Stopped message receiving loop")
                 }
 
-                messagePublisher.send(receivedMessage)
-                MXLog.debug("Received widget message: \(CallDiagnostics.jsonSummary(receivedMessage))")
+                while !Task.isCancelled {
+                    guard let receivedMessage = await runtime.receive() else {
+                        return
+                    }
 
-                self?.handleMessageIfNeeded(receivedMessage)
+                    guard self?.publishReceivedMessage(receivedMessage, from: runtime) == true else {
+                        return
+                    }
+
+                    MXLog.debug("Received widget message: \(CallDiagnostics.jsonSummary(receivedMessage))")
+                }
             }
+
+            runTask = Task.detached { [runtime] in
+                MXLog.debug("Started widget driver")
+
+                defer {
+                    MXLog.debug("Stopped widget driver")
+                }
+
+                await runtime.run()
+            }
+
+            return .success(session.url)
         }
 
-        let runTask = Task.detached { [sdkDriver = session.sdkDriver, capabilitiesProvider] in
-            MXLog.debug("Started widget driver")
-
-            defer {
-                MXLog.debug("Stopped widget driver")
-            }
-
-            await sdkDriver.driver.run(room: room, capabilitiesProvider: capabilitiesProvider)
+        if case .failure = result {
+            session.runtime.stop()
         }
-
-        sdkDriver = session.sdkDriver
-        self.receiveTask = receiveTask
-        self.runTask = runTask
-        lifecycleLock.unlock()
-
-        return .success(session.url)
+        return result
     }
 
     private func decodeHostHandledMessage(_ message: String) -> ElementCallWidgetMessage? {
@@ -359,7 +392,7 @@ final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked
             let widgetMessage = try JSONDecoder().decode(ElementCallWidgetMessage.self, from: data)
             if widgetMessage.direction == .fromWidget {
                 if widgetMessage.isCallEndingAction {
-                    actionsSubject.send(.callEnded)
+                    sendActionIfActive(.callEnded)
                     return
                 }
                 
@@ -373,7 +406,7 @@ final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked
                         return
                     }
                     
-                    actionsSubject.send(.mediaStateChanged(audioEnabled: audioEnabled, videoEnabled: videoEnabled))
+                    sendActionIfActive(.mediaStateChanged(audioEnabled: audioEnabled, videoEnabled: videoEnabled))
                 }
             }
         } catch {
@@ -381,6 +414,348 @@ final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked
             MXLog.verbose("Failed processing widget message: \(CallDiagnostics.errorSummary(error))")
         }
     }
+
+    private func publishReceivedMessage(_ message: String, from runtime: ElementCallWidgetDriverRuntimeProtocol) -> Bool {
+        withActiveRuntime(runtime) {
+            messagePublisher.send(message)
+            handleMessageIfNeeded(message)
+        }
+    }
+
+    private func sendActionIfActive(_ action: ElementCallWidgetDriverAction) {
+        lifecycleLock.withLock {
+            guard !hasStopped else { return }
+            actionsSubject.send(action)
+        }
+    }
+
+    private func withActiveRuntime(_ expectedRuntime: ElementCallWidgetDriverRuntimeProtocol,
+                                   _ operation: () -> Void) -> Bool {
+        lifecycleLock.withLock {
+            guard !hasStopped, runtime === expectedRuntime else {
+                return false
+            }
+            operation()
+            return true
+        }
+    }
+}
+
+private final class MatrixElementCallWidgetDriverRuntime: ElementCallWidgetDriverRuntimeProtocol, @unchecked Sendable {
+    private enum FutureKind {
+        case run
+        case receive
+        case send
+
+        func poll(handle: UInt64, callbackData: UInt64) {
+            switch self {
+            case .run:
+                ffi_matrix_sdk_ffi_rust_future_poll_void(handle, elementCallRustFutureCallback, callbackData)
+            case .receive:
+                ffi_matrix_sdk_ffi_rust_future_poll_rust_buffer(handle, elementCallRustFutureCallback, callbackData)
+            case .send:
+                ffi_matrix_sdk_ffi_rust_future_poll_i8(handle, elementCallRustFutureCallback, callbackData)
+            }
+        }
+
+        func cancel(handle: UInt64) {
+            switch self {
+            case .run:
+                ffi_matrix_sdk_ffi_rust_future_cancel_void(handle)
+            case .receive:
+                ffi_matrix_sdk_ffi_rust_future_cancel_rust_buffer(handle)
+            case .send:
+                ffi_matrix_sdk_ffi_rust_future_cancel_i8(handle)
+            }
+        }
+
+        func free(handle: UInt64) {
+            switch self {
+            case .run:
+                ffi_matrix_sdk_ffi_rust_future_free_void(handle)
+            case .receive:
+                ffi_matrix_sdk_ffi_rust_future_free_rust_buffer(handle)
+            case .send:
+                ffi_matrix_sdk_ffi_rust_future_free_i8(handle)
+            }
+        }
+    }
+
+    private struct PendingFuture {
+        let handle: UInt64
+        let kind: FutureKind
+
+        func cancelAndFree() {
+            kind.cancel(handle: handle)
+            kind.free(handle: handle)
+        }
+    }
+
+    private let driver: WidgetDriver
+    private let handle: WidgetDriverHandle
+    private let room: Room
+    private let capabilitiesProvider: WidgetCapabilitiesProvider
+
+    private let lock = NSLock()
+    private var pendingFutures = [UUID: PendingFuture]()
+    private var hasStopped = false
+
+    init(sdkDriver: WidgetDriverAndHandle,
+         room: Room,
+         capabilitiesProvider: WidgetCapabilitiesProvider) {
+        driver = sdkDriver.driver
+        handle = sdkDriver.handle
+        self.room = room
+        self.capabilitiesProvider = capabilitiesProvider
+
+        // The generated wrappers do this immediately before creating each Rust future.
+        uniffiEnsureMatrixSdkFfiInitialized()
+    }
+
+    deinit {
+        stop()
+    }
+
+    func run() async {
+        guard beginFutureCreation() else { return }
+
+        let futureHandle = uniffi_matrix_sdk_ffi_fn_method_widgetdriver_run(driver.uniffiCloneHandle(),
+                                                                            FfiConverterTypeRoom_lower(room),
+                                                                            FfiConverterCallbackInterfaceWidgetCapabilitiesProvider_lower(capabilitiesProvider))
+        guard let token = register(futureHandle, kind: .run), await waitUntilReady(token) else {
+            return
+        }
+
+        guard let status = complete(token, operation: { pendingFuture in
+            var status = Self.emptyCallStatus
+            ffi_matrix_sdk_ffi_rust_future_complete_void(pendingFuture.handle, &status)
+            return status
+        }) else {
+            return
+        }
+        _ = check(status, operation: "run")
+    }
+
+    func receive() async -> String? {
+        guard beginFutureCreation() else { return nil }
+
+        let futureHandle = uniffi_matrix_sdk_ffi_fn_method_widgetdriverhandle_recv(handle.uniffiCloneHandle())
+        guard let token = register(futureHandle, kind: .receive), await waitUntilReady(token) else {
+            return nil
+        }
+
+        guard let completion = complete(token, operation: { pendingFuture in
+            var status = Self.emptyCallStatus
+            let buffer = ffi_matrix_sdk_ffi_rust_future_complete_rust_buffer(pendingFuture.handle, &status)
+            return (buffer, status)
+        }) else {
+            return nil
+        }
+
+        guard check(completion.1, operation: "receive") else {
+            release(completion.0)
+            return nil
+        }
+        return decodeOptionalString(completion.0)
+    }
+
+    func send(message: String) async -> Bool {
+        guard beginFutureCreation(), let messageBuffer = encode(message) else { return false }
+
+        let futureHandle = uniffi_matrix_sdk_ffi_fn_method_widgetdriverhandle_send(handle.uniffiCloneHandle(), messageBuffer)
+        guard let token = register(futureHandle, kind: .send), await waitUntilReady(token) else {
+            return false
+        }
+
+        guard let completion = complete(token, operation: { pendingFuture in
+            var status = Self.emptyCallStatus
+            let result = ffi_matrix_sdk_ffi_rust_future_complete_i8(pendingFuture.handle, &status)
+            return (result, status)
+        }) else {
+            return false
+        }
+        return check(completion.1, operation: "send") && completion.0 != 0
+    }
+
+    func stop() {
+        let pendingFutures = lock.withLock {
+            guard !hasStopped else { return [PendingFuture]() }
+            hasStopped = true
+            let pendingFutures = Array(self.pendingFutures.values)
+            self.pendingFutures.removeAll()
+            return pendingFutures
+        }
+
+        pendingFutures.forEach { $0.cancelAndFree() }
+    }
+
+    private func beginFutureCreation() -> Bool {
+        !Task.isCancelled && lock.withLock { !hasStopped }
+    }
+
+    private func register(_ handle: UInt64, kind: FutureKind) -> UUID? {
+        let token = UUID()
+        let pendingFuture = PendingFuture(handle: handle, kind: kind)
+        let didRegister = lock.withLock {
+            guard !hasStopped else { return false }
+            pendingFutures[token] = pendingFuture
+            return true
+        }
+
+        guard didRegister else {
+            pendingFuture.cancelAndFree()
+            return nil
+        }
+        return token
+    }
+
+    private func waitUntilReady(_ token: UUID) async -> Bool {
+        await withTaskCancellationHandler {
+            if Task.isCancelled {
+                cancelAndFree(token)
+                return false
+            }
+
+            while await poll(token) != 0 {
+                if Task.isCancelled {
+                    cancelAndFree(token)
+                    return false
+                }
+            }
+
+            return !Task.isCancelled && lock.withLock { pendingFutures[token] != nil }
+        } onCancel: { [weak self] in
+            self?.cancelAndFree(token)
+        }
+    }
+
+    private func poll(_ token: UUID) async -> Int8 {
+        await withCheckedContinuation { continuation in
+            let continuationBox = ElementCallRustFutureContinuation(continuation)
+            let didPoll = lock.withLock {
+                guard let pendingFuture = pendingFutures[token] else { return false }
+                let pointer = Unmanaged.passRetained(continuationBox).toOpaque()
+                pendingFuture.kind.poll(handle: pendingFuture.handle,
+                                        callbackData: UInt64(UInt(bitPattern: pointer)))
+                return true
+            }
+
+            if !didPoll {
+                continuationBox.resume(returning: 0)
+            }
+        }
+    }
+
+    private func cancelAndFree(_ token: UUID) {
+        let pendingFuture = lock.withLock { pendingFutures.removeValue(forKey: token) }
+        pendingFuture?.cancelAndFree()
+    }
+
+    private func complete<T>(_ token: UUID, operation: (PendingFuture) -> T) -> T? {
+        guard let pendingFuture = lock.withLock({ pendingFutures.removeValue(forKey: token) }) else {
+            return nil
+        }
+
+        let result = operation(pendingFuture)
+        pendingFuture.kind.free(handle: pendingFuture.handle)
+        return result
+    }
+
+    private func check(_ status: RustCallStatus, operation: String) -> Bool {
+        guard status.code == 0 else {
+            release(status.errorBuf)
+            if status.code != 3 {
+                MXLog.error("Element Call SDK runtime \(operation) failed with status \(status.code)")
+            }
+            return false
+        }
+        return true
+    }
+
+    private func encode(_ value: String) -> RustBuffer? {
+        let bytes = Array(value.utf8)
+        guard bytes.count <= Int32.max else {
+            MXLog.error("Element Call widget message exceeded the SDK size limit")
+            return nil
+        }
+
+        var status = Self.emptyCallStatus
+        let buffer = bytes.withUnsafeBufferPointer { bytes in
+            ffi_matrix_sdk_ffi_rustbuffer_from_bytes(.init(len: Int32(bytes.count), data: bytes.baseAddress), &status)
+        }
+        guard check(status, operation: "message encoding") else {
+            release(buffer)
+            return nil
+        }
+        return buffer
+    }
+
+    private func decodeOptionalString(_ buffer: RustBuffer) -> String? {
+        defer { release(buffer) }
+
+        guard buffer.len <= Int.max,
+              let data = buffer.data else {
+            MXLog.error("Element Call SDK returned an invalid widget message buffer")
+            return nil
+        }
+
+        let bytes = Array(UnsafeBufferPointer(start: data, count: Int(buffer.len)))
+        guard let tag = bytes.first else {
+            MXLog.error("Element Call SDK returned an empty widget message buffer")
+            return nil
+        }
+
+        switch tag {
+        case 0:
+            guard bytes.count == 1 else { return invalidWidgetMessageBuffer() }
+            return nil
+        case 1:
+            guard bytes.count >= 5 else { return invalidWidgetMessageBuffer() }
+            let length = bytes[1..<5].reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
+            guard Int(length) == bytes.count - 5 else { return invalidWidgetMessageBuffer() }
+            guard let value = String(bytes: bytes[5...], encoding: .utf8) else {
+                return invalidWidgetMessageBuffer()
+            }
+            return value
+        default:
+            return invalidWidgetMessageBuffer()
+        }
+    }
+
+    private func invalidWidgetMessageBuffer<T>() -> T? {
+        MXLog.error("Element Call SDK returned an invalid widget message buffer")
+        return nil
+    }
+
+    private func release(_ buffer: RustBuffer) {
+        guard buffer.data != nil || buffer.capacity > 0 else { return }
+        var status = Self.emptyCallStatus
+        ffi_matrix_sdk_ffi_rustbuffer_free(buffer, &status)
+        if status.code != 0 {
+            MXLog.error("Failed releasing an Element Call SDK buffer with status \(status.code)")
+        }
+    }
+
+    private static var emptyCallStatus: RustCallStatus {
+        .init(code: 0, errorBuf: .init(capacity: 0, len: 0, data: nil))
+    }
+}
+
+private final class ElementCallRustFutureContinuation: @unchecked Sendable {
+    private let continuation: CheckedContinuation<Int8, Never>
+
+    init(_ continuation: CheckedContinuation<Int8, Never>) {
+        self.continuation = continuation
+    }
+
+    func resume(returning result: Int8) {
+        continuation.resume(returning: result)
+    }
+}
+
+private let elementCallRustFutureCallback: UniffiRustFutureContinuationCallback = { callbackData, result in
+    guard let pointer = UnsafeRawPointer(bitPattern: UInt(callbackData)) else { return }
+    Unmanaged<ElementCallRustFutureContinuation>.fromOpaque(pointer).takeRetainedValue().resume(returning: result)
 }
 
 private final class ElementCallWidgetCapabilitiesProvider: WidgetCapabilitiesProvider, @unchecked Sendable {
