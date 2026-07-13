@@ -3,21 +3,15 @@ import Foundation
 
 struct ReleaseToGitHub: AsyncParsableCommand {
     static let configuration = CommandConfiguration(commandName: "release-to-github",
-                                                    abstract: "Creates a GitHub draft release and updates JUNCHAT_CHANGES.md with generated release notes.")
+                                                    abstract: "Creates or reuses a GitHub draft release and updates JUNCHAT_CHANGES.md with generated release notes.")
 
     enum ReleaseError: LocalizedError {
         case missingGitHubToken
-        case failedToCreateRelease(String)
-        case failedToParseResponse
 
         var errorDescription: String? {
             switch self {
             case .missingGitHubToken:
                 return "The GITHUB_TOKEN environment variable is not set."
-            case .failedToCreateRelease(let message):
-                return "Failed to create GitHub release: \(message)"
-            case .failedToParseResponse:
-                return "Failed to parse the GitHub API response."
             }
         }
     }
@@ -26,18 +20,18 @@ struct ReleaseToGitHub: AsyncParsableCommand {
         let currentVersion = try CI.readReleaseVersion()
         let repository = try await CI.gitRepository()
         let releaseCommit = try await CI.gitCurrentCommit()
-        logger.info("Creating GitHub draft release for version \(currentVersion.name)…")
+        logger.info("Ensuring GitHub draft release for version \(currentVersion.name)…")
 
-        let releaseBody = try await createGitHubDraft(version: currentVersion.name,
-                                                      releaseCommit: releaseCommit,
-                                                      repository: repository)
+        let releaseBody = try await createOrReuseGitHubDraft(version: currentVersion.name,
+                                                             releaseCommit: releaseCommit,
+                                                             repository: repository)
 
         try updateChangelog(version: currentVersion.name, generatedNotes: releaseBody)
 
         let changesFilePath = URL.projectDirectory.appendingPathComponent("JUNCHAT_CHANGES.md").path
         try await CI.run(.name("git"), ["add", changesFilePath])
 
-        logger.info("Successfully created GitHub draft release \(currentVersion.name) and updated JUNCHAT_CHANGES.md.")
+        logger.info("Successfully prepared GitHub draft release \(currentVersion.name) and updated JUNCHAT_CHANGES.md.")
         
         let targetFilePath = "project.yml"
         let xcodeProjPath = "ElementX.xcodeproj"
@@ -61,40 +55,18 @@ struct ReleaseToGitHub: AsyncParsableCommand {
 
     // MARK: - Private
 
-    private func createGitHubDraft(version: String,
-                                   releaseCommit: String,
-                                   repository: GitHubRepository) async throws -> String {
+    private func createOrReuseGitHubDraft(version: String,
+                                          releaseCommit: String,
+                                          repository: GitHubRepository) async throws -> String {
         guard let apiToken = ProcessInfo.processInfo.environment["GITHUB_TOKEN"], !apiToken.isEmpty
         else {
             throw ReleaseError.missingGitHubToken
         }
-        
-        var request = URLRequest(url: repository.releasesAPIURL)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(apiToken)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        request.httpBody = try JSONEncoder().encode(GitHubReleaseRequest(version: version,
-                                                                         targetCommit: releaseCommit))
-        
-        let (data, response) = try await URLSession.shared.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw ReleaseError.failedToParseResponse
-        }
-
-        guard (200...299).contains(httpResponse.statusCode) else {
-            let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw ReleaseError.failedToCreateRelease("HTTP \(httpResponse.statusCode): \(errorBody)")
-        }
-
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let releaseBody = json["body"] as? String else {
-            throw ReleaseError.failedToParseResponse
-        }
-        
-        return releaseBody
+        return try await GitHubReleaseAPI().createOrReuseDraft(version: version,
+                                                               targetCommit: releaseCommit,
+                                                               repository: repository,
+                                                               token: apiToken)
     }
 
     private func updateChangelog(version: String, generatedNotes: String) throws {
