@@ -24,6 +24,7 @@ protocol UserSessionProtocol {
     var mediaProvider: MediaProviderProtocol { get }
     var voiceMessageMediaManager: VoiceMessageMediaManagerProtocol { get }
     var liveLocationManager: LiveLocationManagerProtocol { get }
+    var privacyModeService: PrivacyModeServiceProtocol { get }
     
     var sessionSecurityStatePublisher: CurrentValuePublisher<SessionSecurityState, Never> { get }
     

@@ -31,8 +31,8 @@ final class RoomScreenViewModelTests {
         clientProxy.userIdentityForFallBackToServerReturnValue = .success(nil)
 
         let roomProxyMock = JoinedRoomProxyMock(.init(isDirect: true,
-                                                     hasOngoingCall: false,
-                                                     members: [.mockMe, .mockAlice]))
+                                                      hasOngoingCall: false,
+                                                      members: [.mockMe, .mockAlice]))
         let userSession = UserSessionMock(.init(clientProxy: clientProxy))
 
         let viewModel = RoomScreenViewModel(userSession: userSession,
@@ -344,11 +344,12 @@ final class RoomScreenViewModelTests {
     }
 
     @Test
-    func privacyModeTogglePersistsRoomIDAndServerState() async throws {
+    func privacyModeToggleUsesSessionService() async throws {
         let appSettings = AppSettings()
         let clientProxy = ClientProxyMock(.init())
+        let privacyModeService = PrivacyModeServiceMock(toggleResults: [.success(true), .success(false)])
         let roomProxyMock = JoinedRoomProxyMock(.init(id: "MyRoomID", hasOngoingCall: false))
-        let viewModel = RoomScreenViewModel(userSession: UserSessionMock(.init(clientProxy: clientProxy)),
+        let viewModel = RoomScreenViewModel(userSession: UserSessionMock(.init(clientProxy: clientProxy, privacyModeService: privacyModeService)),
                                             roomProxy: roomProxyMock,
                                             initialSelectedPinnedEventID: nil,
                                             ongoingCallRoomIDPublisher: .init(.init(nil)),
@@ -362,25 +363,20 @@ final class RoomScreenViewModelTests {
         var deferred = deferFulfillment(viewModel.context.$viewState) { $0.isPrivacyModeEnabled }
         viewModel.context.send(viewAction: .togglePrivacyMode)
         try await deferred.fulfill()
-        #expect(appSettings.junchatPrivacyModeRoomIDs.contains("MyRoomID"))
-        #expect(clientProxy.setJunchatPrivacyModeRoomIDReceivedInvocations.first?.enabled == true)
-        #expect(clientProxy.setJunchatPrivacyModeRoomIDReceivedInvocations.first?.roomID == "MyRoomID")
 
         deferred = deferFulfillment(viewModel.context.$viewState) { !$0.isPrivacyModeEnabled }
         viewModel.context.send(viewAction: .togglePrivacyMode)
         try await deferred.fulfill()
-        #expect(!appSettings.junchatPrivacyModeRoomIDs.contains("MyRoomID"))
-        #expect(clientProxy.setJunchatPrivacyModeRoomIDReceivedInvocations.last?.enabled == false)
-        #expect(clientProxy.setJunchatPrivacyModeRoomIDReceivedInvocations.last?.roomID == "MyRoomID")
+        #expect(await privacyModeService.toggleRoomIDReceivedInvocations == ["MyRoomID", "MyRoomID"])
     }
 
     @Test
     func privacyModeSyncsServerEnabledState() async throws {
         let appSettings = AppSettings()
         let clientProxy = ClientProxyMock(.init())
-        clientProxy.junchatPrivacyModeRoomIDReturnValue = .success(true)
+        let privacyModeService = PrivacyModeServiceMock(loadResults: [.success(true)])
         let roomProxyMock = JoinedRoomProxyMock(.init(id: "MyRoomID", hasOngoingCall: false))
-        let viewModel = RoomScreenViewModel(userSession: UserSessionMock(.init(clientProxy: clientProxy)),
+        let viewModel = RoomScreenViewModel(userSession: UserSessionMock(.init(clientProxy: clientProxy, privacyModeService: privacyModeService)),
                                             roomProxy: roomProxyMock,
                                             initialSelectedPinnedEventID: nil,
                                             ongoingCallRoomIDPublisher: .init(.init(nil)),
@@ -393,18 +389,17 @@ final class RoomScreenViewModelTests {
         let deferred = deferFulfillment(viewModel.context.$viewState) { $0.isPrivacyModeEnabled }
         try await deferred.fulfill()
 
-        #expect(appSettings.junchatPrivacyModeRoomIDs.contains("MyRoomID"))
-        #expect(clientProxy.junchatPrivacyModeRoomIDReceivedInvocations == ["MyRoomID"])
+        #expect(await privacyModeService.loadRoomIDReceivedInvocations == ["MyRoomID"])
     }
 
     @Test
-    func privacyModeRepairsLegacyLocalStateOnServer() async throws {
+    func explicitFalseWinsOverStaleLegacyLocalState() async throws {
         let appSettings = AppSettings()
         appSettings.junchatPrivacyModeRoomIDs = ["MyRoomID"]
         let clientProxy = ClientProxyMock(.init())
-        clientProxy.junchatPrivacyModeRoomIDReturnValue = .success(false)
+        let privacyModeService = PrivacyModeServiceMock(loadResults: [.success(false)])
         let roomProxyMock = JoinedRoomProxyMock(.init(id: "MyRoomID", hasOngoingCall: false))
-        let viewModel = RoomScreenViewModel(userSession: UserSessionMock(.init(clientProxy: clientProxy)),
+        let viewModel = RoomScreenViewModel(userSession: UserSessionMock(.init(clientProxy: clientProxy, privacyModeService: privacyModeService)),
                                             roomProxy: roomProxyMock,
                                             initialSelectedPinnedEventID: nil,
                                             ongoingCallRoomIDPublisher: .init(.init(nil)),
@@ -416,8 +411,8 @@ final class RoomScreenViewModelTests {
 
         try await Task.sleep(for: .milliseconds(50))
 
-        #expect(viewModel.state.isPrivacyModeEnabled)
-        #expect(clientProxy.setJunchatPrivacyModeRoomIDReceivedInvocations.contains { $0.enabled && $0.roomID == "MyRoomID" })
+        #expect(!viewModel.state.isPrivacyModeEnabled)
+        #expect(await privacyModeService.toggleRoomIDReceivedInvocations.isEmpty)
     }
 
     @Test

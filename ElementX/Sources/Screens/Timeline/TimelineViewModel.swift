@@ -14,6 +14,7 @@ import SwiftUI
 
 typealias TimelineViewModelType = StateStoreViewModel<TimelineViewState, TimelineViewAction>
 
+// swiftlint:disable:next type_body_length
 class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
     private enum Constants {
         static let paginationEventLimit: UInt16 = 20
@@ -877,15 +878,24 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
             fatalError("invalid composer mode.")
         }
 
-        if shouldRedactSentMessage && isPrivacyModeEnabled {
+        if shouldRedactSentMessage, await isPrivacyModeEnabled() {
             trackPrivacyControlledMessage(for: message)
         }
 
         scrollToBottom()
     }
 
-    private var isPrivacyModeEnabled: Bool {
-        appSettings.junchatEmergencyPrivacyModeEnabled || appSettings.junchatPrivacyModeRoomIDs.contains(timelineController.roomID)
+    private func isPrivacyModeEnabled() async -> Bool {
+        if appSettings.junchatEmergencyPrivacyModeEnabled {
+            return true
+        }
+
+        switch await userSession.privacyModeService.load(roomID: timelineController.roomID) {
+        case .success(let enabled):
+            return enabled
+        case .failure:
+            return await userSession.privacyModeService.cachedValue(roomID: timelineController.roomID) ?? false
+        }
     }
 
     private func trackPrivacyControlledMessage(for message: String) {

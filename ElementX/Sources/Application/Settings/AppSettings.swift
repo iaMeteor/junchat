@@ -316,6 +316,10 @@ final class AppSettings {
         store = userDefaults
     }
 
+    static var sharedUserDefaults: UserDefaults {
+        store
+    }
+
     init(serverEnvironment: JunchatServerEnvironment = .current) {
         self.serverEnvironment = serverEnvironment
         accountProviders = [serverEnvironment.matrixAccountProvider]

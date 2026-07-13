@@ -44,6 +44,7 @@ enum ClientProxyMockError: Error {
 }
 
 extension ClientProxyMock {
+    // swiftlint:disable:next function_body_length
     convenience init(_ configuration: ClientProxyMockConfiguration) {
         self.init()
         
@@ -102,8 +103,6 @@ extension ClientProxyMock {
         junchatContactsReturnValue = .success([])
         junchatHideFromContactsDirectoryReturnValue = .success(false)
         setJunchatHideFromContactsDirectoryReturnValue = .success(())
-        junchatPrivacyModeRoomIDReturnValue = .success(false)
-        setJunchatPrivacyModeRoomIDReturnValue = .success(())
         changePasswordOldPasswordNewPasswordLogoutDevicesReturnValue = .success(())
         
         let mediaLoader = MediaLoaderMock()

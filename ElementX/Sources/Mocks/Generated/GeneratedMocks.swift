@@ -5902,142 +5902,6 @@ class ClientProxyMock: ClientProxyProtocol, @unchecked Sendable {
             return setJunchatHideFromContactsDirectoryReturnValue
         }
     }
-    //MARK: - junchatPrivacyMode
-
-    var junchatPrivacyModeRoomIDUnderlyingCallsCount = 0
-    var junchatPrivacyModeRoomIDCallsCount: Int {
-        get {
-            if Thread.isMainThread {
-                return junchatPrivacyModeRoomIDUnderlyingCallsCount
-            } else {
-                var returnValue: Int? = nil
-                DispatchQueue.main.sync {
-                    returnValue = junchatPrivacyModeRoomIDUnderlyingCallsCount
-                }
-
-                return returnValue!
-            }
-        }
-        set {
-            if Thread.isMainThread {
-                junchatPrivacyModeRoomIDUnderlyingCallsCount = newValue
-            } else {
-                DispatchQueue.main.sync {
-                    junchatPrivacyModeRoomIDUnderlyingCallsCount = newValue
-                }
-            }
-        }
-    }
-    var junchatPrivacyModeRoomIDCalled: Bool {
-        return junchatPrivacyModeRoomIDCallsCount > 0
-    }
-    var junchatPrivacyModeRoomIDReceivedRoomID: String?
-    var junchatPrivacyModeRoomIDReceivedInvocations: [String] = []
-
-    var junchatPrivacyModeRoomIDUnderlyingReturnValue: Result<Bool, ClientProxyError>!
-    var junchatPrivacyModeRoomIDReturnValue: Result<Bool, ClientProxyError>! {
-        get {
-            if Thread.isMainThread {
-                return junchatPrivacyModeRoomIDUnderlyingReturnValue
-            } else {
-                var returnValue: Result<Bool, ClientProxyError>? = nil
-                DispatchQueue.main.sync {
-                    returnValue = junchatPrivacyModeRoomIDUnderlyingReturnValue
-                }
-
-                return returnValue!
-            }
-        }
-        set {
-            if Thread.isMainThread {
-                junchatPrivacyModeRoomIDUnderlyingReturnValue = newValue
-            } else {
-                DispatchQueue.main.sync {
-                    junchatPrivacyModeRoomIDUnderlyingReturnValue = newValue
-                }
-            }
-        }
-    }
-    var junchatPrivacyModeRoomIDClosure: ((String) async -> Result<Bool, ClientProxyError>)?
-
-    func junchatPrivacyMode(roomID: String) async -> Result<Bool, ClientProxyError> {
-        junchatPrivacyModeRoomIDCallsCount += 1
-        junchatPrivacyModeRoomIDReceivedRoomID = roomID
-        junchatPrivacyModeRoomIDReceivedInvocations.append(roomID)
-        if let junchatPrivacyModeRoomIDClosure = junchatPrivacyModeRoomIDClosure {
-            return await junchatPrivacyModeRoomIDClosure(roomID)
-        } else {
-            return junchatPrivacyModeRoomIDReturnValue
-        }
-    }
-    //MARK: - setJunchatPrivacyMode
-
-    var setJunchatPrivacyModeRoomIDUnderlyingCallsCount = 0
-    var setJunchatPrivacyModeRoomIDCallsCount: Int {
-        get {
-            if Thread.isMainThread {
-                return setJunchatPrivacyModeRoomIDUnderlyingCallsCount
-            } else {
-                var returnValue: Int? = nil
-                DispatchQueue.main.sync {
-                    returnValue = setJunchatPrivacyModeRoomIDUnderlyingCallsCount
-                }
-
-                return returnValue!
-            }
-        }
-        set {
-            if Thread.isMainThread {
-                setJunchatPrivacyModeRoomIDUnderlyingCallsCount = newValue
-            } else {
-                DispatchQueue.main.sync {
-                    setJunchatPrivacyModeRoomIDUnderlyingCallsCount = newValue
-                }
-            }
-        }
-    }
-    var setJunchatPrivacyModeRoomIDCalled: Bool {
-        return setJunchatPrivacyModeRoomIDCallsCount > 0
-    }
-    var setJunchatPrivacyModeRoomIDReceivedArguments: (enabled: Bool, roomID: String)?
-    var setJunchatPrivacyModeRoomIDReceivedInvocations: [(enabled: Bool, roomID: String)] = []
-
-    var setJunchatPrivacyModeRoomIDUnderlyingReturnValue: Result<Void, ClientProxyError>!
-    var setJunchatPrivacyModeRoomIDReturnValue: Result<Void, ClientProxyError>! {
-        get {
-            if Thread.isMainThread {
-                return setJunchatPrivacyModeRoomIDUnderlyingReturnValue
-            } else {
-                var returnValue: Result<Void, ClientProxyError>? = nil
-                DispatchQueue.main.sync {
-                    returnValue = setJunchatPrivacyModeRoomIDUnderlyingReturnValue
-                }
-
-                return returnValue!
-            }
-        }
-        set {
-            if Thread.isMainThread {
-                setJunchatPrivacyModeRoomIDUnderlyingReturnValue = newValue
-            } else {
-                DispatchQueue.main.sync {
-                    setJunchatPrivacyModeRoomIDUnderlyingReturnValue = newValue
-                }
-            }
-        }
-    }
-    var setJunchatPrivacyModeRoomIDClosure: ((Bool, String) async -> Result<Void, ClientProxyError>)?
-
-    func setJunchatPrivacyMode(_ enabled: Bool, roomID: String) async -> Result<Void, ClientProxyError> {
-        setJunchatPrivacyModeRoomIDCallsCount += 1
-        setJunchatPrivacyModeRoomIDReceivedArguments = (enabled: enabled, roomID: roomID)
-        setJunchatPrivacyModeRoomIDReceivedInvocations.append((enabled: enabled, roomID: roomID))
-        if let setJunchatPrivacyModeRoomIDClosure = setJunchatPrivacyModeRoomIDClosure {
-            return await setJunchatPrivacyModeRoomIDClosure(enabled, roomID)
-        } else {
-            return setJunchatPrivacyModeRoomIDReturnValue
-        }
-    }
     //MARK: - disableOwnAccountForEmergencyPIN
 
     var disableOwnAccountForEmergencyPINUnderlyingCallsCount = 0
@@ -22101,6 +21965,11 @@ class UserSessionMock: UserSessionProtocol, @unchecked Sendable {
         set(value) { underlyingLiveLocationManager = value }
     }
     var underlyingLiveLocationManager: LiveLocationManagerProtocol!
+    var privacyModeService: PrivacyModeServiceProtocol {
+        get { return underlyingPrivacyModeService }
+        set(value) { underlyingPrivacyModeService = value }
+    }
+    var underlyingPrivacyModeService: PrivacyModeServiceProtocol!
     var sessionSecurityStatePublisher: CurrentValuePublisher<SessionSecurityState, Never> {
         get { return underlyingSessionSecurityStatePublisher }
         set(value) { underlyingSessionSecurityStatePublisher = value }

@@ -18,6 +18,7 @@ class UserSession: UserSessionProtocol {
     let mediaProvider: MediaProviderProtocol
     let voiceMessageMediaManager: VoiceMessageMediaManagerProtocol
     let liveLocationManager: LiveLocationManagerProtocol
+    let privacyModeService: PrivacyModeServiceProtocol
     
     let callbacks = PassthroughSubject<UserSessionCallback, Never>()
     
@@ -26,11 +27,16 @@ class UserSession: UserSessionProtocol {
         sessionSecurityStateSubject.asCurrentValuePublisher()
     }
     
-    init(clientProxy: ClientProxyProtocol, mediaProvider: MediaProviderProtocol, voiceMessageMediaManager: VoiceMessageMediaManagerProtocol, liveLocationManager: LiveLocationManagerProtocol) {
+    init(clientProxy: ClientProxyProtocol,
+         mediaProvider: MediaProviderProtocol,
+         voiceMessageMediaManager: VoiceMessageMediaManagerProtocol,
+         liveLocationManager: LiveLocationManagerProtocol,
+         privacyModeService: PrivacyModeServiceProtocol) {
         self.clientProxy = clientProxy
         self.mediaProvider = mediaProvider
         self.voiceMessageMediaManager = voiceMessageMediaManager
         self.liveLocationManager = liveLocationManager
+        self.privacyModeService = privacyModeService
         
         authErrorCancellable = clientProxy.actionsPublisher
             .receive(on: DispatchQueue.main)

@@ -11,6 +11,7 @@ import Foundation
 
 struct UserSessionMockConfiguration {
     var clientProxy: ClientProxyProtocol = ClientProxyMock(.init())
+    var privacyModeService: PrivacyModeServiceProtocol = PrivacyModeServiceMock()
 }
 
 extension UserSessionMock {
@@ -20,6 +21,7 @@ extension UserSessionMock {
         clientProxy = configuration.clientProxy
         mediaProvider = MediaProviderMock(configuration: .init())
         voiceMessageMediaManager = VoiceMessageMediaManagerMock()
+        privacyModeService = configuration.privacyModeService
         
         sessionSecurityStatePublisher = CurrentValueSubject<SessionSecurityState, Never>(.init(verificationState: .verified, recoveryState: .enabled)).asCurrentValuePublisher()
         

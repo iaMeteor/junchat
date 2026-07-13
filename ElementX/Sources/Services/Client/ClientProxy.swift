@@ -127,7 +127,6 @@ class ClientProxy: ClientProxyProtocol {
     }
     
     private static let junchatContactsVisibilityAccountDataType = "com.heyujk.junchat.contacts_visibility"
-    private static let junchatPrivacyModeAccountDataType = "com.heyujk.junchat.privacy_mode"
 
     private var loadCachedAvatarURLTask: Task<Void, Never>?
     private let userAvatarURLSubject = CurrentValueSubject<URL?, Never>(nil)
@@ -1058,72 +1057,6 @@ class ClientProxy: ClientProxyProtocol {
         }
     }
 
-    func junchatPrivacyMode(roomID: String) async -> Result<Bool, ClientProxyError> {
-        do {
-            let session = try client.session()
-            let url = try junchatRoomAccountDataURL(session: session,
-                                                    roomID: roomID,
-                                                    type: Self.junchatPrivacyModeAccountDataType)
-            var request = URLRequest(url: url)
-            request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
-            request.setValue("application/json", forHTTPHeaderField: "Accept")
-
-            let (data, response) = try await URLSession.shared.dataWithRetry(for: request)
-            guard let httpResponse = response as? HTTPURLResponse else {
-                return .failure(.invalidResponse)
-            }
-
-            if httpResponse.statusCode == 404 {
-                return .success(false)
-            }
-
-            guard 200..<300 ~= httpResponse.statusCode else {
-                MXLog.error("Failed fetching Junchat privacy mode: invalid response \(response)")
-                return .failure(.invalidResponse)
-            }
-
-            let privacyMode = try JSONDecoder().decode(JunchatPrivacyModeAccountData.self, from: data)
-            return .success(privacyMode.enabled)
-        } catch let error as ClientProxyError {
-            return .failure(error)
-        } catch let error as DecodingError {
-            MXLog.error("Failed decoding Junchat privacy mode: \(error)")
-            return .failure(.invalidResponse)
-        } catch {
-            MXLog.error("Failed fetching Junchat privacy mode: \(error)")
-            return .failure(.sdkError(error))
-        }
-    }
-
-    func setJunchatPrivacyMode(_ enabled: Bool, roomID: String) async -> Result<Void, ClientProxyError> {
-        do {
-            let session = try client.session()
-            let url = try junchatRoomAccountDataURL(session: session,
-                                                    roomID: roomID,
-                                                    type: Self.junchatPrivacyModeAccountDataType)
-            var request = URLRequest(url: url)
-            request.httpMethod = "PUT"
-            request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
-            request.setValue("application/json", forHTTPHeaderField: "Accept")
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try JSONEncoder().encode(JunchatPrivacyModeAccountData(enabled: enabled))
-            
-            let (_, response) = try await URLSession.shared.dataWithRetry(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  200..<300 ~= httpResponse.statusCode else {
-                MXLog.error("Failed updating Junchat privacy mode: invalid response \(response)")
-                return .failure(.invalidResponse)
-            }
-            
-            return .success(())
-        } catch let error as ClientProxyError {
-            return .failure(error)
-        } catch {
-            MXLog.error("Failed updating Junchat privacy mode: \(error)")
-            return .failure(.sdkError(error))
-        }
-    }
-    
     func disableOwnAccountForEmergencyPIN() async -> Result<Void, ClientProxyError> {
         do {
             let session = try client.session()
@@ -1224,24 +1157,6 @@ class ClientProxy: ClientProxyProtocol {
             .appending(path: type)
     }
 
-    private func junchatRoomAccountDataURL(session: Session, roomID: String, type: String) throws -> URL {
-        guard let homeserverURL = URL(string: session.homeserverUrl) else {
-            MXLog.error("Failed building Junchat room account data URL: invalid homeserver URL \(session.homeserverUrl)")
-            throw ClientProxyError.invalidServerName
-        }
-        
-        return homeserverURL
-            .appending(path: "_matrix")
-            .appending(path: "client")
-            .appending(path: "v3")
-            .appending(path: "user")
-            .appending(path: userID)
-            .appending(path: "rooms")
-            .appending(path: roomID)
-            .appending(path: "account_data")
-            .appending(path: type)
-    }
-    
     private func junchatPasswordChangeURL(session: Session) throws -> URL {
         guard let homeserverURL = URL(string: session.homeserverUrl) else {
             MXLog.error("Failed building Junchat password change URL: invalid homeserver URL \(session.homeserverUrl)")
@@ -1782,8 +1697,4 @@ private extension CreateRoomAccessType {
             false
         }
     }
-}
-
-private struct JunchatPrivacyModeAccountData: Codable {
-    let enabled: Bool
 }

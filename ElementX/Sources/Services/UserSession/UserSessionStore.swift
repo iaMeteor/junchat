@@ -58,7 +58,7 @@ class UserSessionStore: UserSessionStoreProtocol {
         
         switch await restorePreviousLogin(credentials) {
         case .success(let clientProxy):
-            return await .success(buildUserSessionWithClient(clientProxy))
+            return await .success(buildUserSessionWithClient(clientProxy, session: credentials.restorationToken.session))
         case .failure(let error):
             MXLog.error("Failed restoring login with error: \(error)")
             
@@ -84,7 +84,7 @@ class UserSessionStore: UserSessionStoreProtocol {
             
             MXLog.info("Set up session for user \(userID) at: \(sessionDirectories)")
             
-            return await .success(buildUserSessionWithClient(clientProxy))
+            return await .success(buildUserSessionWithClient(clientProxy, session: session))
         } catch {
             MXLog.error("Failed creating user session with error: \(error)")
             return .failure(.failedSettingUpSession)
@@ -103,7 +103,7 @@ class UserSessionStore: UserSessionStoreProtocol {
         
     // MARK: - Private
     
-    private func buildUserSessionWithClient(_ clientProxy: ClientProxyProtocol) async -> UserSessionProtocol {
+    private func buildUserSessionWithClient(_ clientProxy: ClientProxyProtocol, session: Session) async -> UserSessionProtocol {
         let mediaProvider = MediaProvider(mediaLoader: clientProxy.mediaLoader,
                                           imageCache: .onlyInMemory,
                                           homeserverReachabilityPublisher: clientProxy.homeserverReachabilityPublisher)
@@ -114,11 +114,19 @@ class UserSessionStore: UserSessionStoreProtocol {
             LiveLocationManager(clientProxy: clientProxy,
                                 appSettings: appSettings)
         }
+
+        let privacyModeTransport = PrivacyModeHTTPTransport(homeserverURL: session.homeserverUrl,
+                                                            userID: clientProxy.userID,
+                                                            accessToken: session.accessToken)
+        let privacyModeService = await PrivacyModeService(userID: clientProxy.userID,
+                                                          transport: privacyModeTransport,
+                                                          migrationStore: PrivacyModeMigrationStore(userDefaults: AppSettings.sharedUserDefaults))
         
         return UserSession(clientProxy: clientProxy,
                            mediaProvider: mediaProvider,
                            voiceMessageMediaManager: voiceMessageMediaManager,
-                           liveLocationManager: liveLocationManager)
+                           liveLocationManager: liveLocationManager,
+                           privacyModeService: privacyModeService)
     }
     
     private func restorePreviousLogin(_ credentials: KeychainCredentials) async -> Result<ClientProxyProtocol, UserSessionStoreError> {

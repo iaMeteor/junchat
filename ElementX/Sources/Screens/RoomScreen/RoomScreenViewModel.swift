@@ -16,10 +16,12 @@ typealias RoomScreenViewModelType = StateStoreViewModel<RoomScreenViewState, Roo
 
 class RoomScreenViewModel: RoomScreenViewModelType, RoomScreenViewModelProtocol {
     private let clientProxy: ClientProxyProtocol
+    private let privacyModeService: PrivacyModeServiceProtocol
     private let roomProxy: JoinedRoomProxyProtocol
     private let appSettings: AppSettings
     private let analyticsService: AnalyticsService
     private let userIndicatorController: UserIndicatorControllerProtocol
+    private var privacyModeServiceValue = false
     private let elementCallService: ElementCallServiceProtocol?
 
     private var initialSelectedPinnedEventID: String?
@@ -61,6 +63,7 @@ class RoomScreenViewModel: RoomScreenViewModelType, RoomScreenViewModelProtocol 
          analyticsService: AnalyticsService,
          userIndicatorController: UserIndicatorControllerProtocol) {
         clientProxy = userSession.clientProxy
+        privacyModeService = userSession.privacyModeService
         self.roomProxy = roomProxy
         self.appSettings = appSettings
         self.analyticsService = analyticsService
@@ -186,12 +189,11 @@ class RoomScreenViewModel: RoomScreenViewModelType, RoomScreenViewModelProtocol 
             }
             .store(in: &cancellables)
 
-        appSettings.$junchatPrivacyModeRoomIDs
-            .combineLatest(appSettings.$junchatEmergencyPrivacyModeEnabled)
+        appSettings.$junchatEmergencyPrivacyModeEnabled
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] roomIDs, emergencyPrivacyModeEnabled in
+            .sink { [weak self] emergencyPrivacyModeEnabled in
                 guard let self else { return }
-                state.isPrivacyModeEnabled = emergencyPrivacyModeEnabled || roomIDs.contains(roomProxy.id)
+                state.isPrivacyModeEnabled = emergencyPrivacyModeEnabled || privacyModeServiceValue
             }
             .store(in: &cancellables)
 
@@ -395,14 +397,14 @@ class RoomScreenViewModel: RoomScreenViewModelType, RoomScreenViewModelProtocol 
     }
 
     private func togglePrivacyMode() {
-        let shouldEnable = !appSettings.junchatPrivacyModeRoomIDs.contains(roomProxy.id)
         Task { [weak self] in
             guard let self else { return }
-            
-            switch await clientProxy.setJunchatPrivacyMode(shouldEnable, roomID: roomProxy.id) {
-            case .success:
+
+            switch await privacyModeService.toggle(roomID: roomProxy.id) {
+            case .success(let enabled):
                 await MainActor.run {
-                    setLocalPrivacyModeEnabled(shouldEnable)
+                    self.privacyModeServiceValue = enabled
+                    self.state.isPrivacyModeEnabled = self.appSettings.junchatEmergencyPrivacyModeEnabled || enabled
                 }
             case .failure:
                 userIndicatorController.submitIndicator(.init(id: Self.errorIndicatorIdentifier, type: .toast, title: L10n.errorUnknown))
@@ -411,33 +413,15 @@ class RoomScreenViewModel: RoomScreenViewModelType, RoomScreenViewModelProtocol 
     }
 
     private func syncJunchatPrivacyModeState() async {
-        switch await clientProxy.junchatPrivacyMode(roomID: roomProxy.id) {
-        case .success(true):
+        switch await privacyModeService.load(roomID: roomProxy.id) {
+        case .success(let enabled):
             await MainActor.run {
-                setLocalPrivacyModeEnabled(true)
-            }
-        case .success(false):
-            if appSettings.junchatPrivacyModeRoomIDs.contains(roomProxy.id) {
-                if case .success = await clientProxy.setJunchatPrivacyMode(true, roomID: roomProxy.id) {
-                    await MainActor.run {
-                        setLocalPrivacyModeEnabled(true)
-                    }
-                }
+                privacyModeServiceValue = enabled
+                state.isPrivacyModeEnabled = appSettings.junchatEmergencyPrivacyModeEnabled || enabled
             }
         case .failure:
             break
         }
-    }
-
-    private func setLocalPrivacyModeEnabled(_ enabled: Bool) {
-        var roomIDs = appSettings.junchatPrivacyModeRoomIDs
-        if enabled {
-            roomIDs.insert(roomProxy.id)
-        } else {
-            roomIDs.remove(roomProxy.id)
-        }
-        appSettings.junchatPrivacyModeRoomIDs = roomIDs
-        state.isPrivacyModeEnabled = appSettings.junchatEmergencyPrivacyModeEnabled || roomIDs.contains(roomProxy.id)
     }
 
     private func setupPinnedEventsTimelineItemProviderIfNeeded() {

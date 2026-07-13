@@ -725,9 +725,10 @@ final class TimelineViewModelTests {
     @Test
     func privacyModeMessageIsNotRedactedLocallyAfterLifetime() async throws {
         let appSettings = AppSettings()
-        appSettings.junchatPrivacyModeRoomIDs = ["MockRoomIdentifier"]
+        let privacyModeService = PrivacyModeServiceMock(loadResults: [.success(true)])
         let timelineController = MockTimelineController(timelineItems: [])
         let viewModel = makeViewModel(timelineController: timelineController,
+                                      privacyModeService: privacyModeService,
                                       appSettings: appSettings,
                                       privacyMessageLifetime: .milliseconds(10))
 
@@ -746,9 +747,10 @@ final class TimelineViewModelTests {
     @Test
     func privacyModeMessageIsMarkedAsPrivacyControlled() async throws {
         let appSettings = AppSettings()
-        appSettings.junchatPrivacyModeRoomIDs = ["MockRoomIdentifier"]
+        let privacyModeService = PrivacyModeServiceMock(loadResults: [.success(true)])
         let timelineController = MockTimelineController(timelineItems: [])
         let viewModel = makeViewModel(timelineController: timelineController,
+                                      privacyModeService: privacyModeService,
                                       appSettings: appSettings,
                                       privacyMessageLifetime: .seconds(180))
 
@@ -764,6 +766,28 @@ final class TimelineViewModelTests {
             return
         }
         #expect(viewModel.state.privacyControlledTimelineItemIDs == [sentMessageID])
+        _ = viewModel
+    }
+
+    @Test
+    func timelineUsesServiceAuthorityInsteadOfStaleLegacyState() async throws {
+        let appSettings = AppSettings()
+        appSettings.junchatPrivacyModeRoomIDs = ["MockRoomIdentifier"]
+        let privacyModeService = PrivacyModeServiceMock(loadResults: [.success(false)])
+        let timelineController = MockTimelineController(timelineItems: [])
+        let viewModel = makeViewModel(timelineController: timelineController,
+                                      privacyModeService: privacyModeService,
+                                      appSettings: appSettings)
+
+        viewModel.process(composerAction: .sendMessage(plain: "secret",
+                                                       html: nil,
+                                                       mode: .default,
+                                                       intentionalMentions: .init(userIDs: [], atRoom: false)))
+
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(viewModel.state.privacyControlledTimelineItemIDs.isEmpty)
+        #expect(await privacyModeService.loadRoomIDReceivedInvocations == ["MockRoomIdentifier"])
         _ = viewModel
     }
 
@@ -829,12 +853,13 @@ final class TimelineViewModelTests {
     private func makeViewModel(roomProxy: JoinedRoomProxyProtocol? = nil,
                                focussedEventID: String? = nil,
                                timelineController: TimelineControllerProtocol,
+                               privacyModeService: PrivacyModeServiceProtocol = PrivacyModeServiceMock(),
                                appSettings: AppSettings = ServiceLocator.shared.settings,
                                privacyMessageLifetime: Duration = .seconds(180)) -> TimelineViewModel {
         TimelineViewModel(roomProxy: roomProxy ?? JoinedRoomProxyMock(.init(name: "")),
                           focussedEventID: focussedEventID,
                           timelineController: timelineController,
-                          userSession: UserSessionMock(.init()),
+                          userSession: UserSessionMock(.init(privacyModeService: privacyModeService)),
                           mediaPlayerProvider: MediaPlayerProviderMock(),
                           userIndicatorController: userIndicatorControllerMock,
                           appMediator: AppMediatorMock.default,
