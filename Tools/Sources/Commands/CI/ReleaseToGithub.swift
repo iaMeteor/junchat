@@ -1,17 +1,14 @@
 import ArgumentParser
 import Foundation
-import Yams
 
 struct ReleaseToGitHub: AsyncParsableCommand {
     static let configuration = CommandConfiguration(commandName: "release-to-github",
-                                                    abstract: "Creates a GitHub release and updates CHANGES.md with generated release notes.")
+                                                    abstract: "Creates a GitHub release and updates JUNCHAT_CHANGES.md with generated release notes.")
 
     enum ReleaseError: LocalizedError {
         case missingGitHubToken
         case failedToCreateRelease(String)
         case failedToParseResponse
-        case missingReleaseNotes
-        case failedToReadVersion
 
         var errorDescription: String? {
             switch self {
@@ -21,37 +18,35 @@ struct ReleaseToGitHub: AsyncParsableCommand {
                 return "Failed to create GitHub release: \(message)"
             case .failedToParseResponse:
                 return "Failed to parse the GitHub API response."
-            case .missingReleaseNotes:
-                return "The generated release notes are empty."
-            case .failedToReadVersion:
-                return "Failed to read the marketing version from project.yml."
             }
         }
     }
 
     func run() async throws {
-        let currentVersion = try CI.readMarketingVersion()
-        logger.info("Creating GitHub release for version \(currentVersion)…")
+        let currentVersion = try CI.readReleaseVersion()
+        let repository = try await CI.gitRepository()
+        let releaseCommit = try await CI.gitCurrentCommit()
+        logger.info("Creating GitHub release for version \(currentVersion.name)…")
 
-        let releaseBody = try await createGitHubRelease(version: currentVersion)
+        let releaseBody = try await createGitHubRelease(version: currentVersion.name,
+                                                        releaseCommit: releaseCommit,
+                                                        repository: repository)
 
-        try updateChangelog(version: currentVersion, generatedNotes: releaseBody)
+        try updateChangelog(version: currentVersion.name, generatedNotes: releaseBody)
 
-        let changesFilePath = URL.projectDirectory.appendingPathComponent("CHANGES.md").path
+        let changesFilePath = URL.projectDirectory.appendingPathComponent("JUNCHAT_CHANGES.md").path
         try await CI.run(.name("git"), ["add", changesFilePath])
 
-        logger.info("Successfully created GitHub release \(currentVersion) and updated CHANGES.md.")
+        logger.info("Successfully created GitHub release \(currentVersion.name) and updated JUNCHAT_CHANGES.md.")
         
         let targetFilePath = "project.yml"
         let xcodeProjPath = "ElementX.xcodeproj"
-
-        guard let newVersion = bumpPatchVersion(currentVersion) else {
-            throw ValidationError("Invalid version format: \(currentVersion)")
-        }
-
-        // Bump the patch version using sed (preserves file formatting)
-        try await CI.run(.name("sed"), ["-i", "", "s/MARKETING_VERSION: \(currentVersion)/MARKETING_VERSION: \(newVersion)/g", targetFilePath])
-        logger.info("Version updated from \(currentVersion) to \(newVersion)")
+        let nextVersion = try currentVersion.nextPatch()
+        try JunchatReleaseVersion.updateProjectFile(at: URL.projectDirectory.appending(path: targetFilePath),
+                                                    name: nextVersion.name,
+                                                    build: nextVersion.build,
+                                                    allowExactNoOp: false)
+        logger.info("Version updated from \(currentVersion.name) (\(currentVersion.build)) to \(nextVersion.name) (\(nextVersion.build))")
 
         try await CI.run(.name("xcodegen"))
 
@@ -61,20 +56,19 @@ struct ReleaseToGitHub: AsyncParsableCommand {
         try await CI.run(.name("git"), ["commit", "-m", "Prepare next release"])
         
         try await CI.gitPush()
-
-        try await rebaseMainOntoCurrentBranch()
     }
 
     // MARK: - Private
 
-    private func createGitHubRelease(version: String) async throws -> String {
+    private func createGitHubRelease(version: String,
+                                     releaseCommit: String,
+                                     repository: GitHubRepository) async throws -> String {
         guard let apiToken = ProcessInfo.processInfo.environment["GITHUB_TOKEN"], !apiToken.isEmpty
         else {
             throw ReleaseError.missingGitHubToken
         }
         
-        let url = URL(string: "https://api.github.com/repos/element-hq/element-x-ios/releases")!
-        var request = URLRequest(url: url)
+        var request = URLRequest(url: repository.releasesAPIURL)
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
@@ -82,6 +76,7 @@ struct ReleaseToGitHub: AsyncParsableCommand {
 
         let body: [String: Any] = ["tag_name": "release/\(version)",
                                    "name": version,
+                                   "target_commitish": releaseCommit,
                                    "generate_release_notes": true]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
@@ -105,55 +100,16 @@ struct ReleaseToGitHub: AsyncParsableCommand {
     }
 
     private func updateChangelog(version: String, generatedNotes: String) throws {
-        let changesURL = URL.projectDirectory.appending(component: "CHANGES.md")
-
-        // Clean up the generated notes: remove HTML comments and adjust header levels
-        let cleanedNotes = generatedNotes
-            .replacingOccurrences(of: "<!-- .*? -->", with: "", options: .regularExpression)
-            .replacingOccurrences(of: "### ", with: "\n")
-            .replacingOccurrences(of: "## ", with: "### ")
-
-        guard !cleanedNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw ReleaseError.missingReleaseNotes
-        }
+        let changesURL = URL.projectDirectory.appending(component: "JUNCHAT_CHANGES.md")
 
         let releaseDate = Date().formatted(.iso8601.year().month().day())
-
-        let existingContent = try String(contentsOf: changesURL)
-        let newContent = "## Changes in \(version) (\(releaseDate))\(cleanedNotes)\n\n\(existingContent)"
+        let existingContent = try String(contentsOf: changesURL, encoding: .utf8)
+        let newContent = try JunchatReleaseNotes.updatedChangelog(existingContent: existingContent,
+                                                                  version: version,
+                                                                  generatedNotes: generatedNotes,
+                                                                  releaseDate: releaseDate)
 
         try newContent.write(to: changesURL, atomically: true, encoding: .utf8)
-        logger.info("Updated CHANGES.md with release notes.")
-    }
-    
-    private func bumpPatchVersion(_ version: String) -> String? {
-        let regex = /^(\d{2})\.(\d{2})\.(\d+)$/
-        guard let match = version.firstMatch(of: regex), var patch = Int(match.3) else {
-            return nil
-        }
-
-        let year = String(match.1)
-        let month = String(match.2)
-        patch = patch + 1
-        
-        return "\(year).\(month).\(patch)"
-    }
-    
-    private func rebaseMainOntoCurrentBranch() async throws {
-        guard let currentBranch = try await CI.run(.name("git"), ["rev-parse", "--abbrev-ref", "HEAD"], output: .string(limit: 4096))
-            .standardOutput.map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) }) else {
-            throw ValidationError("Could not determine the current branch.")
-        }
-        
-        logger.info("Current branch: \(currentBranch)")
-
-        try await CI.run(.name("git"), ["reset", "--hard"])
-        try await CI.run(.name("git"), ["checkout", "main"])
-        try await CI.run(.name("git"), ["pull", "origin", "main"])
-        try await CI.run(.name("git"), ["rebase", currentBranch])
-
-        try await CI.gitPush()
-
-        logger.info("Successfully rebased main onto \(currentBranch)")
+        logger.info("Updated JUNCHAT_CHANGES.md with release notes.")
     }
 }

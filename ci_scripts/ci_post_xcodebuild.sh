@@ -1,11 +1,11 @@
-#!/bin/sh
+#!/bin/bash
 
 source ci_common.sh
 
 # Move to the project root
 cd ..
 
-# Xcode Cloud shallow clones the repo. We need to deepen it to fetch tags, commit history and be able to rebase main on develop at the end of releases.
+# Xcode Cloud shallow clones the repo. We need full tags and commit history for release notes.
 fetch_unshallow_repository
 
 # Upload dsyms no matter the workflow

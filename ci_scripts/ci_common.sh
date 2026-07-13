@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 # Return on failures
 # Fail when expanding unset variables
@@ -58,13 +58,13 @@ generate_what_to_test_notes() {
 
         NOTES="$(git log --pretty='- %an: %s' "$LATEST_TAG"..HEAD)"
 
-        echo "generate_what_to_test_notes: Generated notes:\n"$NOTES""
+        printf "generate_what_to_test_notes: Generated notes:\n%s\n" "$NOTES"
 
         echo "$NOTES" > $TESTFLIGHT_DIR_PATH/$TESTFLIGHT_NOTES_FILE_NAME
     fi
 }
 
 fetch_unshallow_repository() {
-    # Xcode Cloud shallow clones the repo. We need to deepen it to fetch tags, commit history and be able to rebase main on develop at the end of releases.
+    # Xcode Cloud shallow clones the repo. Release notes need complete tags and history.
     git fetch --unshallow --quiet
 }

@@ -1,7 +1,6 @@
 import ArgumentParser
 import Foundation
 import Subprocess
-import Yams
 
 struct CI: ParsableCommand {
     static let configuration = CommandConfiguration(abstract: "CI workflow commands that can be run both locally and in CI environments.",
@@ -21,17 +20,15 @@ struct CI: ParsableCommand {
     
     static let testOutputDirectory = "test_output"
     
+    /// Reads the version metadata used by XcodeGen from `project.yml`.
+    static func readReleaseVersion() throws -> JunchatReleaseVersion {
+        let projectURL = URL.projectDirectory.appending(component: "project.yml")
+        return try JunchatReleaseVersion.parse(String(contentsOf: projectURL, encoding: .utf8))
+    }
+
     /// Reads the `MARKETING_VERSION` from `project.yml`.
     static func readMarketingVersion() throws -> String {
-        let projectURL = URL.projectDirectory.appending(component: "project.yml")
-        let projectString = try String(contentsOf: projectURL)
-        
-        guard let projectConfig = try Yams.compose(yaml: projectString),
-              let version = projectConfig["settings"]?["MARKETING_VERSION"]?.string else {
-            throw ValidationError("Could not find MARKETING_VERSION in project.yml.")
-        }
-        
-        return version
+        try readReleaseVersion().name
     }
     
     // MARK: - Linting
@@ -133,33 +130,73 @@ struct CI: ParsableCommand {
         try await CI.run(.name("git"), ["config", "--global", "user.email", "ci@element.io"])
     }
     
-    static func gitRepositoryURL() async throws -> String {
+    static func gitRepository() async throws -> GitHubRepository {
         guard let rawURL = try await CI.run(.name("git"), ["ls-remote", "--get-url", "origin"],
                                             output: .string(limit: 4096)).standardOutput else {
             throw ValidationError("Could not determine the git remote URL.")
         }
-        
-        return rawURL
-            .replacingOccurrences(of: "http://", with: "")
-            .replacingOccurrences(of: "https://", with: "")
-            .replacingOccurrences(of: "git@", with: "")
-            .replacingOccurrences(of: ".git", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return try GitHubRepository(remoteURL: rawURL)
     }
-    
+
+    static func gitCurrentCommit() async throws -> String {
+        guard let commit = try await CI.run(.name("git"),
+                                            ["rev-parse", "--verify", "HEAD"],
+                                            output: .string(limit: 4096)).standardOutput?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !commit.isEmpty else {
+            throw ValidationError("Could not determine the release commit.")
+        }
+        return commit
+    }
+
     static func gitPush(tagName: String? = nil) async throws {
         guard let apiToken = ProcessInfo.processInfo.environment["GITHUB_TOKEN"], !apiToken.isEmpty
         else {
             throw ValidationError("GITHUB_TOKEN environment variable is not set.")
         }
 
-        let repoURL = try await CI.gitRepositoryURL()
-        
+        let repository = try await CI.gitRepository()
+        let credentials = Data("x-access-token:\(apiToken)".utf8).base64EncodedString()
+        let environment = Environment.inherit.updating([
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
+            "GIT_CONFIG_VALUE_0": "AUTHORIZATION: basic \(credentials)"
+        ])
+
         if let tagName {
             try await CI.run(.name("git"), ["tag", tagName])
-            try await CI.run(.name("git"), ["push", "https://\(apiToken)@\(repoURL)", tagName])
+            try await authenticatedGitPush(["push", repository.httpsURL.absoluteString, "refs/tags/\(tagName)"],
+                                           environment: environment)
         } else {
-            try await CI.run(.name("git"), ["push", "https://\(apiToken)@\(repoURL)"])
+            let branchName = try await currentBranchName()
+            try await CI.run(.name("git"), ["check-ref-format", "--branch", branchName])
+            try await authenticatedGitPush(["push", repository.httpsURL.absoluteString, "HEAD:refs/heads/\(branchName)"],
+                                           environment: environment)
         }
+    }
+
+    private static func authenticatedGitPush(_ arguments: Arguments, environment: Environment) async throws {
+        do {
+            try await CI.run(.name("git"), arguments, environment: environment)
+        } catch {
+            throw ValidationError("Authenticated git push failed.")
+        }
+    }
+
+    private static func currentBranchName() async throws -> String {
+        if let cloudBranch = ProcessInfo.processInfo.environment["CI_BRANCH"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !cloudBranch.isEmpty {
+            let prefix = "refs/heads/"
+            return cloudBranch.hasPrefix(prefix) ? String(cloudBranch.dropFirst(prefix.count)) : cloudBranch
+        }
+
+        guard let branchName = try await CI.run(.name("git"),
+                                                ["symbolic-ref", "--quiet", "--short", "HEAD"],
+                                                output: .string(limit: 4096)).standardOutput?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !branchName.isEmpty else {
+            throw ValidationError("Could not determine the branch to push.")
+        }
+        return branchName
     }
 }
