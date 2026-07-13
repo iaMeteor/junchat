@@ -6,11 +6,9 @@
 // Please see LICENSE files in the repository root for full details.
 //
 
-import AVKit
 import Foundation
 
 enum CallScreenViewModelAction {
-    case pictureInPictureIsAvailable(AVPictureInPictureController)
     case pictureInPictureStarted
     case pictureInPictureStopped
     case dismiss
@@ -28,13 +26,13 @@ struct CallScreenViewState: BindableState {
 struct Bindings {
     var javaScriptEvaluator: ((String) async throws -> Any)?
     var requestPictureInPictureHandler: (() async -> Result<Void, CallScreenError>)?
+    var stopPictureInPictureHandler: (() -> Void)?
     
     var alertInfo: AlertInfo<UUID>?
 }
 
 enum CallScreenViewAction {
     case urlChanged(URL?)
-    case pictureInPictureIsAvailable(AVPictureInPictureController)
     case navigateBack
     case pictureInPictureWillStop
     case endCall

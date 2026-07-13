@@ -6,7 +6,6 @@
 // Please see LICENSE files in the repository root for full details.
 //
 
-import AVKit
 import Combine
 import Compound
 import SwiftState
@@ -223,6 +222,8 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
         }
     }
 
+    // Keeps the flow's publisher wiring together so ownership remains visible.
+    // swiftlint:disable:next function_body_length
     private func setupObservers() {
         flowParameters.appSettings.$showEntertainmentTab
             .dropFirst()
@@ -492,7 +493,14 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
         }
 
         let shouldPlayConnectedTone = playConnectedTone ?? (flowParameters.elementCallService.incomingCallRoomIDPublisher.value != roomID)
-        MXLog.info("[JunchatCall] presentCallScreen by roomID room=\(roomID) voice=\(isVoiceCall) playConnectedTone=\(shouldPlayConnectedTone) explicit=\(playConnectedTone?.description ?? "nil") incoming=\(flowParameters.elementCallService.incomingCallRoomIDPublisher.value ?? "nil")")
+        let callPresentationDetails = [
+            "room=\(roomID)",
+            "voice=\(isVoiceCall)",
+            "playConnectedTone=\(shouldPlayConnectedTone)",
+            "explicit=\(playConnectedTone?.description ?? "nil")",
+            "incoming=\(flowParameters.elementCallService.incomingCallRoomIDPublisher.value ?? "nil")"
+        ].joined(separator: " ")
+        MXLog.info("[JunchatCall] presentCallScreen by roomID \(callPresentationDetails)")
         presentCallScreen(roomProxy: roomProxy, voiceOnly: isVoiceCall, playConnectedTone: shouldPlayConnectedTone)
     }
 
@@ -509,7 +517,7 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
                                                playConnectedTone: playConnectedTone))
     }
 
-    private var callScreenPictureInPictureController: AVPictureInPictureController?
+    private weak var callScreenCoordinator: CallScreenCoordinator?
 
     private func updateIncomingCallOverlay(rooms: [RoomSummary], ongoingCallRoomID: String?, pendingIncomingCallRoomID: String?) {
         guard let candidate = globalIncomingCallPresentation.candidate(from: rooms,
@@ -517,7 +525,7 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
                                                                        pendingIncomingCallRoomID: pendingIncomingCallRoomID,
                                                                        ownUserID: userSession.clientProxy.userID) else {
             if pendingIncomingCallRoomID != nil || ongoingCallRoomID != nil {
-                MXLog.info("[JunchatCall] no incoming overlay candidate pending=\(pendingIncomingCallRoomID ?? "nil") ongoing=\(ongoingCallRoomID ?? "nil") roomsWithCall=\(rooms.filter { $0.hasOngoingCall }.map(\.id))")
+                MXLog.info("[JunchatCall] no incoming overlay candidate pending=\(pendingIncomingCallRoomID ?? "nil") ongoing=\(ongoingCallRoomID ?? "nil") roomsWithCall=\(rooms.filter(\.hasOngoingCall).map(\.id))")
             }
             dismissIncomingCallOverlayIfNeeded()
             return
@@ -609,7 +617,7 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
                     callScreenHasSeenRemoteParticipant = false
                 }
                 presentedCallScreenRoomID = configuration.callRoomID
-                callScreenPictureInPictureController?.stopPictureInPicture()
+                callScreenCoordinator?.stopPictureInPicture()
                 return
             } else {
                 MXLog.warning("[JunchatCall] rebuilding missing call overlay for ongoing room=\(configuration.callRoomID)")
@@ -629,8 +637,6 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
             .sink { [weak self] action in
                 guard let self else { return }
                 switch action {
-                case .pictureInPictureIsAvailable(let controller):
-                    callScreenPictureInPictureController = controller
                 case .pictureInPictureStarted:
                     MXLog.info("Hiding call for PiP presentation.")
                     navigationTabCoordinator.setOverlayPresentationMode(.minimized)
@@ -638,7 +644,6 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
                     MXLog.info("Restoring call after PiP presentation.")
                     navigationTabCoordinator.setOverlayPresentationMode(.fullScreen)
                 case .dismiss:
-                    callScreenPictureInPictureController = nil
                     clearPresentedCallScreenState()
                     navigationTabCoordinator.setOverlayCoordinator(nil)
                 }
@@ -648,21 +653,29 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
         presentedCallScreenRoomID = configuration.callRoomID
         presentedCallScreenStartedAt = Date()
         callScreenHasSeenRemoteParticipant = false
+        self.callScreenCoordinator = callScreenCoordinator
         navigationTabCoordinator.setOverlayCoordinator(callScreenCoordinator, animated: true)
 
         flowParameters.analytics.track(screen: .RoomCall)
     }
 
     private func hideCallScreenOverlay() {
-        guard let callScreenPictureInPictureController else {
-            MXLog.warning("Picture in picture isn't available, dismissing the call screen.")
-            dismissCallScreenIfNeeded()
+        guard let callScreenCoordinator else {
+            MXLog.warning("Picture in picture isn't available, keeping the call screen visible.")
             return
         }
 
-        MXLog.info("Starting picture in picture to hide the call screen overlay.")
-        callScreenPictureInPictureController.startPictureInPicture()
-        navigationTabCoordinator.setOverlayPresentationMode(.minimized)
+        Task { [weak self, weak callScreenCoordinator] in
+            guard let self, let callScreenCoordinator else { return }
+
+            MXLog.info("Starting picture in picture to hide the call screen overlay.")
+            guard case .success = await callScreenCoordinator.requestPictureInPicture(),
+                  self.callScreenCoordinator === callScreenCoordinator else {
+                MXLog.warning("Picture in picture did not start, keeping the call screen visible.")
+                return
+            }
+            navigationTabCoordinator.setOverlayPresentationMode(.minimized)
+        }
     }
 
     private func dismissCallScreenIfNeeded() {
@@ -697,7 +710,13 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
         if !callScreenHasSeenRemoteParticipant, callScreenAge < initialSyncGracePeriod {
             endedCallDismissalWorkItem?.cancel()
             endedCallDismissalWorkItem = nil
-            MXLog.info("[JunchatCall] keeping call overlay during initial membership sync room=\(presentedCallScreenRoomID) participants=\(room.activeRoomCallParticipants) ownUser=\(userSession.clientProxy.userID) age=\(String(format: "%.2f", callScreenAge))s")
+            let initialSyncDetails = [
+                "room=\(presentedCallScreenRoomID)",
+                "participants=\(room.activeRoomCallParticipants)",
+                "ownUser=\(userSession.clientProxy.userID)",
+                "age=\(String(format: "%.2f", callScreenAge))s"
+            ].joined(separator: " ")
+            MXLog.info("[JunchatCall] keeping call overlay during initial membership sync \(initialSyncDetails)")
             return
         }
 
@@ -705,7 +724,14 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
 
         let roomID = presentedCallScreenRoomID
         let dismissalDelay = callScreenHasSeenRemoteParticipant ? 1.0 : 2.0
-        MXLog.info("[JunchatCall] scheduling call overlay dismissal after inactive room summary room=\(roomID) participants=\(room.activeRoomCallParticipants) ownUser=\(userSession.clientProxy.userID) hasSeenRemote=\(callScreenHasSeenRemoteParticipant) delay=\(dismissalDelay)s")
+        let dismissalDetails = [
+            "room=\(roomID)",
+            "participants=\(room.activeRoomCallParticipants)",
+            "ownUser=\(userSession.clientProxy.userID)",
+            "hasSeenRemote=\(callScreenHasSeenRemoteParticipant)",
+            "delay=\(dismissalDelay)s"
+        ].joined(separator: " ")
+        MXLog.info("[JunchatCall] scheduling call overlay dismissal after inactive room summary \(dismissalDetails)")
         let workItem = DispatchWorkItem { [weak self] in
             guard let self,
                   self.presentedCallScreenRoomID == roomID,
@@ -728,6 +754,7 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
         presentedCallScreenRoomID = nil
         presentedCallScreenStartedAt = nil
         callScreenHasSeenRemoteParticipant = false
+        callScreenCoordinator = nil
     }
 
     // MARK: - Logout

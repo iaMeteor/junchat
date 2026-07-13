@@ -258,6 +258,7 @@ struct CallScreenJunchatTests {
         let analytics = AnalyticsService(client: AnalyticsClientMock(), appSettings: appSettings)
         var endedTonePlayCount = 0
         var dismissCount = 0
+        var pictureInPictureStopCount = 0
         var cancellables = Set<AnyCancellable>()
 
         let viewModel = CallScreenViewModel(elementCallService: elementCallService,
@@ -274,6 +275,7 @@ struct CallScreenJunchatTests {
                                             analyticsService: analytics,
                                             callConnectedTonePlayer: { },
                                             callEndedTonePlayer: { endedTonePlayCount += 1 })
+        viewModel.context.stopPictureInPictureHandler = { pictureInPictureStopCount += 1 }
 
         viewModel.actions.sink { action in
             if case .dismiss = action {
@@ -289,6 +291,7 @@ struct CallScreenJunchatTests {
 
         #expect(endedTonePlayCount == 1)
         #expect(dismissCount == 1)
+        #expect(pictureInPictureStopCount == 1)
         #expect(elementCallService.tearDownCallSessionCallsCount == 1)
     }
 

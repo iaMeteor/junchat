@@ -179,8 +179,6 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         case .urlChanged(let url):
             guard let url else { return }
             MXLog.info("URL changed to: \(url)")
-        case .pictureInPictureIsAvailable(let controller):
-            actionsSubject.send(.pictureInPictureIsAvailable(controller))
         case .navigateBack:
             Task { await handleBackwardsNavigation() }
         case .pictureInPictureWillStop:
@@ -214,6 +212,17 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         cleanUpLocalCallState()
     }
 
+    func requestPictureInPicture() async -> Result<Void, CallScreenError> {
+        guard let requestPictureInPictureHandler = state.bindings.requestPictureInPictureHandler else {
+            return .failure(.pictureInPictureNotAvailable)
+        }
+        return await requestPictureInPictureHandler()
+    }
+
+    func stopPictureInPicture() {
+        state.bindings.stopPictureInPictureHandler?()
+    }
+
     private func requestHangup() {
         guard !hasRequestedHangup else {
             MXLog.info("[JunchatCall] skip duplicate hangup request room=\(configuration.callRoomID)")
@@ -234,6 +243,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         timeoutTask = nil
         pictureInPictureRecoveryTask?.cancel()
         pictureInPictureRecoveryTask = nil
+        stopPictureInPicture()
         callMediaCoordinator.stop()
         elementCallService.tearDownCallSession()
         logAudioSessionSnapshot(reason: "after call cleanup")
@@ -449,13 +459,12 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
 
     private func handleBackwardsNavigation() async {
         guard state.url != nil,
-              isPictureInPictureAllowed,
-              let requestPictureInPictureHandler = state.bindings.requestPictureInPictureHandler else {
+              isPictureInPictureAllowed else {
             actionsSubject.send(.dismiss)
             return
         }
 
-        switch await requestPictureInPictureHandler() {
+        switch await requestPictureInPicture() {
         case .success:
             actionsSubject.send(.pictureInPictureStarted)
         case .failure:
@@ -496,12 +505,12 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         logAudioSessionSnapshot(reason: "before PiP recovery attempt \(attempt) \(reason)")
         guard state.url != nil,
               isPictureInPictureAllowed,
-              let requestPictureInPictureHandler = state.bindings.requestPictureInPictureHandler else {
+              state.bindings.requestPictureInPictureHandler != nil else {
             MXLog.info("[JunchatCall] skip picture in picture recovery reason=\(reason) attempt=\(attempt) hasURL=\(state.url != nil) hasHandler=\(state.bindings.requestPictureInPictureHandler != nil) room=\(configuration.callRoomID)")
             return false
         }
 
-        switch await requestPictureInPictureHandler() {
+        switch await requestPictureInPicture() {
         case .success:
             MXLog.info("[JunchatCall] started picture in picture recovery reason=\(reason) attempt=\(attempt) room=\(configuration.callRoomID)")
             logAudioSessionSnapshot(reason: "after successful PiP recovery attempt \(attempt) \(reason)")
