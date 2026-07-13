@@ -35,7 +35,7 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
     }
 
     private var isPrivacyControlled: Bool {
-        context.viewState.privacyControlledTimelineItemIDs.contains(timelineItem.id.uniqueID)
+        timelineItem.properties.isPrivacyControlled
     }
 
     private var messageSelectionCapabilities: TimelineMessageSelectionCapabilities? {

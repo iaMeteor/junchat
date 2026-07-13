@@ -37,7 +37,6 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
     private let analyticsService: AnalyticsService
     private let emojiProvider: EmojiProviderProtocol
     private let timelineControllerFactory: TimelineControllerFactoryProtocol
-    private let privacyMessageLifetime: Duration
     private let privacyModeAuthorityTimeout: Duration
 
     private let timelineInteractionHandler: TimelineInteractionHandler
@@ -54,7 +53,6 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
     private var paginateBackwardsTask: Task<Void, Never>?
     private var paginateForwardsTask: Task<Void, Never>?
     private var sendMessageTasks = [UUID: Task<Void, Never>]()
-    private var pendingPrivacyMessageBodies = [String]()
 
     init(roomProxy: JoinedRoomProxyProtocol,
          focussedEventID: String? = nil,
@@ -68,7 +66,6 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
          emojiProvider: EmojiProviderProtocol,
          linkMetadataProvider: LinkMetadataProviderProtocol,
          timelineControllerFactory: TimelineControllerFactoryProtocol,
-         privacyMessageLifetime: Duration = .seconds(180),
          privacyModeAuthorityTimeout: Duration = .seconds(1)) {
         self.roomProxy = roomProxy
         self.timelineController = timelineController
@@ -80,7 +77,6 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
         self.appMediator = appMediator
         self.emojiProvider = emojiProvider
         self.timelineControllerFactory = timelineControllerFactory
-        self.privacyMessageLifetime = privacyMessageLifetime
         self.privacyModeAuthorityTimeout = privacyModeAuthorityTimeout
 
         let voiceMessageRecorder = VoiceMessageRecorder(audioRecorder: AudioRecorder(), mediaPlayerProvider: mediaPlayerProvider)
@@ -879,18 +875,14 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
         let actionsSubject = actionsSubject
 
         sendMessageTasks[taskID] = Task { [weak self] in
-            let privacyModeEnabled: Bool?
             if requiresPrivacyModeAuthority {
-                privacyModeEnabled = await Self.resolvePrivacyModeEnabled(emergencyPrivacyModeEnabled: emergencyPrivacyModeEnabled,
-                                                                          privacyModeService: privacyModeService,
-                                                                          roomID: roomID,
-                                                                          authorityTimeout: authorityTimeout)
-                guard privacyModeEnabled != nil else {
+                guard await Self.resolvePrivacyModeEnabled(emergencyPrivacyModeEnabled: emergencyPrivacyModeEnabled,
+                                                           privacyModeService: privacyModeService,
+                                                           roomID: roomID,
+                                                           authorityTimeout: authorityTimeout) != nil else {
                     self?.sendMessageTasks[taskID] = nil
                     return
                 }
-            } else {
-                privacyModeEnabled = nil
             }
 
             guard !Task.isCancelled else {
@@ -898,19 +890,15 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
                 return
             }
 
-            let shouldTrackPrivacyControlledMessage = await Self.sendCurrentMessage(message,
-                                                                                    html: html,
-                                                                                    mode: mode,
-                                                                                    intentionalMentions: intentionalMentions,
-                                                                                    privacyModeEnabled: privacyModeEnabled,
-                                                                                    command: command,
-                                                                                    timelineController: timelineController,
-                                                                                    clientProxy: clientProxy,
-                                                                                    actionsSubject: actionsSubject)
+            await Self.sendCurrentMessage(message,
+                                          html: html,
+                                          mode: mode,
+                                          intentionalMentions: intentionalMentions,
+                                          command: command,
+                                          timelineController: timelineController,
+                                          clientProxy: clientProxy,
+                                          actionsSubject: actionsSubject)
             if !Task.isCancelled {
-                if shouldTrackPrivacyControlledMessage {
-                    self?.trackPrivacyControlledMessage(for: message)
-                }
                 self?.scrollToBottom()
             }
             self?.sendMessageTasks[taskID] = nil
@@ -921,22 +909,18 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
                                            html: String?,
                                            mode: ComposerMode,
                                            intentionalMentions: IntentionalMentions,
-                                           privacyModeEnabled: Bool?,
                                            command: SlashCommand?,
                                            timelineController: TimelineControllerProtocol,
                                            clientProxy: ClientProxyProtocol,
-                                           actionsSubject: PassthroughSubject<TimelineViewModelAction, Never>) async -> Bool {
-        guard !Task.isCancelled else { return false }
-        var shouldRedactSentMessage = false
+                                           actionsSubject: PassthroughSubject<TimelineViewModelAction, Never>) async {
+        guard !Task.isCancelled else { return }
 
         switch mode {
         case .reply(let eventID, _, _):
-            guard privacyModeEnabled != nil else { return false }
             await timelineController.sendMessage(message,
                                                  html: html,
                                                  inReplyToEventID: eventID,
                                                  intentionalMentions: intentionalMentions)
-            shouldRedactSentMessage = true
         case .edit(let originalEventOrTransactionID, .default):
             await timelineController.edit(originalEventOrTransactionID,
                                           message: message,
@@ -953,18 +937,14 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
             case .join:
                 await handleJoinCommand(message: message, clientProxy: clientProxy, actionsSubject: actionsSubject)
             case .none:
-                guard privacyModeEnabled != nil else { return false }
                 await timelineController.sendMessage(message,
                                                      html: html,
                                                      inReplyToEventID: nil,
                                                      intentionalMentions: intentionalMentions)
-                shouldRedactSentMessage = true
             }
         case .recordVoiceMessage, .previewVoiceMessage:
             fatalError("invalid composer mode.")
         }
-
-        return shouldRedactSentMessage && privacyModeEnabled == true
     }
 
     private static func resolvePrivacyModeEnabled(emergencyPrivacyModeEnabled: Bool,
@@ -1017,29 +997,6 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
         }
     }
 
-    private func trackPrivacyControlledMessage(for message: String) {
-        pendingPrivacyMessageBodies.append(message)
-        refreshPrivacyControlledTimelineItemIDs(from: timelineController.timelineItems)
-
-        Task { [weak self, privacyMessageLifetime] in
-            try? await Task.sleep(for: privacyMessageLifetime)
-            guard !Task.isCancelled else {
-                return
-            }
-            await MainActor.run {
-                self?.removePendingPrivacyMessage(body: message)
-                self?.refreshPrivacyControlledTimelineItemIDs(from: self?.timelineController.timelineItems ?? [])
-            }
-        }
-    }
-
-    private func removePendingPrivacyMessage(body: String) {
-        guard let index = pendingPrivacyMessageBodies.firstIndex(of: body) else {
-            return
-        }
-        pendingPrivacyMessageBodies.remove(at: index)
-    }
-
     private func trackComposerMode(_ mode: ComposerMode) {
         var isEdit = false
         var isReply = false
@@ -1074,8 +1031,6 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
 
     private func buildTimelineViews(timelineItems: [RoomTimelineItemProtocol], isSwitchingTimelines: Bool = false) {
         var timelineItemsDictionary = OrderedDictionary<TimelineItemIdentifier.UniqueID, RoomTimelineItemViewState>()
-
-        refreshPrivacyControlledTimelineItemIDs(from: timelineItems)
 
         timelineItems.filter { $0 is RedactedRoomTimelineItem }.forEach { timelineItem in
             // Stops the audio player when a voice message is redacted.
@@ -1125,34 +1080,6 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
         }
 
         state.timelineState.itemsDictionary = timelineItemsDictionary
-    }
-
-    private func refreshPrivacyControlledTimelineItemIDs(from timelineItems: [RoomTimelineItemProtocol]) {
-        guard !pendingPrivacyMessageBodies.isEmpty else {
-            state.privacyControlledTimelineItemIDs = []
-            return
-        }
-
-        var remainingBodies = pendingPrivacyMessageBodies
-        var controlledItemIDs = Set<TimelineItemIdentifier.UniqueID>()
-
-        for timelineItem in timelineItems.reversed() {
-            guard !remainingBodies.isEmpty else {
-                break
-            }
-
-            guard let eventTimelineItem = timelineItem as? EventBasedTimelineItemProtocol,
-                  eventTimelineItem.isOutgoing,
-                  !eventTimelineItem.isRedacted,
-                  let bodyIndex = remainingBodies.firstIndex(of: eventTimelineItem.body) else {
-                continue
-            }
-
-            controlledItemIDs.insert(eventTimelineItem.id.uniqueID)
-            remainingBodies.remove(at: bodyIndex)
-        }
-
-        state.privacyControlledTimelineItemIDs = controlledItemIDs
     }
 
     private func updateViewState(item: RoomTimelineItemProtocol, groupStyle: TimelineGroupStyle) -> RoomTimelineItemViewState {

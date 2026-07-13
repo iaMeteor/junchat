@@ -28,4 +28,6 @@ struct RoomTimelineItemProperties: Hashable {
     var encryptionAuthenticity: EncryptionAuthenticity?
     /// Information about the forwarder of the keys used to decrypt this message.
     var encryptionForwarder: TimelineItemKeyForwarder?
+    /// Whether the event carries server-owned privacy mode evidence.
+    var isPrivacyControlled = false
 }

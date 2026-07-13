@@ -67,6 +67,20 @@ enum TimelineItemSendFailure: Hashable {
     case unknown
 }
 
+private struct PrivacyModeEventJSON: Decodable {
+    let unsigned: PrivacyModeUnsignedJSON?
+}
+
+private struct PrivacyModeUnsignedJSON: Decodable {
+    let privacyMode: Bool?
+    let readBased: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case privacyMode = "com.heyujk.junchat.privacy_mode"
+        case readBased = "com.heyujk.junchat.privacy_mode.read_based"
+    }
+}
+
 /// A light wrapper around event timeline items returned from Rust.
 class EventTimelineItemProxy {
     let item: MatrixRustSDK.EventTimelineItem
@@ -103,6 +117,16 @@ class EventTimelineItemProxy {
     lazy var canBeRepliedTo = item.canBeRepliedTo
             
     lazy var content = item.content
+
+    lazy var isPrivacyControlled: Bool = {
+        guard item.isRemote,
+              let latestJSON = item.lazyProvider.latestJson(),
+              let eventJSON = try? JSONDecoder().decode(PrivacyModeEventJSON.self, from: Data(latestJSON.utf8)) else {
+            return false
+        }
+
+        return eventJSON.unsigned?.privacyMode == true && eventJSON.unsigned?.readBased == true
+    }()
 
     lazy var isOwn = item.isOwn
 

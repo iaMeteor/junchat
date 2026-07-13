@@ -129,7 +129,8 @@ struct RoomTimelineItemFactory: RoomTimelineItemFactoryProtocol {
                                                deliveryStatus: eventItemProxy.deliveryStatus,
                                                orderedReadReceipts: buildOrderedReadReceipts(eventItemProxy.readReceipts),
                                                encryptionAuthenticity: buildEncryptionAuthenticity(eventItemProxy.shieldState),
-                                               encryptionForwarder: eventItemProxy.forwarder))
+                                               encryptionForwarder: eventItemProxy.forwarder,
+                                               isPrivacyControlled: eventItemProxy.isPrivacyControlled))
     }
 
     private func buildImageTimelineItem(for eventItemProxy: EventTimelineItemProxy,
@@ -153,7 +154,8 @@ struct RoomTimelineItemFactory: RoomTimelineItemFactoryProtocol {
                                                 deliveryStatus: eventItemProxy.deliveryStatus,
                                                 orderedReadReceipts: buildOrderedReadReceipts(eventItemProxy.readReceipts),
                                                 encryptionAuthenticity: buildEncryptionAuthenticity(eventItemProxy.shieldState),
-                                                encryptionForwarder: eventItemProxy.forwarder))
+                                                encryptionForwarder: eventItemProxy.forwarder,
+                                                isPrivacyControlled: eventItemProxy.isPrivacyControlled))
     }
 
     private func buildVideoTimelineItem(for eventItemProxy: EventTimelineItemProxy,
@@ -177,7 +179,8 @@ struct RoomTimelineItemFactory: RoomTimelineItemFactoryProtocol {
                                                 deliveryStatus: eventItemProxy.deliveryStatus,
                                                 orderedReadReceipts: buildOrderedReadReceipts(eventItemProxy.readReceipts),
                                                 encryptionAuthenticity: buildEncryptionAuthenticity(eventItemProxy.shieldState),
-                                                encryptionForwarder: eventItemProxy.forwarder))
+                                                encryptionForwarder: eventItemProxy.forwarder,
+                                                isPrivacyControlled: eventItemProxy.isPrivacyControlled))
     }
 
     private func buildAudioTimelineItem(for eventItemProxy: EventTimelineItemProxy,
@@ -201,7 +204,8 @@ struct RoomTimelineItemFactory: RoomTimelineItemFactoryProtocol {
                                                 deliveryStatus: eventItemProxy.deliveryStatus,
                                                 orderedReadReceipts: buildOrderedReadReceipts(eventItemProxy.readReceipts),
                                                 encryptionAuthenticity: buildEncryptionAuthenticity(eventItemProxy.shieldState),
-                                                encryptionForwarder: eventItemProxy.forwarder))
+                                                encryptionForwarder: eventItemProxy.forwarder,
+                                                isPrivacyControlled: eventItemProxy.isPrivacyControlled))
     }
 
     private func buildVoiceTimelineItem(for eventItemProxy: EventTimelineItemProxy,
@@ -224,7 +228,8 @@ struct RoomTimelineItemFactory: RoomTimelineItemFactoryProtocol {
                                                        deliveryStatus: eventItemProxy.deliveryStatus,
                                                        orderedReadReceipts: buildOrderedReadReceipts(eventItemProxy.readReceipts),
                                                        encryptionAuthenticity: buildEncryptionAuthenticity(eventItemProxy.shieldState),
-                                                       encryptionForwarder: eventItemProxy.forwarder))
+                                                       encryptionForwarder: eventItemProxy.forwarder,
+                                                       isPrivacyControlled: eventItemProxy.isPrivacyControlled))
     }
 
     private func buildFileTimelineItem(for eventItemProxy: EventTimelineItemProxy,
@@ -248,7 +253,8 @@ struct RoomTimelineItemFactory: RoomTimelineItemFactoryProtocol {
                                                deliveryStatus: eventItemProxy.deliveryStatus,
                                                orderedReadReceipts: buildOrderedReadReceipts(eventItemProxy.readReceipts),
                                                encryptionAuthenticity: buildEncryptionAuthenticity(eventItemProxy.shieldState),
-                                               encryptionForwarder: eventItemProxy.forwarder))
+                                               encryptionForwarder: eventItemProxy.forwarder,
+                                               isPrivacyControlled: eventItemProxy.isPrivacyControlled))
     }
 
     private func buildNoticeTimelineItem(for eventItemProxy: EventTimelineItemProxy,
@@ -271,7 +277,8 @@ struct RoomTimelineItemFactory: RoomTimelineItemFactoryProtocol {
                                                  deliveryStatus: eventItemProxy.deliveryStatus,
                                                  orderedReadReceipts: buildOrderedReadReceipts(eventItemProxy.readReceipts),
                                                  encryptionAuthenticity: buildEncryptionAuthenticity(eventItemProxy.shieldState),
-                                                 encryptionForwarder: eventItemProxy.forwarder))
+                                                 encryptionForwarder: eventItemProxy.forwarder,
+                                                 isPrivacyControlled: eventItemProxy.isPrivacyControlled))
     }
 
     private func buildEmoteTimelineItem(for eventItemProxy: EventTimelineItemProxy,
@@ -294,7 +301,8 @@ struct RoomTimelineItemFactory: RoomTimelineItemFactoryProtocol {
                                                 deliveryStatus: eventItemProxy.deliveryStatus,
                                                 orderedReadReceipts: buildOrderedReadReceipts(eventItemProxy.readReceipts),
                                                 encryptionAuthenticity: buildEncryptionAuthenticity(eventItemProxy.shieldState),
-                                                encryptionForwarder: eventItemProxy.forwarder))
+                                                encryptionForwarder: eventItemProxy.forwarder,
+                                                isPrivacyControlled: eventItemProxy.isPrivacyControlled))
     }
 
     private func buildLocationTimelineItem(for eventItemProxy: EventTimelineItemProxy,
@@ -317,7 +325,8 @@ struct RoomTimelineItemFactory: RoomTimelineItemFactoryProtocol {
                                                    deliveryStatus: eventItemProxy.deliveryStatus,
                                                    orderedReadReceipts: buildOrderedReadReceipts(eventItemProxy.readReceipts),
                                                    encryptionAuthenticity: buildEncryptionAuthenticity(eventItemProxy.shieldState),
-                                                   encryptionForwarder: eventItemProxy.forwarder))
+                                                   encryptionForwarder: eventItemProxy.forwarder,
+                                                   isPrivacyControlled: eventItemProxy.isPrivacyControlled))
     }
 
     private func buildGalleryTimelineItem(for eventItemProxy: EventTimelineItemProxy,
@@ -341,7 +350,8 @@ struct RoomTimelineItemFactory: RoomTimelineItemFactoryProtocol {
                                                deliveryStatus: eventItemProxy.deliveryStatus,
                                                orderedReadReceipts: buildOrderedReadReceipts(eventItemProxy.readReceipts),
                                                encryptionAuthenticity: buildEncryptionAuthenticity(eventItemProxy.shieldState),
-                                               encryptionForwarder: eventItemProxy.forwarder))
+                                               encryptionForwarder: eventItemProxy.forwarder,
+                                               isPrivacyControlled: eventItemProxy.isPrivacyControlled))
     }
 
     private func buildStickerTimelineItem(_ eventItemProxy: EventTimelineItemProxy,
@@ -368,7 +378,8 @@ struct RoomTimelineItemFactory: RoomTimelineItemFactoryProtocol {
                                                          deliveryStatus: eventItemProxy.deliveryStatus,
                                                          orderedReadReceipts: buildOrderedReadReceipts(eventItemProxy.readReceipts),
                                                          encryptionAuthenticity: buildEncryptionAuthenticity(eventItemProxy.shieldState),
-                                                         encryptionForwarder: eventItemProxy.forwarder))
+                                                         encryptionForwarder: eventItemProxy.forwarder,
+                                                         isPrivacyControlled: eventItemProxy.isPrivacyControlled))
     }
 
     private func buildPollTimelineItem(_ eventItemProxy: EventTimelineItemProxy,
@@ -429,7 +440,8 @@ struct RoomTimelineItemFactory: RoomTimelineItemFactoryProtocol {
                                                       deliveryStatus: eventItemProxy.deliveryStatus,
                                                       orderedReadReceipts: buildOrderedReadReceipts(eventItemProxy.readReceipts),
                                                       encryptionAuthenticity: buildEncryptionAuthenticity(eventItemProxy.shieldState),
-                                                      encryptionForwarder: eventItemProxy.forwarder))
+                                                      encryptionForwarder: eventItemProxy.forwarder,
+                                                      isPrivacyControlled: eventItemProxy.isPrivacyControlled))
     }
 
     private func buildLiveLocationTimelineItem(_ eventItemProxy: EventTimelineItemProxy,
@@ -450,7 +462,8 @@ struct RoomTimelineItemFactory: RoomTimelineItemFactoryProtocol {
                                                        deliveryStatus: eventItemProxy.deliveryStatus,
                                                        orderedReadReceipts: buildOrderedReadReceipts(eventItemProxy.readReceipts),
                                                        encryptionAuthenticity: buildEncryptionAuthenticity(eventItemProxy.shieldState),
-                                                       encryptionForwarder: eventItemProxy.forwarder))
+                                                       encryptionForwarder: eventItemProxy.forwarder,
+                                                       isPrivacyControlled: eventItemProxy.isPrivacyControlled))
     }
 
     private func buildRedactedTimelineItem(_ eventItemProxy: EventTimelineItemProxy,
@@ -518,7 +531,8 @@ struct RoomTimelineItemFactory: RoomTimelineItemFactoryProtocol {
                                          sender: eventItemProxy.sender,
                                          properties: .init(replyDetails: buildTimelineItemReplyDetails(messageLikeContent.inReplyTo),
                                                            isThreaded: messageLikeContent.threadRoot != nil,
-                                                           threadSummary: buildTimelineItemThreadSummary(messageLikeContent.threadSummary)))
+                                                           threadSummary: buildTimelineItemThreadSummary(messageLikeContent.threadSummary),
+                                                           isPrivacyControlled: eventItemProxy.isPrivacyControlled))
     }
 
     // MARK: - Message events content
@@ -760,7 +774,7 @@ struct RoomTimelineItemFactory: RoomTimelineItemFactoryProtocol {
                                     isEditable: eventItemProxy.isEditable,
                                     canBeRepliedTo: eventItemProxy.canBeRepliedTo,
                                     sender: eventItemProxy.sender,
-                                    properties: .init())
+                                    properties: .init(isPrivacyControlled: eventItemProxy.isPrivacyControlled))
     }
 
     private func buildCallInviteTimelineItem(for eventItemProxy: EventTimelineItemProxy) -> RoomTimelineItemProtocol {

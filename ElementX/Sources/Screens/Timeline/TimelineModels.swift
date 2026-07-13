@@ -120,7 +120,6 @@ struct TimelineViewState: BindableState {
 
     var hideTimelineMedia: Bool
     var isEmergencyPrivacyModeEnabled = false
-    var privacyControlledTimelineItemIDs = Set<TimelineItemIdentifier.UniqueID>()
     var bulkRedactionSelectionState = TimelineBulkRedactionSelectionState()
 
     var isViewSourceEnabled: Bool

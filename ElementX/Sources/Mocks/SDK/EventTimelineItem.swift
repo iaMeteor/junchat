@@ -13,6 +13,8 @@ import MatrixRustSDKMocks
 
 struct EventTimelineItemSDKMockConfiguration {
     var eventID: String = UUID().uuidString
+    var isRemote = true
+    var eventOrTransactionID: EventOrTransactionId?
     var sender = ""
     var senderProfile: ProfileDetails?
     var forwarder: String?
@@ -23,12 +25,20 @@ struct EventTimelineItemSDKMockConfiguration {
                                                                inReplyTo: nil,
                                                                threadRoot: nil,
                                                                threadSummary: nil))
+    var latestJSON: String?
 }
 
 extension EventTimelineItem {
     init(configuration: EventTimelineItemSDKMockConfiguration) {
-        self.init(isRemote: true,
-                  eventOrTransactionId: .eventId(eventId: configuration.eventID),
+        let eventOrTransactionID = configuration.eventOrTransactionID
+            ?? (configuration.isRemote ? .eventId(eventId: configuration.eventID) : .transactionId(transactionId: configuration.eventID))
+        let lazyProvider = LazyTimelineItemProviderSDKMock()
+        lazyProvider.containsOnlyEmojisReturnValue = false
+        lazyProvider.getShieldsStrictReturnValue = ShieldState.none
+        lazyProvider.latestJsonReturnValue = configuration.latestJSON
+
+        self.init(isRemote: configuration.isRemote,
+                  eventOrTransactionId: eventOrTransactionID,
                   sender: configuration.sender,
                   senderProfile: configuration.senderProfile ?? .pending,
                   forwarder: configuration.forwarder,
@@ -43,10 +53,14 @@ extension EventTimelineItem {
                   readReceipts: [:],
                   origin: nil,
                   canBeRepliedTo: false,
-                  lazyProvider: LazyTimelineItemProviderSDKMock())
+                  lazyProvider: lazyProvider)
     }
     
     static var mockMessage: EventTimelineItem {
+        mockMessage(configuration: .init())
+    }
+
+    static func mockMessage(configuration: EventTimelineItemSDKMockConfiguration) -> EventTimelineItem {
         let body = Lorem.sentences(Int.random(in: 1...5))
         let messageType = MessageType.text(content: .init(body: body, formatted: nil))
         
@@ -59,7 +73,9 @@ extension EventTimelineItem {
                                                                  threadRoot: nil,
                                                                  threadSummary: nil))
         
-        return .init(configuration: .init(content: content))
+        var configuration = configuration
+        configuration.content = content
+        return .init(configuration: configuration)
     }
     
     static func mockCallInvite(sender: String) -> EventTimelineItem {

@@ -36,4 +36,32 @@ struct TimelineItemFactoryTests {
         #expect(item.properties.reactions == [])
         #expect(item.properties.deliveryStatus == nil)
     }
+
+    @Test
+    func privacyEvidencePropagatesThroughFreshFactoryReconstruction() throws {
+        let firstItem = try buildPrivacyControlledTimelineItem(uniqueID: .init("first"))
+        let restoredItem = try buildPrivacyControlledTimelineItem(uniqueID: .init("restored"))
+
+        #expect(firstItem.properties.isPrivacyControlled)
+        #expect(restoredItem.properties.isPrivacyControlled)
+    }
+
+    private func buildPrivacyControlledTimelineItem(uniqueID: TimelineItemIdentifier.UniqueID) throws -> TextRoomTimelineItem {
+        let ownUserID = "@alice:matrix.org"
+        let factory = RoomTimelineItemFactory(userID: ownUserID,
+                                              attributedStringBuilder: AttributedStringBuilder(mentionBuilder: MentionBuilder()),
+                                              stateEventStringBuilder: RoomStateEventStringBuilder(userID: ownUserID))
+        let event = EventTimelineItem.mockMessage(configuration: .init(latestJSON: """
+        {
+          "content": { "msgtype": "m.text", "body": "cached message" },
+          "unsigned": {
+            "com.heyujk.junchat.privacy_mode": true,
+            "com.heyujk.junchat.privacy_mode.read_based": true
+          }
+        }
+        """))
+        let proxy = EventTimelineItemProxy(item: event, uniqueID: uniqueID)
+
+        return try #require(factory.buildTimelineItem(for: proxy, isDM: false) as? TextRoomTimelineItem)
+    }
 }

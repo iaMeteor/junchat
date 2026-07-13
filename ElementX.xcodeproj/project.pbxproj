@@ -1273,6 +1273,7 @@
 		CCDE84AAA48BAE9E25633C21 /* JunchatShareCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 686C00647EF2680FE0F0CC9B /* JunchatShareCard.swift */; };
 		CD0088B763CD970CF1CBF8CB /* DateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B5E97E9615A158C76B2AB77 /* DateTests.swift */; };
 		CD077E14FAADC444C5A80068 /* LiveLocationManagerProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33752AE856E93CE62412B7A1 /* LiveLocationManagerProtocol.swift */; };
+		CD3093D154173894C1DF8C3C /* EventTimelineItemProxyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F13778488CBCEF6946172C78 /* EventTimelineItemProxyTests.swift */; };
 		CD6A72B65D3B6076F4045C30 /* PHGPostHogConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6B891A6DA826E2461DBB40F /* PHGPostHogConfiguration.swift */; };
 		CDAE3A37D4DF136F9D07DB61 /* RoomChangeRolesScreenSection.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAF710CB1C31F8938EAA3A7D /* RoomChangeRolesScreenSection.swift */; };
 		CDCA8A559E098503DDE29477 /* AttributedStringBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A5C6FBF97B6EED3D4FA5EFF /* AttributedStringBuilder.swift */; };
@@ -3100,6 +3101,7 @@
 		F1033290D99D5BBA1AF3560A /* MapTilerURLBuilderProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapTilerURLBuilderProtocol.swift; sourceTree = "<group>"; };
 		F104596B0620CEFE5DFD31B1 /* RoomSelectionScreenCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomSelectionScreenCoordinator.swift; sourceTree = "<group>"; };
 		F134D2D91DFF732FB75B2CB7 /* UserProfileScreenViewModelProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserProfileScreenViewModelProtocol.swift; sourceTree = "<group>"; };
+		F13778488CBCEF6946172C78 /* EventTimelineItemProxyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EventTimelineItemProxyTests.swift; sourceTree = "<group>"; };
 		F174A5627CDB3CAF280D1880 /* EmojiPickerScreenModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmojiPickerScreenModels.swift; sourceTree = "<group>"; };
 		F17EFA1D3D09FC2F9C5E1CB2 /* MediaProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaProvider.swift; sourceTree = "<group>"; };
 		F1B8500C152BC59445647DA8 /* UnsupportedRoomTimelineItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnsupportedRoomTimelineItem.swift; sourceTree = "<group>"; };
@@ -5133,6 +5135,7 @@
 				7EA2AFF6EB59FE25234D29F3 /* ElementCallServiceTests.swift */,
 				A1087DCC491CD4C027173DDA /* EmojiPickerScreenViewModelTests.swift */,
 				099F2D36C141D845A445B1E6 /* EmojiProviderTests.swift */,
+				F13778488CBCEF6946172C78 /* EventTimelineItemProxyTests.swift */,
 				84B7A28A6606D58D1E38C55A /* ExpiringTaskRunnerTests.swift */,
 				1A7ED2EF5BDBAD2A7DBC4636 /* GeoURITests.swift */,
 				5E85A612A1D50212A51E5A63 /* GlobalIncomingCallPresentationTests.swift */,
@@ -8204,6 +8207,7 @@
 				D820B3C223E4C2E77BB2A2BF /* ElementCallServiceTests.swift in Sources */,
 				7AE25D29734267271106D732 /* EmojiPickerScreenViewModelTests.swift in Sources */,
 				25618589E0DE0F1E95FC7B5C /* EmojiProviderTests.swift in Sources */,
+				CD3093D154173894C1DF8C3C /* EventTimelineItemProxyTests.swift in Sources */,
 				71B62C48B8079D49F3FBC845 /* ExpiringTaskRunnerTests.swift in Sources */,
 				07756D532EFE33DD1FA258E5 /* GeoURITests.swift in Sources */,
 				5B06CA3AE837AD1704F4B36F /* GlobalIncomingCallPresentationTests.swift in Sources */,

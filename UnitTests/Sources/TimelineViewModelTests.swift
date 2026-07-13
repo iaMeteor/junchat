@@ -723,50 +723,34 @@ final class TimelineViewModelTests {
     }
 
     @Test
-    func privacyModeMessageIsNotRedactedLocallyAfterLifetime() async throws {
-        let appSettings = AppSettings()
-        let privacyModeService = PrivacyModeServiceMock(loadResults: [.success(true)])
-        let timelineController = MockTimelineController(timelineItems: [])
-        let viewModel = makeViewModel(timelineController: timelineController,
-                                      privacyModeService: privacyModeService,
-                                      appSettings: appSettings,
-                                      privacyMessageLifetime: .milliseconds(10))
+    func privacyEvidenceComesFromTimelineItemPropertiesRatherThanMessageBody() {
+        let items = [
+            TextRoomTimelineItem(eventID: "unmarked", text: "same body", sender: "bob"),
+            TextRoomTimelineItem(eventID: "marked", text: "same body", sender: "bob", isPrivacyControlled: true)
+        ]
+        let viewModel = makeViewModel(timelineController: MockTimelineController(timelineItems: items))
 
-        viewModel.process(composerAction: .sendMessage(plain: "secret",
-                                                       html: nil,
-                                                       mode: .default,
-                                                       intentionalMentions: .init(userIDs: [], atRoom: false)))
+        let evidence = viewModel.state.timelineState.itemViewStates.compactMap { viewState -> Bool? in
+            guard case .text(let item) = viewState.type else { return nil }
+            return item.properties.isPrivacyControlled
+        }
 
-        try await Task.sleep(for: .milliseconds(100))
-
-        #expect(!timelineController.redactCalled)
-        #expect(viewModel.state.privacyControlledTimelineItemIDs.isEmpty)
-        _ = viewModel
+        #expect(evidence == [false, true])
     }
 
     @Test
-    func privacyModeMessageIsMarkedAsPrivacyControlled() async throws {
-        let appSettings = AppSettings()
-        let privacyModeService = PrivacyModeServiceMock(loadResults: [.success(true)])
-        let timelineController = MockTimelineController(timelineItems: [])
-        let viewModel = makeViewModel(timelineController: timelineController,
-                                      privacyModeService: privacyModeService,
-                                      appSettings: appSettings,
-                                      privacyMessageLifetime: .seconds(180))
+    func privacyEvidenceSurvivesFreshViewModelReconstruction() throws {
+        for eventID in ["initial", "restored"] {
+            let item = TextRoomTimelineItem(eventID: eventID, isPrivacyControlled: true)
+            let viewModel = makeViewModel(timelineController: MockTimelineController(timelineItems: [item]))
+            let viewState = try #require(viewModel.state.timelineState.itemViewStates.first)
+            guard case .text(let restoredItem) = viewState.type else {
+                Issue.record("Expected a text timeline item.")
+                return
+            }
 
-        viewModel.process(composerAction: .sendMessage(plain: "secret",
-                                                       html: nil,
-                                                       mode: .default,
-                                                       intentionalMentions: .init(userIDs: [], atRoom: false)))
-
-        try await Task.sleep(for: .milliseconds(50))
-
-        guard let sentMessageID = timelineController.timelineItems.first?.id.uniqueID else {
-            Issue.record("Expected the privacy mode message to be sent.")
-            return
+            #expect(restoredItem.properties.isPrivacyControlled)
         }
-        #expect(viewModel.state.privacyControlledTimelineItemIDs == [sentMessageID])
-        _ = viewModel
     }
 
     @Test
@@ -786,7 +770,6 @@ final class TimelineViewModelTests {
 
         try await Task.sleep(for: .milliseconds(50))
 
-        #expect(viewModel.state.privacyControlledTimelineItemIDs.isEmpty)
         #expect(await privacyModeService.loadRoomIDReceivedInvocations == ["MockRoomIdentifier"])
         _ = viewModel
     }
@@ -1160,7 +1143,6 @@ final class TimelineViewModelTests {
                                timelineController: TimelineControllerProtocol,
                                privacyModeService: PrivacyModeServiceProtocol = PrivacyModeServiceMock(),
                                appSettings: AppSettings = ServiceLocator.shared.settings,
-                               privacyMessageLifetime: Duration = .seconds(180),
                                privacyModeAuthorityTimeout: Duration = .seconds(1)) -> TimelineViewModel {
         TimelineViewModel(roomProxy: roomProxy ?? JoinedRoomProxyMock(.init(name: "")),
                           focussedEventID: focussedEventID,
@@ -1174,7 +1156,6 @@ final class TimelineViewModelTests {
                           emojiProvider: EmojiProvider(appSettings: ServiceLocator.shared.settings),
                           linkMetadataProvider: LinkMetadataProvider(),
                           timelineControllerFactory: TimelineControllerFactoryMock(.init()),
-                          privacyMessageLifetime: privacyMessageLifetime,
                           privacyModeAuthorityTimeout: privacyModeAuthorityTimeout)
     }
 
@@ -1465,14 +1446,15 @@ private extension SeparatorRoomTimelineItem {
 }
 
 private extension TextRoomTimelineItem {
-    init(eventID: String, text: String = "Hello, World!", sender: String = "") {
+    init(eventID: String, text: String = "Hello, World!", sender: String = "", isPrivacyControlled: Bool = false) {
         self.init(id: .event(uniqueID: .init(UUID().uuidString), eventOrTransactionID: .eventID(eventID)),
                   timestamp: .mock,
                   isOutgoing: sender == "bob",
                   isEditable: sender == "bob",
                   canBeRepliedTo: true,
                   sender: .init(id: sender.isEmpty ? "" : "@\(sender):server.com", displayName: sender),
-                  content: .init(body: text))
+                  content: .init(body: text),
+                  properties: .init(isPrivacyControlled: isPrivacyControlled))
     }
 }
 
