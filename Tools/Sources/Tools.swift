@@ -16,7 +16,7 @@ struct Tools: AsyncParsableCommand {
                                                                   GenerateSAS.self,
                                                                   AppIconBanner.self,
                                                                   UnusedStrings.self,
-                                                                  BumpCalendarVersion.self,
+                                                                  SetJunchatReleaseVersion.self,
                                                                   BuildElementCallCandidate.self,
                                                                   CI.self])
 }
