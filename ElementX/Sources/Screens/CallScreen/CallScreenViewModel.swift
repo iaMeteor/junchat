@@ -468,7 +468,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         case .success:
             actionsSubject.send(.pictureInPictureStarted)
         case .failure:
-            actionsSubject.send(.dismiss)
+            MXLog.warning("[JunchatCall] picture in picture did not start, keeping the call screen visible")
         }
     }
 

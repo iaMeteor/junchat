@@ -26,6 +26,7 @@ final class CallPictureInPictureRequestTracker {
     private enum State {
         case idle
         case starting(Attempt)
+        case timedOut(UUID)
         case active
         case invalidated
     }
@@ -55,6 +56,8 @@ final class CallPictureInPictureRequestTracker {
                 case .starting(var attempt):
                     attempt.waiters[waiterID] = continuation
                     state = .starting(attempt)
+                case .timedOut:
+                    continuation.resume(returning: .failure(.pictureInPictureNotAvailable))
                 case .active:
                     continuation.resume(returning: .success(()))
                 case .invalidated:
@@ -77,15 +80,27 @@ final class CallPictureInPictureRequestTracker {
     }
 
     func didStart() {
-        guard case .starting(let attempt) = state else { return }
-        completeAttempt(id: attempt.id, with: .success(()), nextState: .active)
+        switch state {
+        case .starting(let attempt):
+            completeAttempt(id: attempt.id, with: .success(()), nextState: .active)
+        case .timedOut:
+            state = .active
+        case .idle, .active, .invalidated:
+            break
+        }
     }
 
     func didFailToStart() {
-        guard case .starting(let attempt) = state else { return }
-        completeAttempt(id: attempt.id,
-                        with: .failure(.pictureInPictureNotAvailable),
-                        nextState: .idle)
+        switch state {
+        case .starting(let attempt):
+            completeAttempt(id: attempt.id,
+                            with: .failure(.pictureInPictureNotAvailable),
+                            nextState: .idle)
+        case .timedOut:
+            state = .idle
+        case .idle, .active, .invalidated:
+            break
+        }
     }
 
     func stopped() {
@@ -95,6 +110,8 @@ final class CallPictureInPictureRequestTracker {
                             with: .failure(.pictureInPictureNotAvailable),
                             nextState: .idle)
         case .active:
+            state = .idle
+        case .timedOut:
             state = .idle
         case .idle, .invalidated:
             break
@@ -107,7 +124,7 @@ final class CallPictureInPictureRequestTracker {
             completeAttempt(id: attempt.id,
                             with: .failure(.pictureInPictureNotAvailable),
                             nextState: .invalidated)
-        case .idle, .active:
+        case .idle, .timedOut, .active:
             state = .invalidated
         case .invalidated:
             break
@@ -147,9 +164,7 @@ final class CallPictureInPictureRequestTracker {
         Task { @MainActor [weak self, timeout] in
             try? await Task.sleep(for: timeout)
             guard !Task.isCancelled else { return }
-            self?.completeAttempt(id: attemptID,
-                                  with: .failure(.pictureInPictureNotAvailable),
-                                  nextState: .idle)
+            self?.timeOutAttempt(id: attemptID)
         }
     }
 
@@ -177,6 +192,20 @@ final class CallPictureInPictureRequestTracker {
         continuation.resume(returning: .failure(.pictureInPictureNotAvailable))
     }
 
+    private func timeOutAttempt(id: UUID) {
+        guard case .starting(let attempt) = state, attempt.id == id else { return }
+
+        if attempt.beginTask != nil {
+            completeAttempt(id: id,
+                            with: .failure(.pictureInPictureNotAvailable),
+                            nextState: .idle)
+            return
+        }
+
+        state = .timedOut(id)
+        attempt.waiters.values.forEach { $0.resume(returning: .failure(.pictureInPictureNotAvailable)) }
+    }
+
     private func completeAttempt(id: UUID,
                                  with result: RequestResult,
                                  nextState: State) {
@@ -186,5 +215,49 @@ final class CallPictureInPictureRequestTracker {
         attempt.beginTask?.cancel()
         attempt.timeoutTask?.cancel()
         attempt.waiters.values.forEach { $0.resume(returning: result) }
+    }
+}
+
+@MainActor
+final class CallPictureInPictureDelegateEventProcessor<Event: Sendable> {
+    private nonisolated let continuation: AsyncStream<Event>.Continuation
+    private let stream: AsyncStream<Event>
+    private var processingTask: Task<Void, Never>?
+
+    init() {
+        let (stream, continuation) = AsyncStream.makeStream(of: Event.self)
+        self.stream = stream
+        self.continuation = continuation
+    }
+
+    convenience init(handler: @escaping @MainActor (Event) async -> Void) {
+        self.init()
+        start(handler: handler)
+    }
+
+    func start(handler: @escaping @MainActor (Event) async -> Void) {
+        guard processingTask == nil else { return }
+
+        processingTask = Task { @MainActor in
+            for await event in stream {
+                guard !Task.isCancelled else { return }
+                await handler(event)
+            }
+        }
+    }
+
+    nonisolated func send(_ event: Event) {
+        continuation.yield(event)
+    }
+
+    func invalidate() {
+        continuation.finish()
+        processingTask?.cancel()
+        processingTask = nil
+    }
+
+    deinit {
+        continuation.finish()
+        processingTask?.cancel()
     }
 }

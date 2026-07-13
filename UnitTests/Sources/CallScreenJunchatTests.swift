@@ -509,6 +509,60 @@ struct CallScreenJunchatTests {
     }
 
     @Test
+    @MainActor
+    func failedBackNavigationPictureInPictureKeepsCallVisible() async throws {
+        let widgetDriver = ElementCallWidgetDriverMock()
+        widgetDriver.underlyingWidgetID = "widget"
+        widgetDriver.underlyingMessagePublisher = .init()
+        widgetDriver.underlyingActions = Empty().eraseToAnyPublisher()
+        widgetDriver.startBaseURLClientIDColorSchemeVoiceOnlyRageshakeURLAnalyticsConfigurationReturnValue = .success(URL.userDirectory)
+        widgetDriver.handleMessageReturnValue = .success(true)
+
+        let roomProxy = JoinedRoomProxyMock(.init(id: "room-id", name: "Call Room"))
+        roomProxy.elementCallWidgetDriverDeviceIDReturnValue = widgetDriver
+
+        let clientProxy = ClientProxyMock(.init(deviceID: "device-id"))
+        let viewModel = CallScreenViewModel(elementCallService: ElementCallServiceMock(.init()),
+                                            configuration: .init(roomProxy: roomProxy,
+                                                                 clientProxy: clientProxy,
+                                                                 clientID: "com.heyujk.junchat",
+                                                                 elementCallBaseURL: URL.homeDirectory,
+                                                                 elementCallBaseURLOverride: nil,
+                                                                 voiceOnly: true,
+                                                                 colorScheme: .dark),
+                                            allowPictureInPicture: true,
+                                            appHooks: AppHooks(),
+                                            appSettings: AppSettings(),
+                                            analyticsService: AnalyticsService(client: AnalyticsClientMock(), appSettings: AppSettings()),
+                                            callConnectedTonePlayer: { },
+                                            callEndedTonePlayer: { })
+        var dismissCount = 0
+        var minimizedCount = 0
+        var cancellables = Set<AnyCancellable>()
+        viewModel.actions.sink { action in
+            switch action {
+            case .dismiss:
+                dismissCount += 1
+            case .pictureInPictureStarted:
+                minimizedCount += 1
+            case .pictureInPictureStopped:
+                break
+            }
+        }
+        .store(in: &cancellables)
+        viewModel.context.requestPictureInPictureHandler = {
+            .failure(.pictureInPictureNotAvailable)
+        }
+        try await Task.sleep(for: .milliseconds(50))
+
+        viewModel.process(viewAction: .navigateBack)
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(dismissCount == 0)
+        #expect(minimizedCount == 0)
+    }
+
+    @Test
     func widgetHangupMessagesAreCallEndingActions() throws {
         let data = Data(#"{"api":"fromWidget","action":"im.vector.hangup","widget_id":"widget"}"#.utf8)
         let message = try JSONDecoder().decode(ElementCallWidgetMessage.self, from: data)
