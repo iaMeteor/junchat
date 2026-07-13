@@ -14,7 +14,7 @@ struct NotificationBadgePolicyTests {
     private let expectedFixtureSchema = "junchat.notification-badge-fixtures/v1"
     private let expectedBadgeContract = "junchat.notification-badge/v1"
     private let preservedBadge = NSNumber(value: 23)
-    
+
     @Test
     func canonicalFixturePolicyExpectations() throws {
         let fixtureURL = try #require(Bundle(for: NotificationBadgePolicyFixtureToken.self)
@@ -22,15 +22,15 @@ struct NotificationBadgePolicyTests {
         let data = try Data(contentsOf: fixtureURL)
         let checksum = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         try #require(checksum == expectedFixtureChecksum)
-        
+
         let manifest = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
         #expect(manifest["schema"] as? String == expectedFixtureSchema)
         #expect(manifest["schema_version"] as? Int == 1)
         #expect(manifest["badge_contract"] as? String == expectedBadgeContract)
-        
+
         let cases = try #require(manifest["cases"] as? [[String: Any]])
         #expect(!cases.isEmpty)
-        
+
         for fixtureCase in cases {
             let identifier = try #require(fixtureCase["id"] as? String)
             let expected = try #require(fixtureCase["expected"] as? [String: Any])
@@ -38,12 +38,12 @@ struct NotificationBadgePolicyTests {
             let client = try #require(expected["client"] as? [String: Any])
             let badgeAction = try #require(client["badge_action"] as? String)
             let timeoutAction = try #require(client["nse_timeout_action"] as? String)
-            
+
             if let contract = payload["badge_contract"] {
                 #expect(contract as? String == expectedBadgeContract, "Unexpected marker in \(identifier)")
             }
             #expect(client["adds_components"] as? Bool == false, "Components must not be added in \(identifier)")
-            
+
             let content = makeContent(userInfo: payload, badge: preservedBadge)
             switch badgeAction {
             case "set":
@@ -58,7 +58,7 @@ struct NotificationBadgePolicyTests {
             }
         }
     }
-    
+
     @Test
     func maximumSafeContractTotalIsAuthoritative() {
         let maximumSafeInteger = NSNumber(value: Int64(9_007_199_254_740_991))
@@ -66,17 +66,17 @@ struct NotificationBadgePolicyTests {
                                   total: maximumSafeInteger,
                                   unreadCount: 8,
                                   badge: 7)
-        
+
         #expect(content.badgeForDelivery == maximumSafeInteger)
     }
-    
+
     @Test
     func existingAPNsBadgePrecedesLegacyUnreadCount() {
         let content = makeContent(unreadCount: 4, badge: 9)
-        
+
         #expect(content.badgeForDelivery == 9)
     }
-    
+
     @Test
     func largeExistingAPNsBadgeIsPreserved() {
         let badge = NSNumber(value: Int64(9_007_199_254_740_992))
@@ -88,7 +88,7 @@ struct NotificationBadgePolicyTests {
     @Test
     func legacyUnreadCountIsTheFinalFallback() {
         let content = makeContent(unreadCount: 4)
-        
+
         #expect(content.badgeForDelivery == 4)
     }
 
@@ -104,82 +104,82 @@ struct NotificationBadgePolicyTests {
         #expect(makeContent(unreadCount: -1).badgeForDelivery == nil)
         #expect(makeContent(unreadCount: NSNumber(value: 1.5)).badgeForDelivery == nil)
     }
-    
+
     @Test
     func missingBadgeInputsReturnNil() {
         #expect(makeContent().badgeForDelivery == nil)
     }
-    
+
     @Test
     func unknownContractMarkerPreservesExistingBadge() {
         let content = makeContent(contract: "junchat.notification-badge/v2",
                                   total: 3,
                                   unreadCount: 2,
                                   badge: 7)
-        
+
         #expect(content.badgeForDelivery == 7)
     }
-    
+
     @Test
     func malformedContractTotalPreservesExistingBadge() {
         let content = makeContent(contract: expectedBadgeContract,
                                   total: "3",
                                   unreadCount: 2,
                                   badge: 7)
-        
+
         #expect(content.badgeForDelivery == 7)
     }
-    
+
     @Test
     func negativeContractTotalPreservesExistingBadge() {
         let content = makeContent(contract: expectedBadgeContract,
                                   total: -1,
                                   unreadCount: 2,
                                   badge: 7)
-        
+
         #expect(content.badgeForDelivery == 7)
     }
-    
+
     @Test
     func fractionalContractTotalPreservesExistingBadge() {
         let content = makeContent(contract: expectedBadgeContract,
                                   total: NSNumber(value: 1.5),
                                   unreadCount: 2,
                                   badge: 7)
-        
+
         #expect(content.badgeForDelivery == 7)
     }
-    
+
     @Test
     func booleanContractTotalPreservesExistingBadge() {
         let content = makeContent(contract: expectedBadgeContract,
                                   total: true,
                                   unreadCount: 2,
                                   badge: 7)
-        
+
         #expect(content.badgeForDelivery == 7)
     }
-    
+
     @Test
     func overflowingContractTotalPreservesExistingBadge() {
         let content = makeContent(contract: expectedBadgeContract,
                                   total: NSNumber(value: Int64(9_007_199_254_740_992)),
                                   unreadCount: 2,
                                   badge: 7)
-        
+
         #expect(content.badgeForDelivery == 7)
     }
-    
+
     @Test
     func authoritativeZeroClearsTheBadge() {
         let content = makeContent(contract: expectedBadgeContract,
                                   total: 0,
                                   unreadCount: 12,
                                   badge: 11)
-        
+
         #expect(content.badgeForDelivery == NSNumber(value: 0))
     }
-    
+
     @Test
     func countOnlyContentIsNormalizedForEarlyFallback() throws {
         let content = makeContent(contract: expectedBadgeContract, total: 6)
@@ -365,7 +365,7 @@ struct NotificationBadgePolicyTests {
         content.badge = badge
         return content
     }
-    
+
     private func makeContent(contract: Any? = nil,
                              total: Any? = nil,
                              unreadCount: Any? = nil,
