@@ -248,6 +248,38 @@ struct UserSessionFlowCoordinatorTests {
     }
 
     @Test
+    mutating func delayedCallRouteLookupCannotReplaceNewerCall() async throws {
+        let defaultRoomLookup = try #require(clientProxy.roomForIdentifierClosure)
+        let delayedLookup = SuspendedCallRoomLookup()
+        clientProxy.roomForIdentifierClosure = { roomID in
+            if roomID == "1" {
+                await delayedLookup.wait()
+            }
+            return await defaultRoomLookup(roomID)
+        }
+
+        let delayedCoordinator = ControllableCallScreenCoordinator()
+        let currentCoordinator = ControllableCallScreenCoordinator()
+        callScreenCoordinatorFactory.overrideClosure = { parameters in
+            parameters.configuration.callRoomID == "1" ? delayedCoordinator : currentCoordinator
+        }
+
+        userSessionFlowCoordinator.handleAppRoute(.call(roomID: "1", isVoiceCall: true), animated: false)
+        try await waitUntil { delayedLookup.hasRequest }
+
+        userSessionFlowCoordinator.handleAppRoute(.call(roomID: "2", isVoiceCall: true), animated: false)
+        try await waitUntil { tabCoordinator?.overlayCoordinator === currentCoordinator }
+
+        delayedLookup.resume()
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(tabCoordinator?.overlayCoordinator === currentCoordinator)
+        #expect(callScreenCoordinatorFactory.makeCount == 1)
+        #expect(delayedCoordinator.stopCallsCount == 0)
+        #expect(currentCoordinator.stopCallsCount == 0)
+    }
+
+    @Test
     mutating func callScreenIsDismissedWhenOnlyOwnCallMembershipRemains() async throws {
         userSessionFlowCoordinator.handleAppRoute(.call(roomID: "1", isVoiceCall: true), animated: false)
         try await Task.sleep(for: .milliseconds(100))
@@ -551,11 +583,30 @@ struct UserSessionFlowCoordinatorTests {
 @MainActor
 private final class CallScreenCoordinatorTestFactory {
     var override: (any CallScreenCoordinatorProtocol)?
+    var overrideClosure: ((CallScreenCoordinatorParameters) -> any CallScreenCoordinatorProtocol)?
     private(set) var makeCount = 0
 
     func make(parameters: CallScreenCoordinatorParameters) -> any CallScreenCoordinatorProtocol {
         makeCount += 1
-        return override ?? CallScreenCoordinator(parameters: parameters)
+        return overrideClosure?(parameters) ?? override ?? CallScreenCoordinator(parameters: parameters)
+    }
+}
+
+@MainActor
+private final class SuspendedCallRoomLookup {
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    var hasRequest: Bool {
+        continuation != nil
+    }
+
+    func wait() async {
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func resume() {
+        continuation?.resume()
+        continuation = nil
     }
 }
 

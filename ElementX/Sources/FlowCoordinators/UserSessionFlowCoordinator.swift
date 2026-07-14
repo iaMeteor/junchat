@@ -79,6 +79,7 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
     private var presentedCallScreenStartedAt: Date?
     private var callScreenHasSeenRemoteParticipant = false
     private var endedCallDismissalWorkItem: DispatchWorkItem?
+    private var callPresentationRequestID: UUID?
 
     private let actionsSubject: PassthroughSubject<UserSessionFlowCoordinatorAction, Never> = .init()
     var actionsPublisher: AnyPublisher<UserSessionFlowCoordinatorAction, Never> {
@@ -166,7 +167,8 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
                 settingsFlowCoordinator?.handleAppRoute(appRoute, animated: animated)
             }
         case .call(let roomID, let isVoiceCall):
-            Task { await presentCallScreen(roomID: roomID, isVoiceCall: isVoiceCall) }
+            let requestID = beginCallPresentationRequest()
+            Task { await presentCallScreen(roomID: roomID, isVoiceCall: isVoiceCall, requestID: requestID) }
         case .roomList, .room, .roomAlias, .childRoom, .childRoomAlias,
              .roomDetails, .roomMemberDetails, .userProfile,
              .event, .eventOnRoomAlias, .childEvent, .childEventOnRoomAlias,
@@ -491,9 +493,23 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
 
     // MARK: - Calls
 
-    private func presentCallScreen(roomID: String, isVoiceCall: Bool, playConnectedTone: Bool? = nil) async {
+    private func beginCallPresentationRequest() -> UUID {
+        let requestID = UUID()
+        callPresentationRequestID = requestID
+        return requestID
+    }
+
+    private func presentCallScreen(roomID: String,
+                                   isVoiceCall: Bool,
+                                   playConnectedTone: Bool? = nil,
+                                   requestID: UUID) async {
         guard case let .joined(roomProxy) = await userSession.clientProxy.roomForIdentifier(roomID) else {
             MXLog.warning("[JunchatCall] presentCallScreen failed: room not joined")
+            return
+        }
+
+        guard callPresentationRequestID == requestID else {
+            MXLog.info("[JunchatCall] ignoring superseded call presentation request")
             return
         }
 
@@ -509,6 +525,7 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
     }
 
     private func presentCallScreen(roomProxy: JoinedRoomProxyProtocol, voiceOnly: Bool, playConnectedTone: Bool = true) {
+        callPresentationRequestID = nil
         MXLog.info("[JunchatCall] presentCallScreen roomProxy voice=\(voiceOnly) playConnectedTone=\(playConnectedTone)")
         let colorScheme: ColorScheme = flowParameters.windowManager.mainWindow?.traitCollection.userInterfaceStyle == .light ? .light : .dark
         presentCallScreen(configuration: .init(roomProxy: roomProxy,
@@ -584,9 +601,13 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
     private func acceptIncomingCallCandidate(_ candidate: GlobalIncomingCallCandidate) {
         globalIncomingCallPresentation.dismiss(roomID: candidate.roomID)
         dismissIncomingCallOverlayIfNeeded()
+        let requestID = beginCallPresentationRequest()
         Task {
             await flowParameters.elementCallService.acceptIncomingCall(roomID: candidate.roomID, isVoiceCall: candidate.isVoiceCall)
-            await presentCallScreen(roomID: candidate.roomID, isVoiceCall: candidate.isVoiceCall, playConnectedTone: false)
+            await presentCallScreen(roomID: candidate.roomID,
+                                    isVoiceCall: candidate.isVoiceCall,
+                                    playConnectedTone: false,
+                                    requestID: requestID)
         }
     }
 
