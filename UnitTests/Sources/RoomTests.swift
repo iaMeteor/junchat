@@ -12,47 +12,104 @@ import MatrixRustSDKMocks
 import Testing
 
 struct RoomTests {
-    @Test
-    func callIntent() async {
-        let room = RoomSDKMock()
-        room.hasActiveRoomCallReturnValue = false
-        room.isDirectReturnValue = false
-        
-        var callIntent = await room.joinCallIntent()
-        #expect(callIntent == .startCall)
-      
-        room.isDirectReturnValue = true
-        callIntent = await room.joinCallIntent()
-        #expect(callIntent == .startCallDm)
-        
-        callIntent = await room.joinCallIntent(voiceOnly: true)
-        #expect(callIntent == .startCallDmVoice)
-        
-        room.hasActiveRoomCallReturnValue = true
-        callIntent = await room.joinCallIntent()
-        #expect(callIntent == .joinExistingDm)
-        
-        callIntent = await room.joinCallIntent(voiceOnly: true)
-        #expect(callIntent == .joinExistingDmVoice)
-        
-        room.isDirectReturnValue = false
-        callIntent = await room.joinCallIntent()
-        #expect(callIntent == .joinExisting)
+    @Test(arguments: CallRoomScenario.all)
+    func callIntentAndLobbyUseOneRoomInfoAuthority(_ scenario: CallRoomScenario) async {
+        for hasActiveCall in [false, true] {
+            for voiceOnly in [false, true] {
+                let room = RoomSDKMock()
+                room.roomInfoReturnValue = makeRoomInfo(scenario: scenario)
+                room.hasActiveRoomCallReturnValue = hasActiveCall
+                room.isDirectReturnValue = !scenario.isDirect
+
+                let configuration = await ElementCallWidgetDriver.callConfiguration(room: room,
+                                                                                    voiceOnly: voiceOnly)
+
+                #expect(configuration.intent == scenario.expectedIntent(hasActiveCall: hasActiveCall,
+                                                                        voiceOnly: voiceOnly))
+                #expect(configuration.skipLobby == scenario.expectedSkipLobby(voiceOnly: voiceOnly))
+                #expect(room.roomInfoCallsCount == 1)
+                #expect(room.hasActiveRoomCallCallsCount == 1)
+                #expect(room.isDirectCallsCount == 0)
+            }
+        }
+    }
+}
+
+struct CallRoomScenario: CustomTestStringConvertible {
+    static let all = [
+        CallRoomScenario(name: "true DM", isDirect: true, isSpace: false, activeMembersCount: 2),
+        CallRoomScenario(name: "two-member non-DM", isDirect: false, isSpace: false, activeMembersCount: 2),
+        CallRoomScenario(name: "larger non-DM", isDirect: false, isSpace: false, activeMembersCount: 5),
+        CallRoomScenario(name: "direct-marked larger room", isDirect: true, isSpace: false, activeMembersCount: 3),
+        CallRoomScenario(name: "space", isDirect: false, isSpace: true, activeMembersCount: 5),
+        CallRoomScenario(name: "direct-marked space", isDirect: true, isSpace: true, activeMembersCount: 2)
+    ]
+
+    let name: String
+    let isDirect: Bool
+    let isSpace: Bool
+    let activeMembersCount: UInt64
+
+    var testDescription: String {
+        name
     }
 
-    @Test
-    func groupVoiceCallLobbyOverrideUsesOneRoomInfoSnapshotClassification() {
-        let trueDM = ElementCallWidgetDriver.CallRoomClassification(isDirect: true, isSpace: false, activeMembersCount: 2)
-        let directLargerRoom = ElementCallWidgetDriver.CallRoomClassification(isDirect: true, isSpace: false, activeMembersCount: 3)
-        let twoMemberGroup = ElementCallWidgetDriver.CallRoomClassification(isDirect: false, isSpace: false, activeMembersCount: 2)
-        let largerGroup = ElementCallWidgetDriver.CallRoomClassification(isDirect: false, isSpace: false, activeMembersCount: 5)
-        let space = ElementCallWidgetDriver.CallRoomClassification(isDirect: false, isSpace: true, activeMembersCount: 5)
-
-        #expect(ElementCallWidgetDriver.skipLobbyOverride(voiceOnly: true, roomClassification: trueDM) == nil)
-        #expect(ElementCallWidgetDriver.skipLobbyOverride(voiceOnly: true, roomClassification: directLargerRoom) == true)
-        #expect(ElementCallWidgetDriver.skipLobbyOverride(voiceOnly: true, roomClassification: twoMemberGroup) == true)
-        #expect(ElementCallWidgetDriver.skipLobbyOverride(voiceOnly: true, roomClassification: largerGroup) == true)
-        #expect(ElementCallWidgetDriver.skipLobbyOverride(voiceOnly: true, roomClassification: space) == nil)
-        #expect(ElementCallWidgetDriver.skipLobbyOverride(voiceOnly: false, roomClassification: largerGroup) == nil)
+    private var isTrueDirectMessage: Bool {
+        isDirect && !isSpace && activeMembersCount == 2
     }
+
+    func expectedIntent(hasActiveCall: Bool, voiceOnly: Bool) -> Intent {
+        switch (hasActiveCall, isTrueDirectMessage) {
+        case (true, true): voiceOnly ? .joinExistingDmVoice : .joinExistingDm
+        case (true, false): .joinExisting
+        case (false, true): voiceOnly ? .startCallDmVoice : .startCallDm
+        case (false, false): .startCall
+        }
+    }
+
+    func expectedSkipLobby(voiceOnly: Bool) -> Bool? {
+        voiceOnly && !isSpace && !isTrueDirectMessage ? true : nil
+    }
+}
+
+private func makeRoomInfo(scenario: CallRoomScenario) -> RoomInfo {
+    RoomInfo(id: "!room:example.org",
+             encryptionState: .encrypted,
+             creators: nil,
+             displayName: nil,
+             rawName: nil,
+             topic: nil,
+             avatarUrl: nil,
+             isDirect: scenario.isDirect,
+             isPublic: nil,
+             isSpace: scenario.isSpace,
+             successorRoom: nil,
+             isFavourite: false,
+             isLowPriority: false,
+             canonicalAlias: nil,
+             alternativeAliases: [],
+             membership: .joined,
+             inviter: nil,
+             heroes: [],
+             activeMembersCount: scenario.activeMembersCount,
+             invitedMembersCount: 0,
+             joinedMembersCount: scenario.activeMembersCount,
+             activeServiceMembersCount: 0,
+             serviceMembers: [],
+             highlightCount: 0,
+             notificationCount: 0,
+             cachedUserDefinedNotificationMode: nil,
+             hasRoomCall: false,
+             activeRoomCallParticipants: [],
+             activeRoomCallConsensusIntent: .none,
+             isMarkedUnread: false,
+             numUnreadMessages: 0,
+             numUnreadNotifications: 0,
+             numUnreadMentions: 0,
+             pinnedEventIds: [],
+             joinRule: nil,
+             historyVisibility: .shared,
+             powerLevels: nil,
+             roomVersion: nil,
+             privilegedCreatorsRole: false)
 }

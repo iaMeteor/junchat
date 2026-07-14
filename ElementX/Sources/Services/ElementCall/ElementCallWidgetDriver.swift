@@ -139,6 +139,11 @@ final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked
         }
     }
 
+    struct CallConfiguration {
+        let intent: Intent
+        let skipLobby: Bool?
+    }
+
     struct Session {
         let url: URL
         let runtime: ElementCallWidgetDriverRuntimeProtocol
@@ -189,6 +194,24 @@ final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked
         }
 
         return true
+    }
+
+    static func callConfiguration<RoomType: RoomProtocol>(room: RoomType,
+                                                          voiceOnly: Bool) async -> CallConfiguration {
+        let roomClassification: CallRoomClassification?
+        do {
+            let roomInfo = try await room.roomInfo()
+            roomClassification = .init(roomInfo: roomInfo)
+        } catch {
+            MXLog.error("Failed to classify call room: \(CallDiagnostics.errorSummary(error))")
+            roomClassification = nil
+        }
+
+        let intent = await room.joinCallIntent(voiceOnly: voiceOnly,
+                                               isDirectMessage: roomClassification?.isTrueDirectMessage == true)
+        return .init(intent: intent,
+                     skipLobby: skipLobbyOverride(voiceOnly: voiceOnly,
+                                                  roomClassification: roomClassification))
     }
 
     func start(baseURL: URL,
@@ -296,19 +319,11 @@ final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked
                               rageshakeURL: String?,
                               analyticsConfiguration: ElementCallAnalyticsConfiguration?) async -> Result<Session, ElementCallWidgetDriverError> {
         async let useEncryption = (try? room.latestEncryptionState() == .encrypted) ?? false
-        async let intent = room.joinCallIntent(voiceOnly: voiceOnly)
-        let roomClassification: CallRoomClassification?
-        do {
-            let roomInfo = try await room.roomInfo()
-            roomClassification = .init(roomInfo: roomInfo)
-        } catch {
-            MXLog.error("Failed to classify call room: \(CallDiagnostics.errorSummary(error))")
-            roomClassification = nil
-        }
+        async let callConfiguration = Self.callConfiguration(room: room, voiceOnly: voiceOnly)
 
         let widgetSettings: WidgetSettings
         do {
-            let skipLobby = Self.skipLobbyOverride(voiceOnly: voiceOnly, roomClassification: roomClassification)
+            let callConfiguration = await callConfiguration
             widgetSettings = try await newVirtualElementCallWidget(props: .init(elementCallUrl: baseURL.absoluteString,
                                                                                 widgetId: widgetID,
                                                                                 parentUrl: nil,
@@ -322,8 +337,8 @@ final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked
                                                                                 sentryDsn: analyticsConfiguration?.sentryDSN,
                                                                                 
                                                                                 sentryEnvironment: nil),
-                                                                   config: .init(intent: intent,
-                                                                                 skipLobby: skipLobby))
+                                                                   config: .init(intent: callConfiguration.intent,
+                                                                                 skipLobby: callConfiguration.skipLobby))
         } catch {
             MXLog.error("Failed to build widget settings: \(CallDiagnostics.errorSummary(error))")
             return .failure(.failedBuildingWidgetSettings)
