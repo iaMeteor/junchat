@@ -16,9 +16,8 @@ import WebKit
 struct CallScreen: View {
     @ObservedObject var context: CallScreenViewModel.Context
 
-    static func junchatElementCallBootstrapScript(language: String = Bundle.junchatElementCallLanguage,
-                                                  liveKitJWTURL: URL = JunchatServerEnvironment.current.liveKitJWTURL) -> String {
-        CallView.Coordinator.junchatLiveKitBootstrapScript(language: language, liveKitJWTURL: liveKitJWTURL)
+    static func junchatElementCallBootstrapScript(language: String = Bundle.junchatElementCallLanguage) -> String {
+        CallView.Coordinator.junchatLiveKitBootstrapScript(language: language)
     }
 
     var body: some View {
@@ -112,15 +111,11 @@ private struct CallView: UIViewRepresentable {
         // The embedded Element Call bootstrap is kept as one auditable JavaScript template.
         // swiftformat:disable indent
         // swiftlint:disable:next function_body_length
-        fileprivate static func junchatLiveKitBootstrapScript(language: String = Bundle.junchatElementCallLanguage,
-                                                              liveKitJWTURL: URL = JunchatServerEnvironment.current.liveKitJWTURL) -> String {
+        fileprivate static func junchatLiveKitBootstrapScript(language: String = Bundle.junchatElementCallLanguage) -> String {
             """
         (() => {
             const junchatLanguage = "\(language)";
             const junchatConfig = {
-                livekit: {
-                    livekit_service_url: "\(liveKitJWTURL.absoluteString)"
-                },
                 matrix_rtc_session: {
                     wait_for_key_rotation_ms: 5000,
                     delayed_leave_event_restart_ms: 20000,
@@ -394,17 +389,17 @@ private struct CallView: UIViewRepresentable {
                 }
             };
 
-            const mergeJunchatConfig = (config) => ({
-                ...config,
-                livekit: {
-                    ...(config && config.livekit ? config.livekit : {}),
-                    ...junchatConfig.livekit
-                },
-                matrix_rtc_session: {
-                    ...(config && config.matrix_rtc_session ? config.matrix_rtc_session : {}),
-                    ...junchatConfig.matrix_rtc_session
-                }
-            });
+            const mergeJunchatConfig = (config) => {
+                const sanitizedConfig = { ...(config || {}) };
+                delete sanitizedConfig.livekit;
+                return {
+                    ...sanitizedConfig,
+                    matrix_rtc_session: {
+                        ...(sanitizedConfig.matrix_rtc_session || {}),
+                        ...junchatConfig.matrix_rtc_session
+                    }
+                };
+            };
 
             const replaceJunchatVisibleText = () => {
                 const root = document.body || document.documentElement;
@@ -483,7 +478,8 @@ private struct CallView: UIViewRepresentable {
                     try {
                         window.webkit.messageHandlers.widgetAction.postMessage(JSON.stringify({
                             api: "junchat",
-                            action: "call_connected"
+                            action: "call_connected",
+                            version: 1
                         }));
                     } catch (error) {
                         console.warn("Failed to report Junchat call connected event", error);
@@ -530,10 +526,10 @@ private struct CallView: UIViewRepresentable {
             };
 
             try {
-                localStorage.setItem("matrix-setting-custom-livekit-url", JSON.stringify(junchatConfig.livekit.livekit_service_url));
+                localStorage.removeItem("matrix-setting-custom-livekit-url");
                 localStorage.setItem("i18nextLng", junchatLanguage);
             } catch (error) {
-                console.warn("Failed to persist Junchat LiveKit transport", error);
+                console.warn("Failed to clear Junchat LiveKit transport override", error);
             }
 
             try {
@@ -554,8 +550,8 @@ private struct CallView: UIViewRepresentable {
             installJunchatSdpDiagnostics();
             installJunchatCallConnectedToneBridge();
 
-            if (!window.__junchatLiveKitConfigPatched && typeof window.fetch === "function") {
-                window.__junchatLiveKitConfigPatched = true;
+            if (!window.__junchatConfigPatched && typeof window.fetch === "function") {
+                window.__junchatConfigPatched = true;
                 const originalFetch = window.fetch.bind(window);
                 window.fetch = async (input, init) => {
                     const response = await originalFetch(input, init);
@@ -584,7 +580,7 @@ private struct CallView: UIViewRepresentable {
                             headers
                         });
                     } catch (error) {
-                        console.warn("Failed to inject Junchat Element Call config", error);
+                        console.warn("Failed to prepare Junchat Element Call config", error);
                         return response;
                     }
                 };

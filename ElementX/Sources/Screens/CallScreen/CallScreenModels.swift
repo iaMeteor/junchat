@@ -128,6 +128,18 @@ enum CallScreenJavaScriptMessageName: String, CaseIterable {
 }
 
 struct DecodedWidgetMessage: Decodable {
+    private enum CodingKeys: String, CodingKey {
+        case action
+        case api
+        case version
+    }
+
+    private enum JunchatPrivateActionVersion: Equatable {
+        case legacyV1
+        case v1
+        case unsupported
+    }
+
     private static let decoder = JSONDecoder()
     private static let contentLoadedAction = "content_loaded"
     private static let fromWidget = "fromWidget"
@@ -136,6 +148,25 @@ struct DecodedWidgetMessage: Decodable {
     
     let action: String?
     let api: String?
+    private let junchatPrivateActionVersion: JunchatPrivateActionVersion
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        action = try container.decodeIfPresent(String.self, forKey: .action)
+        api = try container.decodeIfPresent(String.self, forKey: .api)
+
+        guard container.contains(.version) else {
+            junchatPrivateActionVersion = .legacyV1
+            return
+        }
+
+        guard let version = try? container.decode(Int.self, forKey: .version), version == 1 else {
+            junchatPrivateActionVersion = .unsupported
+            return
+        }
+
+        junchatPrivateActionVersion = .v1
+    }
     
     static func decode(message: String) throws -> DecodedWidgetMessage? {
         guard let data = message.data(using: .utf8) else {
@@ -149,7 +180,9 @@ struct DecodedWidgetMessage: Decodable {
     }
 
     var isJunchatCallConnected: Bool {
-        action == Self.junchatCallConnectedAction && api == Self.junchatAPI
+        action == Self.junchatCallConnectedAction &&
+            api == Self.junchatAPI &&
+            junchatPrivateActionVersion != .unsupported
     }
 }
 

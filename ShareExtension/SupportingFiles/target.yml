@@ -54,7 +54,6 @@ targets:
         JunchatDiagnosticsEndpoint: $(JUNCHAT_DIAGNOSTICS_ENDPOINT)
         JunchatRageshakeEnabled: $(JUNCHAT_RAGESHAKE_ENABLED)
         JunchatBackgroundAppRefreshTaskIdentifier: $(JUNCHAT_BACKGROUND_APP_REFRESH_TASK_IDENTIFIER)
-        JunchatLiveKitJWTURL: $(JUNCHAT_LIVEKIT_JWT_URL)
         keychainAccessGroupIdentifier: $(KEYCHAIN_ACCESS_GROUP_IDENTIFIER)
         productionAppName: $(PRODUCTION_APP_NAME)
         NSExtension:

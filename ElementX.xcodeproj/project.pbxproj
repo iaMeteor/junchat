@@ -462,6 +462,7 @@
 		4A9CEEE612D6D8B3DDBD28BA /* RoomListFilterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24EC819497BB5F8C4998D760 /* RoomListFilterView.swift */; };
 		4AAA8606FBA290E23D15422E /* AvatarHeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC743C7A85E3171BCBF0A653 /* AvatarHeaderView.swift */; };
 		4B25CDB4AA2C2AC0B4577217 /* EditRoomAddressListRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2776E63E02719B20758EB78 /* EditRoomAddressListRow.swift */; };
+		4B75ED923B84D191C0F659F3 /* junchat-call-connected-v1.json in Resources */ = {isa = PBXBuildFile; fileRef = 92A5BA47D9D9662D9F7A191D /* junchat-call-connected-v1.json */; };
 		4B978C09567387EF4366BD7A /* MediaLoaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EF1AC723C2609C7705569CA /* MediaLoaderTests.swift */; };
 		4BAB8222DBA0B4207D1223E0 /* NotificationSettingsProxyMock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 382B50F7E379B3DBBD174364 /* NotificationSettingsProxyMock.swift */; };
 		4BB282209EA82015D0DF8F89 /* NavigationStackCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C698E30698EC59302A8EEBD /* NavigationStackCoordinatorTests.swift */; };
@@ -2545,6 +2546,7 @@
 		91FFE1F410969ECB23FE9BB2 /* TimelineItemMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineItemMenu.swift; sourceTree = "<group>"; };
 		922E498EB74CF6F5CC236F81 /* AdvancedSettingsScreenModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdvancedSettingsScreenModels.swift; sourceTree = "<group>"; };
 		92390F9FA98255440A6BF5F8 /* OIDCAuthenticationPresenter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OIDCAuthenticationPresenter.swift; sourceTree = "<group>"; };
+		92A5BA47D9D9662D9F7A191D /* junchat-call-connected-v1.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "junchat-call-connected-v1.json"; sourceTree = "<group>"; };
 		92DB574F954CC2B40F7BE892 /* QRCodeScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRCodeScannerView.swift; sourceTree = "<group>"; };
 		92ED02C35A33E166C5167E61 /* PrivacyModeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacyModeService.swift; sourceTree = "<group>"; };
 		9332DFE9642F0A46ECA0497B /* BlurHashEncode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlurHashEncode.swift; sourceTree = "<group>"; };
@@ -4146,6 +4148,7 @@
 		350B61D52343EAA9B3D29E3B /* Fixtures */ = {
 			isa = PBXGroup;
 			children = (
+				92A5BA47D9D9662D9F7A191D /* junchat-call-connected-v1.json */,
 				32B77E47C8737A51C89F6962 /* notification-badge-v1.json */,
 			);
 			path = Fixtures;
@@ -7893,6 +7896,7 @@
 			files = (
 				B7DA25BCB68A38AD903AEB06 /* 94 in Resources */,
 				92A0309B6F490B86C10B603B /* accountsV2 in Resources */,
+				4B75ED923B84D191C0F659F3 /* junchat-call-connected-v1.json in Resources */,
 				F252C0EA49088801F4CA6006 /* landscape_test_image.jpg in Resources */,
 				F4582042AA4225CC1E4B8A1E /* landscape_test_video.mov in Resources */,
 				AE36835B02ED1D4CC34F4D27 /* notification-badge-v1.json in Resources */,
@@ -9897,7 +9901,6 @@
 				JUNCHAT_ASSOCIATED_DOMAIN = junchat.yyzs120.cn;
 				JUNCHAT_BACKGROUND_APP_REFRESH_TASK_IDENTIFIER = com.heyujk.junchat.background.refresh;
 				JUNCHAT_DIAGNOSTICS_ENDPOINT = "https://junchat.yyzs120.cn/junchat-errors/api/events";
-				JUNCHAT_LIVEKIT_JWT_URL = "https://junchat.yyzs120.cn/livekit/jwt";
 				JUNCHAT_MATRIX_ACCOUNT_PROVIDER = junchat.yyzs120.cn;
 				JUNCHAT_OIDC_REDIRECT_URL = "https://junchat.yyzs120.cn/oidc/login";
 				JUNCHAT_PUSH_GATEWAY_BASE_URL = "https://sygnal-junchat.yyzs120.cn";
@@ -10319,7 +10322,6 @@
 				JUNCHAT_ASSOCIATED_DOMAIN = junchat.yyzs120.cn;
 				JUNCHAT_BACKGROUND_APP_REFRESH_TASK_IDENTIFIER = com.heyujk.junchat.background.refresh;
 				JUNCHAT_DIAGNOSTICS_ENDPOINT = "https://junchat.yyzs120.cn/junchat-errors/api/events";
-				JUNCHAT_LIVEKIT_JWT_URL = "https://junchat.yyzs120.cn/livekit/jwt";
 				JUNCHAT_MATRIX_ACCOUNT_PROVIDER = junchat.yyzs120.cn;
 				JUNCHAT_OIDC_REDIRECT_URL = "https://junchat.yyzs120.cn/oidc/login";
 				JUNCHAT_PUSH_GATEWAY_BASE_URL = "https://sygnal-junchat.yyzs120.cn";
@@ -10404,7 +10406,6 @@
 				JUNCHAT_ASSOCIATED_DOMAIN = junchat.yyzs120.cn;
 				JUNCHAT_BACKGROUND_APP_REFRESH_TASK_IDENTIFIER = com.heyujk.junchat.background.refresh;
 				JUNCHAT_DIAGNOSTICS_ENDPOINT = "https://junchat.yyzs120.cn/junchat-errors/api/events";
-				JUNCHAT_LIVEKIT_JWT_URL = "https://junchat.yyzs120.cn/livekit/jwt";
 				JUNCHAT_MATRIX_ACCOUNT_PROVIDER = junchat.yyzs120.cn;
 				JUNCHAT_OIDC_REDIRECT_URL = "https://junchat.yyzs120.cn/oidc/login";
 				JUNCHAT_PUSH_GATEWAY_BASE_URL = "https://sygnal-junchat.yyzs120.cn";

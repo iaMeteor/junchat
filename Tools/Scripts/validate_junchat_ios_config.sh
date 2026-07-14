@@ -64,7 +64,7 @@ check_file_contains app.yml "JUNCHAT_OIDC_REDIRECT_URL: https://junchat.yyzs120.
 check_file_contains app.yml "JUNCHAT_PUSH_GATEWAY_BASE_URL: https://sygnal-junchat.yyzs120.cn" "production push gateway"
 check_file_contains app.yml "JUNCHAT_DIAGNOSTICS_ENDPOINT: https://junchat.yyzs120.cn/junchat-errors/api/events" "production diagnostics endpoint"
 check_file_contains app.yml "JUNCHAT_BACKGROUND_APP_REFRESH_TASK_IDENTIFIER: com.heyujk.junchat.background.refresh" "production background task identifier"
-check_file_contains app.yml "JUNCHAT_LIVEKIT_JWT_URL: https://junchat.yyzs120.cn/livekit/jwt" "production livekit jwt endpoint"
+check_file_not_contains app.yml "JUNCHAT_LIVEKIT_JWT_URL" "no production livekit jwt endpoint"
 
 check_file_contains ElementX/SupportingFiles/target.yml '$(JUNCHAT_BACKGROUND_APP_REFRESH_TASK_IDENTIFIER)' "configured background task identifier"
 check_file_contains ElementX/SupportingFiles/target.yml 'applinks:$(JUNCHAT_ASSOCIATED_DOMAIN)' "configured junchat applinks domain"
@@ -109,10 +109,11 @@ check_file_contains ElementX/Sources/Services/ElementCall/ElementCallService.swi
 check_file_contains NSE/Sources/NotificationContentBuilder.swift 'notificationContent.sound = notificationSound(for: notificationItem)' "nse always assigns notification sound"
 check_file_contains NSE/Sources/NotificationContentBuilder.swift 'callNotificationSoundName: UNNotificationSoundName' "nse call sound dependency"
 check_file_contains NSE/Sources/NotificationHandler.swift 'JunchatCallRingtone.ringtone(for: settings.callRingtoneSoundName).soundName' "nse call notification sound"
-check_file_contains ElementX/Sources/Screens/CallScreen/View/CallScreen.swift 'matrix-setting-custom-livekit-url' "element call livekit local storage fallback"
+check_file_not_contains ElementX/Sources/Services/Environment/JunchatServerEnvironment.swift "liveKitJWTURL" "no native livekit jwt environment"
+check_file_contains ElementX/Sources/Screens/CallScreen/View/CallScreen.swift 'localStorage.removeItem("matrix-setting-custom-livekit-url")' "remove upgraded livekit local storage override"
+check_file_contains ElementX/Sources/Screens/CallScreen/View/CallScreen.swift 'delete sanitizedConfig.livekit' "strip fetched livekit config"
+check_file_not_contains ElementX/Sources/Screens/CallScreen/View/CallScreen.swift 'livekit_service_url' "no element call livekit config injection"
 check_file_contains ElementX/Sources/Screens/CallScreen/View/CallScreen.swift 'window.fetch = async' "element call config fetch patch"
-check_file_contains ElementX/Sources/Services/Environment/JunchatServerEnvironment.swift 'liveKitJWTURL: URL(string: "https://junchat.yyzs120.cn/livekit/jwt")' "production livekit jwt endpoint"
-check_file_contains ElementX/Sources/Screens/CallScreen/View/CallScreen.swift 'livekit_service_url: "\(liveKitJWTURL.absoluteString)"' "element call livekit config injection"
 check_file_not_contains NSE/SupportingFiles/NSE.entitlements "com.apple.developer.usernotifications.filtering" "no unapproved notification filtering entitlement"
 check_file_not_contains NSE/SupportingFiles/target.yml "com.apple.developer.usernotifications.filtering" "no generated notification filtering entitlement"
 check_file_contains ElementX/Resources/Assets.xcassets/images/app-logo.imageset/Contents.json '"filename" : "app-logo.svg"' "junchat logo asset"
@@ -164,7 +165,7 @@ check_file_contains ElementX/SupportingFiles/Canary.xcconfig 'JUNCHAT_PUSH_GATEW
 check_file_contains ElementX/SupportingFiles/Canary.xcconfig 'JUNCHAT_DIAGNOSTICS_ENDPOINT = https:/$()/canary.junchat.yyzs120.cn/diagnostics/api/events' "canary diagnostics endpoint"
 check_file_contains ElementX/SupportingFiles/Canary.xcconfig "JUNCHAT_RAGESHAKE_ENABLED = NO" "canary rageshake disabled"
 check_file_contains ElementX/SupportingFiles/Canary.xcconfig "JUNCHAT_BACKGROUND_APP_REFRESH_TASK_IDENTIFIER = com.heyujk.junchat.canary.background.refresh" "canary background identifier"
-check_file_contains ElementX/SupportingFiles/Canary.xcconfig 'JUNCHAT_LIVEKIT_JWT_URL = https:/$()/canary.junchat.yyzs120.cn/livekit/jwt' "canary livekit endpoint"
+check_file_not_contains ElementX/SupportingFiles/Canary.xcconfig "JUNCHAT_LIVEKIT_JWT_URL" "no canary livekit jwt endpoint"
 check_file_contains ElementX/SupportingFiles/Canary.xcconfig 'SWIFT_ACTIVE_COMPILATION_CONDITIONS = $(inherited) JUNCHAT_CANARY' "canary compilation condition"
 check_file_not_contains ElementX/SupportingFiles/Canary.xcconfig "https://" "canary xcconfig has no unescaped URL comments"
 check_file_not_contains ElementX/Sources/Services/Environment/JunchatServerEnvironment.swift "update" "no dead update endpoint"
@@ -180,7 +181,7 @@ for plist in ElementX/SupportingFiles/Info.plist NSE/SupportingFiles/Info.plist 
     check_file_contains "$plist" "JunchatDiagnosticsEndpoint" "diagnostics environment key in $plist"
     check_file_contains "$plist" "JunchatRageshakeEnabled" "rageshake environment key in $plist"
     check_file_contains "$plist" "JunchatBackgroundAppRefreshTaskIdentifier" "background environment key in $plist"
-    check_file_contains "$plist" "JunchatLiveKitJWTURL" "livekit environment key in $plist"
+    check_file_not_contains "$plist" "JunchatLiveKitJWTURL" "no livekit environment key in $plist"
 done
 
 if [[ ! -f ElementX/Resources/Sounds/junchat-message.caf ]]; then

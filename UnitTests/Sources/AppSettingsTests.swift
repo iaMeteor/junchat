@@ -5,8 +5,8 @@
 // Please see LICENSE files in the repository root for full details.
 //
 
-import Foundation
 @testable import ElementX
+import Foundation
 import Testing
 import UserNotifications
 
@@ -133,8 +133,7 @@ struct AppSettingsTests {
             "JunchatPushGatewayBaseURL": "https://canary.junchat.yyzs120.cn/push",
             "JunchatDiagnosticsEndpoint": "https://canary.junchat.yyzs120.cn/diagnostics/api/events",
             "JunchatRageshakeEnabled": "NO",
-            "JunchatBackgroundAppRefreshTaskIdentifier": "com.heyujk.junchat.canary.background.refresh",
-            "JunchatLiveKitJWTURL": "https://canary.junchat.yyzs120.cn/livekit/jwt"
+            "JunchatBackgroundAppRefreshTaskIdentifier": "com.heyujk.junchat.canary.background.refresh"
         ]))
 
         let settings = AppSettings(serverEnvironment: environment)

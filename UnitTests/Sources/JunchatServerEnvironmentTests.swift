@@ -20,7 +20,6 @@ struct JunchatServerEnvironmentTests {
         #expect(environment.diagnosticsEndpoint == URL(string: "https://junchat.yyzs120.cn/junchat-errors/api/events"))
         #expect(environment.rageshakeEnabled)
         #expect(environment.backgroundAppRefreshTaskIdentifier == "com.heyujk.junchat.background.refresh")
-        #expect(environment.liveKitJWTURL == URL(string: "https://junchat.yyzs120.cn/livekit/jwt"))
     }
 
     @Test
@@ -31,8 +30,7 @@ struct JunchatServerEnvironmentTests {
             "JunchatPushGatewayBaseURL": "https://canary.junchat.yyzs120.cn/push",
             "JunchatDiagnosticsEndpoint": "https://canary.junchat.yyzs120.cn/diagnostics/api/events",
             "JunchatRageshakeEnabled": "NO",
-            "JunchatBackgroundAppRefreshTaskIdentifier": "com.heyujk.junchat.canary.background.refresh",
-            "JunchatLiveKitJWTURL": "https://canary.junchat.yyzs120.cn/livekit/jwt"
+            "JunchatBackgroundAppRefreshTaskIdentifier": "com.heyujk.junchat.canary.background.refresh"
         ]
 
         let environment = try #require(JunchatServerEnvironment(infoDictionary: dictionary))
@@ -43,7 +41,6 @@ struct JunchatServerEnvironmentTests {
         #expect(environment.diagnosticsEndpoint == URL(string: "https://canary.junchat.yyzs120.cn/diagnostics/api/events"))
         #expect(!environment.rageshakeEnabled)
         #expect(environment.backgroundAppRefreshTaskIdentifier == "com.heyujk.junchat.canary.background.refresh")
-        #expect(environment.liveKitJWTURL == URL(string: "https://canary.junchat.yyzs120.cn/livekit/jwt"))
     }
 
     @Test

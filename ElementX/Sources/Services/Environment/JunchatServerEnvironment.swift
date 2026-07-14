@@ -15,16 +15,14 @@ struct JunchatServerEnvironment: Equatable {
         case diagnosticsEndpoint = "JunchatDiagnosticsEndpoint"
         case rageshakeEnabled = "JunchatRageshakeEnabled"
         case backgroundAppRefreshTaskIdentifier = "JunchatBackgroundAppRefreshTaskIdentifier"
-        case liveKitJWTURL = "JunchatLiveKitJWTURL"
     }
 
     static let production = JunchatServerEnvironment(matrixAccountProvider: "junchat.yyzs120.cn",
-                                                     oidcRedirectURL: URL(string: "https://junchat.yyzs120.cn/oidc/login")!, // swiftlint:disable:this force_unwrapping
-                                                     pushGatewayBaseURL: URL(string: "https://sygnal-junchat.yyzs120.cn")!, // swiftlint:disable:this force_unwrapping
-                                                     diagnosticsEndpoint: URL(string: "https://junchat.yyzs120.cn/junchat-errors/api/events")!, // swiftlint:disable:this force_unwrapping
+                                                     oidcRedirectURL: URL(string: "https://junchat.yyzs120.cn/oidc/login")!,
+                                                     pushGatewayBaseURL: URL(string: "https://sygnal-junchat.yyzs120.cn")!,
+                                                     diagnosticsEndpoint: URL(string: "https://junchat.yyzs120.cn/junchat-errors/api/events")!,
                                                      rageshakeEnabled: true,
-                                                     backgroundAppRefreshTaskIdentifier: "com.heyujk.junchat.background.refresh",
-                                                     liveKitJWTURL: URL(string: "https://junchat.yyzs120.cn/livekit/jwt")!) // swiftlint:disable:this force_unwrapping
+                                                     backgroundAppRefreshTaskIdentifier: "com.heyujk.junchat.background.refresh")
 
     static var current: JunchatServerEnvironment {
         #if JUNCHAT_CANARY
@@ -43,7 +41,6 @@ struct JunchatServerEnvironment: Equatable {
     let diagnosticsEndpoint: URL
     let rageshakeEnabled: Bool
     let backgroundAppRefreshTaskIdentifier: String
-    let liveKitJWTURL: URL
 
     init?(infoDictionary: [String: Any]) {
         guard let matrixAccountProvider = infoDictionary[InfoKey.matrixAccountProvider.rawValue] as? String,
@@ -53,8 +50,7 @@ struct JunchatServerEnvironment: Equatable {
               let diagnosticsEndpoint = Self.httpsURL(in: infoDictionary, for: .diagnosticsEndpoint),
               let rageshakeEnabled = Self.bool(in: infoDictionary, for: .rageshakeEnabled),
               let backgroundAppRefreshTaskIdentifier = infoDictionary[InfoKey.backgroundAppRefreshTaskIdentifier.rawValue] as? String,
-              !backgroundAppRefreshTaskIdentifier.isEmpty,
-              let liveKitJWTURL = Self.httpsURL(in: infoDictionary, for: .liveKitJWTURL) else {
+              !backgroundAppRefreshTaskIdentifier.isEmpty else {
             return nil
         }
 
@@ -63,8 +59,7 @@ struct JunchatServerEnvironment: Equatable {
                   pushGatewayBaseURL: pushGatewayBaseURL,
                   diagnosticsEndpoint: diagnosticsEndpoint,
                   rageshakeEnabled: rageshakeEnabled,
-                  backgroundAppRefreshTaskIdentifier: backgroundAppRefreshTaskIdentifier,
-                  liveKitJWTURL: liveKitJWTURL)
+                  backgroundAppRefreshTaskIdentifier: backgroundAppRefreshTaskIdentifier)
     }
 
     private init(matrixAccountProvider: String,
@@ -72,15 +67,13 @@ struct JunchatServerEnvironment: Equatable {
                  pushGatewayBaseURL: URL,
                  diagnosticsEndpoint: URL,
                  rageshakeEnabled: Bool,
-                 backgroundAppRefreshTaskIdentifier: String,
-                 liveKitJWTURL: URL) {
+                 backgroundAppRefreshTaskIdentifier: String) {
         self.matrixAccountProvider = matrixAccountProvider
         self.oidcRedirectURL = oidcRedirectURL
         self.pushGatewayBaseURL = pushGatewayBaseURL
         self.diagnosticsEndpoint = diagnosticsEndpoint
         self.rageshakeEnabled = rageshakeEnabled
         self.backgroundAppRefreshTaskIdentifier = backgroundAppRefreshTaskIdentifier
-        self.liveKitJWTURL = liveKitJWTURL
     }
 
     private static func httpsURL(in infoDictionary: [String: Any], for key: InfoKey) -> URL? {

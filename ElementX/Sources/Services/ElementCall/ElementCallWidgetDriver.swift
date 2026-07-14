@@ -117,6 +117,28 @@ struct ElementCallWidgetMessage: Codable {
 }
 
 final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked Sendable {
+    struct CallRoomClassification {
+        let isDirect: Bool
+        let isSpace: Bool
+        let activeMembersCount: UInt64
+
+        init(roomInfo: RoomInfo) {
+            self.init(isDirect: roomInfo.isDirect,
+                      isSpace: roomInfo.isSpace,
+                      activeMembersCount: roomInfo.activeMembersCount)
+        }
+
+        init(isDirect: Bool, isSpace: Bool, activeMembersCount: UInt64) {
+            self.isDirect = isDirect
+            self.isSpace = isSpace
+            self.activeMembersCount = activeMembersCount
+        }
+
+        var isTrueDirectMessage: Bool {
+            !isSpace && isDirect && activeMembersCount == 2
+        }
+    }
+
     struct Session {
         let url: URL
         let runtime: ElementCallWidgetDriverRuntimeProtocol
@@ -158,8 +180,15 @@ final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked
         stop()
     }
     
-    static func skipLobbyOverride(voiceOnly: Bool, isDirect: Bool) -> Bool? {
-        voiceOnly && !isDirect ? true : nil
+    static func skipLobbyOverride(voiceOnly: Bool, roomClassification: CallRoomClassification?) -> Bool? {
+        guard voiceOnly,
+              let roomClassification,
+              !roomClassification.isSpace,
+              !roomClassification.isTrueDirectMessage else {
+            return nil
+        }
+
+        return true
     }
 
     func start(baseURL: URL,
@@ -268,11 +297,18 @@ final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked
                               analyticsConfiguration: ElementCallAnalyticsConfiguration?) async -> Result<Session, ElementCallWidgetDriverError> {
         async let useEncryption = (try? room.latestEncryptionState() == .encrypted) ?? false
         async let intent = room.joinCallIntent(voiceOnly: voiceOnly)
-        async let isDirect = room.isDirect()
+        let roomClassification: CallRoomClassification?
+        do {
+            let roomInfo = try await room.roomInfo()
+            roomClassification = .init(roomInfo: roomInfo)
+        } catch {
+            MXLog.error("Failed to classify call room: \(CallDiagnostics.errorSummary(error))")
+            roomClassification = nil
+        }
 
         let widgetSettings: WidgetSettings
         do {
-            let skipLobby = await Self.skipLobbyOverride(voiceOnly: voiceOnly, isDirect: isDirect)
+            let skipLobby = Self.skipLobbyOverride(voiceOnly: voiceOnly, roomClassification: roomClassification)
             widgetSettings = try await newVirtualElementCallWidget(props: .init(elementCallUrl: baseURL.absoluteString,
                                                                                 widgetId: widgetID,
                                                                                 parentUrl: nil,

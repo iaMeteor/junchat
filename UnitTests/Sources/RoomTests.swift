@@ -41,17 +41,18 @@ struct RoomTests {
     }
 
     @Test
-    func groupVoiceCallSkipsLobby() {
-        #expect(ElementCallWidgetDriver.skipLobbyOverride(voiceOnly: true, isDirect: false) == true)
-    }
+    func groupVoiceCallLobbyOverrideUsesOneRoomInfoSnapshotClassification() {
+        let trueDM = ElementCallWidgetDriver.CallRoomClassification(isDirect: true, isSpace: false, activeMembersCount: 2)
+        let directLargerRoom = ElementCallWidgetDriver.CallRoomClassification(isDirect: true, isSpace: false, activeMembersCount: 3)
+        let twoMemberGroup = ElementCallWidgetDriver.CallRoomClassification(isDirect: false, isSpace: false, activeMembersCount: 2)
+        let largerGroup = ElementCallWidgetDriver.CallRoomClassification(isDirect: false, isSpace: false, activeMembersCount: 5)
+        let space = ElementCallWidgetDriver.CallRoomClassification(isDirect: false, isSpace: true, activeMembersCount: 5)
 
-    @Test
-    func directVoiceCallKeepsIntentPreset() {
-        #expect(ElementCallWidgetDriver.skipLobbyOverride(voiceOnly: true, isDirect: true) == nil)
-    }
-
-    @Test
-    func groupVideoCallKeepsIntentPreset() {
-        #expect(ElementCallWidgetDriver.skipLobbyOverride(voiceOnly: false, isDirect: false) == nil)
+        #expect(ElementCallWidgetDriver.skipLobbyOverride(voiceOnly: true, roomClassification: trueDM) == nil)
+        #expect(ElementCallWidgetDriver.skipLobbyOverride(voiceOnly: true, roomClassification: directLargerRoom) == true)
+        #expect(ElementCallWidgetDriver.skipLobbyOverride(voiceOnly: true, roomClassification: twoMemberGroup) == true)
+        #expect(ElementCallWidgetDriver.skipLobbyOverride(voiceOnly: true, roomClassification: largerGroup) == true)
+        #expect(ElementCallWidgetDriver.skipLobbyOverride(voiceOnly: true, roomClassification: space) == nil)
+        #expect(ElementCallWidgetDriver.skipLobbyOverride(voiceOnly: false, roomClassification: largerGroup) == nil)
     }
 }

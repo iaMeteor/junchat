@@ -13,4 +13,3 @@ settings:
   JUNCHAT_DIAGNOSTICS_ENDPOINT: https://junchat.yyzs120.cn/junchat-errors/api/events
   JUNCHAT_RAGESHAKE_ENABLED: YES
   JUNCHAT_BACKGROUND_APP_REFRESH_TASK_IDENTIFIER: com.heyujk.junchat.background.refresh
-  JUNCHAT_LIVEKIT_JWT_URL: https://junchat.yyzs120.cn/livekit/jwt

@@ -8,6 +8,7 @@
 
 import AVFoundation
 import Combine
+import CryptoKit
 @testable import ElementX
 import Foundation
 import Testing
@@ -46,13 +47,14 @@ struct CallScreenJunchatTests {
     }
 
     @Test
-    func elementCallBootstrapUsesInjectedLiveKitEndpoint() throws {
-        let canaryURL = try #require(URL(string: "https://canary.junchat.yyzs120.cn/livekit/jwt"))
+    func elementCallBootstrapLeavesLiveKitDiscoveryToElementCall() {
+        let script = CallScreen.junchatElementCallBootstrapScript(language: "zh-Hans")
 
-        let script = CallScreen.junchatElementCallBootstrapScript(language: "zh-Hans", liveKitJWTURL: canaryURL)
-
-        #expect(script.contains("livekit_service_url: \"\(canaryURL.absoluteString)\""))
-        #expect(!script.contains("livekit_service_url: \"https://junchat.yyzs120.cn/livekit/jwt\""))
+        #expect(!script.contains("livekit_service_url"))
+        #expect(!script.contains("junchatConfig.livekit"))
+        #expect(script.contains("delete sanitizedConfig.livekit"))
+        #expect(script.contains("localStorage.removeItem(\"matrix-setting-custom-livekit-url\")"))
+        #expect(script.contains("matrix_rtc_session"))
     }
 
     @Test
@@ -64,15 +66,47 @@ struct CallScreenJunchatTests {
         #expect(script.contains("track"))
         #expect(script.contains("call_connected"))
         #expect(script.contains("api: \"junchat\""))
+        #expect(script.contains("version: 1"))
         #expect(script.contains("window.webkit.messageHandlers.widgetAction.postMessage"))
     }
 
     @Test
-    func decodedWidgetMessageRecognizesJunchatCallConnectedEvent() throws {
-        let message = try #require(try DecodedWidgetMessage.decode(message: #"{"api":"junchat","action":"call_connected"}"#))
+    func canonicalCallConnectedFixtureIsByteIdenticalAndRecognized() throws {
+        let fixtureURL = try #require(Bundle(for: CallScreenJunchatFixtureToken.self)
+            .url(forResource: "junchat-call-connected-v1", withExtension: "json"))
+        let data = try Data(contentsOf: fixtureURL)
+        let checksum = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+
+        #expect(checksum == "44e10d7adebb6b1f6ecb7f5d619b57bcc211e32a77ddd9d36f8136769089d127")
+
+        let rawMessage = try #require(String(data: data, encoding: .utf8))
+        let message = try #require(try DecodedWidgetMessage.decode(message: rawMessage))
 
         #expect(message.isJunchatCallConnected)
         #expect(!message.hasLoaded)
+    }
+
+    @Test(arguments: [
+        #"{"api":"junchat","action":"call_connected"}"#,
+        #"{"api":"junchat","action":"call_connected","version":1}"#
+    ])
+    func decodedWidgetMessageAcceptsLegacyAndVersionOneCallConnectedEvents(_ rawMessage: String) throws {
+        let message = try #require(try DecodedWidgetMessage.decode(message: rawMessage))
+
+        #expect(message.isJunchatCallConnected)
+    }
+
+    @Test(arguments: [
+        #"{"api":"junchat","action":"call_connected","version":null}"#,
+        #"{"api":"junchat","action":"call_connected","version":"1"}"#,
+        #"{"api":"junchat","action":"call_connected","version":1.5}"#,
+        #"{"api":"junchat","action":"call_connected","version":{}}"#,
+        #"{"api":"junchat","action":"call_connected","version":2}"#
+    ])
+    func decodedWidgetMessageRejectsUnsupportedPrivateCallConnectedVersions(_ rawMessage: String) throws {
+        let message = try #require(try DecodedWidgetMessage.decode(message: rawMessage))
+
+        #expect(!message.isJunchatCallConnected)
     }
 
     @Test
@@ -527,6 +561,19 @@ struct CallScreenJunchatTests {
 
         #expect(ringbackTonePlayer.startCallCount == 1)
         #expect(ringbackTonePlayer.stopCallCount == 1)
+
+        for (index, message) in [
+            #"{"api":"junchat","action":"call_connected","version":null}"#,
+            #"{"api":"junchat","action":"call_connected","version":"1"}"#,
+            #"{"api":"junchat","action":"call_connected","version":1.5}"#,
+            #"{"api":"junchat","action":"call_connected","version":{}}"#,
+            #"{"api":"junchat","action":"call_connected","version":2}"#
+        ].enumerated() {
+            viewModel.process(viewAction: .widgetAction(message: message))
+            await waitUntil { widgetDriver.handleMessageCallsCount == index + 1 }
+        }
+
+        #expect(widgetDriver.handleMessageCallsCount == 5)
     }
 
     @Test
@@ -1059,6 +1106,8 @@ struct CallScreenJunchatTests {
 private enum CallScreenJunchatTestError: Error {
     case javaScriptEvaluationFailed
 }
+
+private final class CallScreenJunchatFixtureToken { }
 
 struct RoomScreenCallInvitationTests {
     @Test
