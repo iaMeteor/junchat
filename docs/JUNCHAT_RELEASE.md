@@ -55,14 +55,22 @@ build, archived commit, and date in validated commit trailers.
 
 If a run fails after draft creation, a clean CI retry lists authenticated
 releases and reuses only the same unpublished tag, name, and archived commit; a
-published or mismatched release fails closed. If the preparation commit already
-exists, a retry validates its sole parent, exact next version/build, three-file
-boundary, draft, and changelog before performing only an idempotent branch push.
-A same-workspace retry with partial tracked changes fails closed; retry from a
+published or mismatched release fails closed. Xcode Cloud Rebuild starts from
+the same archived commit, so the command also checks the current remote branch
+before making local changes. It accepts an already-pushed preparation only when
+it is the archived commit's sole child, carries the exact validated marker,
+modifies exactly the three expected paths, and reproduces the next version and
+changelog from the archived parent. Any unrelated remote advancement fails
+closed. A concurrent push failure performs the same validation before treating
+the operation as complete.
+
+If HEAD is already the preparation commit, a retry applies the same parent,
+version, path, draft, and changelog checks before an idempotent branch push. A
+same-workspace retry with partial tracked changes fails closed; retry from a
 clean checkout rather than deleting or committing ambiguous state. The command
-never rewrites or rebases an unrelated branch. The GitHub release remains a
-draft until a separate explicit publication approval; review its tag target,
-notes, and artifacts before publishing it.
+never rewrites, rebases, or force-pushes an unrelated branch. The GitHub release
+remains a draft until a separate explicit publication approval; review its tag
+target, notes, and artifacts before publishing it.
 
 Release credentials, Apple signing certificates, provisioning profiles, and
 entitlements remain managed by the existing secure Xcode Cloud/signing setup.

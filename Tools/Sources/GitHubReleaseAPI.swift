@@ -7,6 +7,8 @@ struct GitHubReleaseAPI {
         case invalidResponse
         case failedRequest(statusCode: Int, message: String)
         case incompatibleExistingRelease
+        case incompatibleExistingPreparation
+        case missingExistingDraft
         case duplicateExistingRelease
         case releaseSearchLimitExceeded
 
@@ -18,6 +20,10 @@ struct GitHubReleaseAPI {
                 "GitHub release request failed with HTTP \(statusCode): \(message)"
             case .incompatibleExistingRelease:
                 "An existing GitHub release does not match the requested draft and archived commit."
+            case .incompatibleExistingPreparation:
+                "The remote branch does not contain the exact expected release preparation commit."
+            case .missingExistingDraft:
+                "Remote release preparation validation requires an existing compatible draft."
             case .duplicateExistingRelease:
                 "GitHub returned multiple releases for the requested tag."
             case .releaseSearchLimitExceeded:
@@ -41,12 +47,16 @@ struct GitHubReleaseAPI {
     func createOrReuseDraft(version: String,
                             targetCommit: String,
                             repository: GitHubRepository,
-                            token: String) async throws -> String {
+                            token: String,
+                            allowCreation: Bool = true) async throws -> String {
         let releaseRequest = GitHubReleaseRequest(version: version, targetCommit: targetCommit)
         if let body = try await reusableDraftBody(for: releaseRequest,
                                                   repository: repository,
                                                   token: token) {
             return body
+        }
+        guard allowCreation else {
+            throw APIError.missingExistingDraft
         }
 
         do {
@@ -63,6 +73,83 @@ struct GitHubReleaseAPI {
             throw APIError.failedRequest(statusCode: 422,
                                          message: "The release could not be created and no compatible draft exists.")
         }
+    }
+
+    func isPreparationAlreadyPushed(branch: String,
+                                    releaseVersion: JunchatReleaseVersion,
+                                    releaseCommit: String,
+                                    generatedNotes: String,
+                                    repository: GitHubRepository,
+                                    token: String) async throws -> Bool {
+        let remoteCommit = try await remoteBranchCommit(branch: branch,
+                                                        repository: repository,
+                                                        token: token)
+        guard remoteCommit != releaseCommit else { return false }
+
+        let commitURL = try repositoryAPIURL(repository: repository,
+                                             pathComponents: ["commits", remoteCommit])
+        let commitData = try await successfulData(for: authenticatedRequest(url: commitURL, token: token))
+        let commit = try JSONDecoder().decode(GitHubCommitRecord.self, from: commitData)
+        guard commit.sha == remoteCommit,
+              commit.files.count == JunchatReleasePreparation.expectedChangedPaths.count,
+              Set(commit.files.map(\.filename)) == JunchatReleasePreparation.expectedChangedPaths,
+              commit.files.allSatisfy({ $0.status == "modified" }),
+              let preparation = try JunchatReleasePreparation.parseIfPresent(commit.commit.message),
+              preparation.releaseVersion == releaseVersion,
+              preparation.releaseCommit == releaseCommit else {
+            throw APIError.incompatibleExistingPreparation
+        }
+
+        // Rebuild both mutable files from the archived parent so a matching marker cannot bless unrelated edits.
+        let releaseProject = try await repositoryContent(path: "project.yml",
+                                                         commit: releaseCommit,
+                                                         repository: repository,
+                                                         token: token)
+        let preparedProject = try await repositoryContent(path: "project.yml",
+                                                          commit: commit.sha,
+                                                          repository: repository,
+                                                          token: token)
+        let nextVersion = try releaseVersion.nextPatch()
+        let expectedProject = try JunchatReleaseVersion.updatedProjectYAML(releaseProject,
+                                                                           name: nextVersion.name,
+                                                                           build: nextVersion.build)
+        guard preparedProject == expectedProject else {
+            throw APIError.incompatibleExistingPreparation
+        }
+
+        try preparation.validateResume(parentCommits: commit.parents.map(\.sha),
+                                       currentVersion: JunchatReleaseVersion.parse(preparedProject),
+                                       changedPaths: commit.files.map(\.filename))
+
+        let releaseChangelog = try await repositoryContent(path: "JUNCHAT_CHANGES.md",
+                                                           commit: releaseCommit,
+                                                           repository: repository,
+                                                           token: token)
+        let preparedChangelog = try await repositoryContent(path: "JUNCHAT_CHANGES.md",
+                                                            commit: commit.sha,
+                                                            repository: repository,
+                                                            token: token)
+        let expectedChangelog = try JunchatReleaseNotes.updatedChangelog(existingContent: releaseChangelog,
+                                                                         version: releaseVersion.name,
+                                                                         generatedNotes: generatedNotes,
+                                                                         releaseDate: preparation.releaseDate)
+        guard preparedChangelog == expectedChangelog else {
+            throw APIError.incompatibleExistingPreparation
+        }
+        return true
+    }
+
+    func remoteBranchCommit(branch: String,
+                            repository: GitHubRepository,
+                            token: String) async throws -> String {
+        let branchComponents = branch.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard !branchComponents.isEmpty, branchComponents.allSatisfy({ !$0.isEmpty }) else {
+            throw APIError.invalidResponse
+        }
+        let referenceURL = try repositoryAPIURL(repository: repository,
+                                                pathComponents: ["git", "ref", "heads"] + branchComponents)
+        let referenceData = try await successfulData(for: authenticatedRequest(url: referenceURL, token: token))
+        return try JSONDecoder().decode(GitHubReferenceRecord.self, from: referenceData).object.sha
     }
 
     private func reusableDraftBody(for releaseRequest: GitHubReleaseRequest,
@@ -117,6 +204,39 @@ struct GitHubReleaseAPI {
         return try release.validatedDraftBody(for: releaseRequest)
     }
 
+    private func repositoryContent(path: String,
+                                   commit: String,
+                                   repository: GitHubRepository,
+                                   token: String) async throws -> String {
+        let url = try repositoryAPIURL(repository: repository,
+                                       pathComponents: ["contents", path],
+                                       queryItems: [URLQueryItem(name: "ref", value: commit)])
+        let data = try await successfulData(for: authenticatedRequest(url: url, token: token))
+        return try JSONDecoder().decode(GitHubContentRecord.self, from: data).decodedContent()
+    }
+
+    private func repositoryAPIURL(repository: GitHubRepository,
+                                  pathComponents: [String],
+                                  queryItems: [URLQueryItem] = []) throws -> URL {
+        let allowedCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+        let components = ["repos", repository.owner, repository.name] + pathComponents
+        let encodedComponents = try components.map { component -> String in
+            guard let encoded = component.addingPercentEncoding(withAllowedCharacters: allowedCharacters) else {
+                throw APIError.invalidResponse
+            }
+            return encoded
+        }
+        var urlComponents = URLComponents()
+        urlComponents.scheme = "https"
+        urlComponents.host = "api.github.com"
+        urlComponents.percentEncodedPath = "/" + encodedComponents.joined(separator: "/")
+        urlComponents.queryItems = queryItems
+        guard let url = urlComponents.url else {
+            throw APIError.invalidResponse
+        }
+        return url
+    }
+
     private func authenticatedRequest(url: URL, token: String) -> URLRequest {
         var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -166,5 +286,43 @@ private struct GitHubReleaseRecord: Decodable {
             throw GitHubReleaseAPI.APIError.incompatibleExistingRelease
         }
         return body
+    }
+}
+
+private struct GitHubReferenceRecord: Decodable {
+    let object: GitHubCommitPointer
+}
+
+private struct GitHubCommitPointer: Decodable {
+    let sha: String
+}
+
+private struct GitHubCommitRecord: Decodable {
+    struct Commit: Decodable {
+        let message: String
+    }
+
+    struct File: Decodable {
+        let filename: String
+        let status: String
+    }
+
+    let sha: String
+    let commit: Commit
+    let parents: [GitHubCommitPointer]
+    let files: [File]
+}
+
+private struct GitHubContentRecord: Decodable {
+    let encoding: String
+    let content: String
+
+    func decodedContent() throws -> String {
+        guard encoding == "base64",
+              let data = Data(base64Encoded: content, options: .ignoreUnknownCharacters),
+              let value = String(data: data, encoding: .utf8) else {
+            throw GitHubReleaseAPI.APIError.invalidResponse
+        }
+        return value
     }
 }

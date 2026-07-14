@@ -201,8 +201,7 @@ struct CI: ParsableCommand {
             try await authenticatedGitPush(["push", repository.httpsURL.absoluteString, "refs/tags/\(tagName)"],
                                            environment: environment)
         } else {
-            let branchName = try await currentBranchName()
-            try await CI.run(.name("git"), ["check-ref-format", "--branch", branchName])
+            let branchName = try await gitCurrentBranchName()
             try await authenticatedGitPush(["push", repository.httpsURL.absoluteString, "HEAD:refs/heads/\(branchName)"],
                                            environment: environment)
         }
@@ -216,20 +215,24 @@ struct CI: ParsableCommand {
         }
     }
 
-    private static func currentBranchName() async throws -> String {
+    static func gitCurrentBranchName() async throws -> String {
+        let branchName: String
         if let cloudBranch = ProcessInfo.processInfo.environment["CI_BRANCH"]?
             .trimmingCharacters(in: .whitespacesAndNewlines),
             !cloudBranch.isEmpty {
             let prefix = "refs/heads/"
-            return cloudBranch.hasPrefix(prefix) ? String(cloudBranch.dropFirst(prefix.count)) : cloudBranch
+            branchName = cloudBranch.hasPrefix(prefix) ? String(cloudBranch.dropFirst(prefix.count)) : cloudBranch
+        } else {
+            guard let currentBranch = try await CI.run(.name("git"),
+                                                       ["symbolic-ref", "--quiet", "--short", "HEAD"],
+                                                       output: .string(limit: 4096)).standardOutput?.trimmingCharacters(in: .whitespacesAndNewlines),
+                !currentBranch.isEmpty else {
+                throw ValidationError("Could not determine the branch to push.")
+            }
+            branchName = currentBranch
         }
 
-        guard let branchName = try await CI.run(.name("git"),
-                                                ["symbolic-ref", "--quiet", "--short", "HEAD"],
-                                                output: .string(limit: 4096)).standardOutput?.trimmingCharacters(in: .whitespacesAndNewlines),
-            !branchName.isEmpty else {
-            throw ValidationError("Could not determine the branch to push.")
-        }
+        try await CI.run(.name("git"), ["check-ref-format", "--branch", branchName])
         return branchName
     }
 }

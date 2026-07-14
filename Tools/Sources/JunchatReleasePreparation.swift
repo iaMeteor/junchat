@@ -25,6 +25,11 @@ struct JunchatReleasePreparation: Equatable {
     }
 
     static let subject = "Prepare next release"
+    static let expectedChangedPaths = Set([
+        "JUNCHAT_CHANGES.md",
+        "project.yml",
+        "ElementX.xcodeproj/project.pbxproj"
+    ])
 
     let releaseVersion: JunchatReleaseVersion
     let releaseCommit: String
@@ -91,12 +96,8 @@ struct JunchatReleasePreparation: Equatable {
             throw PreparationError.unexpectedVersion
         }
 
-        let expectedPaths = Set([
-            "JUNCHAT_CHANGES.md",
-            "project.yml",
-            "ElementX.xcodeproj/project.pbxproj"
-        ])
-        guard Set(changedPaths) == expectedPaths else {
+        guard changedPaths.count == Self.expectedChangedPaths.count,
+              Set(changedPaths) == Self.expectedChangedPaths else {
             throw PreparationError.unexpectedChangedPaths
         }
     }

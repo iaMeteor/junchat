@@ -27,26 +27,48 @@ struct ReleaseToGitHub: AsyncParsableCommand {
 
         let currentVersion = try CI.readReleaseVersion()
         let currentCommitMessage = try await CI.gitCurrentCommitMessage()
+        let repository = try await CI.gitRepository()
+        let branch = try await CI.gitCurrentBranchName()
+        let apiToken = try githubToken()
+        let releaseAPI = GitHubReleaseAPI()
         if let preparation = try JunchatReleasePreparation.parseIfPresent(currentCommitMessage) {
             try await preparation.validateResume(parentCommits: CI.gitCurrentCommitParents(),
                                                  currentVersion: currentVersion,
                                                  changedPaths: CI.gitCurrentCommitChangedPaths())
-            let repository = try await CI.gitRepository()
+            let remoteCommit = try await releaseAPI.remoteBranchCommit(branch: branch,
+                                                                       repository: repository,
+                                                                       token: apiToken)
             let releaseBody = try await createOrReuseGitHubDraft(version: preparation.releaseVersion.name,
                                                                  releaseCommit: preparation.releaseCommit,
-                                                                 repository: repository)
+                                                                 repository: repository,
+                                                                 releaseAPI: releaseAPI,
+                                                                 apiToken: apiToken,
+                                                                 allowCreation: remoteCommit == preparation.releaseCommit)
             guard try preparedChangelogMatches(version: preparation.releaseVersion.name,
                                                generatedNotes: releaseBody,
                                                releaseDate: preparation.releaseDate) else {
                 throw ReleaseError.incompatiblePreparedChangelog
             }
 
-            try await CI.gitPush()
+            if try await releaseAPI.isPreparationAlreadyPushed(branch: branch,
+                                                               releaseVersion: preparation.releaseVersion,
+                                                               releaseCommit: preparation.releaseCommit,
+                                                               generatedNotes: releaseBody,
+                                                               repository: repository,
+                                                               token: apiToken) {
+                logger.info("The exact release preparation for \(preparation.releaseVersion.name) is already present on the remote branch.")
+                return
+            }
+            try await pushOrAcceptRemotePreparation(branch: branch,
+                                                    preparation: preparation,
+                                                    generatedNotes: releaseBody,
+                                                    repository: repository,
+                                                    releaseAPI: releaseAPI,
+                                                    apiToken: apiToken)
             logger.info("Resumed release preparation for \(preparation.releaseVersion.name) without creating a new release.")
             return
         }
 
-        let repository = try await CI.gitRepository()
         let releaseCommit = try await CI.gitCurrentCommit()
         let releaseDate = Date().formatted(.iso8601.year().month().day())
         let preparation = try JunchatReleasePreparation(releaseVersion: currentVersion,
@@ -54,9 +76,25 @@ struct ReleaseToGitHub: AsyncParsableCommand {
                                                         releaseDate: releaseDate)
         logger.info("Ensuring GitHub draft release for version \(currentVersion.name)…")
 
+        let remoteCommit = try await releaseAPI.remoteBranchCommit(branch: branch,
+                                                                   repository: repository,
+                                                                   token: apiToken)
         let releaseBody = try await createOrReuseGitHubDraft(version: currentVersion.name,
                                                              releaseCommit: releaseCommit,
-                                                             repository: repository)
+                                                             repository: repository,
+                                                             releaseAPI: releaseAPI,
+                                                             apiToken: apiToken,
+                                                             allowCreation: remoteCommit == releaseCommit)
+
+        if try await releaseAPI.isPreparationAlreadyPushed(branch: branch,
+                                                           releaseVersion: currentVersion,
+                                                           releaseCommit: releaseCommit,
+                                                           generatedNotes: releaseBody,
+                                                           repository: repository,
+                                                           token: apiToken) {
+            logger.info("The exact release preparation for \(currentVersion.name) was already pushed by an earlier build of this commit.")
+            return
+        }
 
         try updateChangelog(version: currentVersion.name,
                             generatedNotes: releaseBody,
@@ -92,7 +130,12 @@ struct ReleaseToGitHub: AsyncParsableCommand {
                                                       currentVersion: nextVersion,
                                                       changedPaths: CI.gitCurrentCommitChangedPaths())
         
-        try await CI.gitPush()
+        try await pushOrAcceptRemotePreparation(branch: branch,
+                                                preparation: preparation,
+                                                generatedNotes: releaseBody,
+                                                repository: repository,
+                                                releaseAPI: releaseAPI,
+                                                apiToken: apiToken)
         logger.info("GitHub release \(currentVersion.name) remains a draft pending explicit publication approval.")
     }
 
@@ -100,16 +143,43 @@ struct ReleaseToGitHub: AsyncParsableCommand {
 
     private func createOrReuseGitHubDraft(version: String,
                                           releaseCommit: String,
-                                          repository: GitHubRepository) async throws -> String {
-        guard let apiToken = ProcessInfo.processInfo.environment["GITHUB_TOKEN"], !apiToken.isEmpty
-        else {
+                                          repository: GitHubRepository,
+                                          releaseAPI: GitHubReleaseAPI,
+                                          apiToken: String,
+                                          allowCreation: Bool) async throws -> String {
+        try await releaseAPI.createOrReuseDraft(version: version,
+                                                targetCommit: releaseCommit,
+                                                repository: repository,
+                                                token: apiToken,
+                                                allowCreation: allowCreation)
+    }
+
+    private func pushOrAcceptRemotePreparation(branch: String,
+                                               preparation: JunchatReleasePreparation,
+                                               generatedNotes: String,
+                                               repository: GitHubRepository,
+                                               releaseAPI: GitHubReleaseAPI,
+                                               apiToken: String) async throws {
+        do {
+            try await CI.gitPush()
+        } catch {
+            guard try await releaseAPI.isPreparationAlreadyPushed(branch: branch,
+                                                                  releaseVersion: preparation.releaseVersion,
+                                                                  releaseCommit: preparation.releaseCommit,
+                                                                  generatedNotes: generatedNotes,
+                                                                  repository: repository,
+                                                                  token: apiToken) else {
+                throw error
+            }
+            logger.info("A concurrent build already pushed the exact release preparation commit.")
+        }
+    }
+
+    private func githubToken() throws -> String {
+        guard let apiToken = ProcessInfo.processInfo.environment["GITHUB_TOKEN"], !apiToken.isEmpty else {
             throw ReleaseError.missingGitHubToken
         }
-
-        return try await GitHubReleaseAPI().createOrReuseDraft(version: version,
-                                                               targetCommit: releaseCommit,
-                                                               repository: repository,
-                                                               token: apiToken)
+        return apiToken
     }
 
     private func updateChangelog(version: String,
