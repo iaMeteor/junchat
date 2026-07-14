@@ -33,6 +33,27 @@ struct RoomTests {
             }
         }
     }
+
+    @Test(arguments: [false, true], [false, true])
+    func failedRoomInfoUsesConservativeGroupConfiguration(hasActiveCall: Bool, voiceOnly: Bool) async {
+        let room = RoomSDKMock()
+        room.roomInfoClosure = { throw RoomInfoTestError.unavailable }
+        room.hasActiveRoomCallReturnValue = hasActiveCall
+        room.isDirectReturnValue = true
+
+        let configuration = await ElementCallWidgetDriver.callConfiguration(room: room,
+                                                                            voiceOnly: voiceOnly)
+
+        #expect(configuration.intent == (hasActiveCall ? .joinExisting : .startCall))
+        #expect(configuration.skipLobby == nil)
+        #expect(room.roomInfoCallsCount == 1)
+        #expect(room.hasActiveRoomCallCallsCount == 1)
+        #expect(room.isDirectCallsCount == 0)
+    }
+}
+
+private enum RoomInfoTestError: Error {
+    case unavailable
 }
 
 struct CallRoomScenario: CustomTestStringConvertible {
