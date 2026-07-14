@@ -279,6 +279,44 @@ struct CallMediaCoordinatorTests {
         #expect(proximityValues.last == false)
     }
 
+    @Test
+    func supersededCoordinatorCleanupCannotResetReplacementRouteOrProximity() {
+        let audioSession = AudioSessionMock()
+        var proximityValues = [Bool]()
+        let setProximityMonitoringEnabled: (Bool) -> Void = { proximityValues.append($0) }
+        let sessionOwnership = CallMediaSessionOwnership()
+        let firstCoordinator = CallMediaCoordinator(voiceOnly: true,
+                                                    playConnectedTone: false,
+                                                    audioSessionController: .init(audioSession: audioSession),
+                                                    connectedTonePlayer: { },
+                                                    ringbackTonePlayer: TestCallRingbackTonePlayer(),
+                                                    setProximityMonitoringEnabled: setProximityMonitoringEnabled,
+                                                    sessionGeneration: .init(),
+                                                    sessionOwnership: sessionOwnership)
+        firstCoordinator.prepareForCall()
+        _ = firstCoordinator.remoteMediaConnected()
+
+        let replacementCoordinator = CallMediaCoordinator(voiceOnly: true,
+                                                          playConnectedTone: false,
+                                                          audioSessionController: .init(audioSession: audioSession),
+                                                          connectedTonePlayer: { },
+                                                          ringbackTonePlayer: TestCallRingbackTonePlayer(),
+                                                          setProximityMonitoringEnabled: setProximityMonitoringEnabled,
+                                                          sessionGeneration: .init(),
+                                                          sessionOwnership: sessionOwnership)
+        replacementCoordinator.selectOutput(.nativeSpeaker)
+        _ = replacementCoordinator.remoteMediaConnected()
+        let routeOverrideCount = audioSession.overrideOutputAudioPortCallsCount
+        let proximityUpdateCount = proximityValues.count
+
+        firstCoordinator.stop()
+
+        #expect(audioSession.overrideOutputAudioPortCallsCount == routeOverrideCount)
+        #expect(audioSession.overrideOutputAudioPortReceivedPortOverride == .speaker)
+        #expect(proximityValues.count == proximityUpdateCount)
+        #expect(proximityValues.last == false)
+    }
+
     private func waitUntil(_ condition: () -> Bool) async {
         for _ in 0..<100 {
             guard !condition() else { return }

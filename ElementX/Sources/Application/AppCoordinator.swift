@@ -180,18 +180,7 @@ class AppCoordinator: AppCoordinatorProtocol, AuthenticationFlowCoordinatorDeleg
         elementCallService.actions
             .receive(on: DispatchQueue.main)
             .sink { [weak self] action in
-                switch action {
-                case .startCall(let roomID, let isVoiceCall):
-                    self?.handleAppRoute(.call(roomID: roomID, isVoiceCall: isVoiceCall), windowType: nil)
-                case .receivedIncomingCallRequest:
-                    // When reporting a VoIP call through the CXProvider's `reportNewIncomingVoIPPushPayload`
-                    // the UIApplication states don't change and syncing is neither started nor ran on
-                    // a background task. Handle both manually here.
-                    self?.startSync()
-                    self?.scheduleDelayedSyncStop()
-                default:
-                    break
-                }
+                self?.handleElementCallServiceAction(action)
             }
             .store(in: &cancellables)
         
@@ -200,6 +189,22 @@ class AppCoordinator: AppCoordinatorProtocol, AuthenticationFlowCoordinatorDeleg
             windowManager?.secondaryWindowsEnabled = !appLockEnabled
         }
         .store(in: &cancellables)
+    }
+
+    private func handleElementCallServiceAction(_ action: ElementCallServiceAction) {
+        switch action {
+        case .startCall(let roomID, let isVoiceCall, let incomingCallIdentity):
+            handleAppRoute(.call(roomID: roomID,
+                                 isVoiceCall: isVoiceCall,
+                                 incomingCallIdentity: incomingCallIdentity),
+                           windowType: nil)
+        case .receivedIncomingCallRequest:
+            // CallKit push reporting doesn't change UIApplication state or start background syncing.
+            startSync()
+            scheduleDelayedSyncStop()
+        default:
+            break
+        }
     }
     
     func start() {

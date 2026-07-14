@@ -91,7 +91,7 @@ final class ElementCallServiceTests {
     }
 
     @Test
-    func acceptingIncomingCallStopsCallKitRingingImmediately() async {
+    func acceptingIncomingCallStopsCallKitRingingImmediately() async throws {
         await confirmation { confirmation in
             let pkPushPayloadMock = PKPushPayloadMock().updatingExpiration(currentDate, lifetime: 30)
                 .updateIsVoice(true)
@@ -104,7 +104,10 @@ final class ElementCallServiceTests {
         #expect(service.incomingCallRoomIDPublisher.value == "!room:example.com")
         #expect(!callProvider.reportCallWithEndedAtReasonCalled)
         
-        await service.acceptIncomingCall(roomID: "!room:example.com", isVoiceCall: true)
+        let incomingCallIdentity = try #require(service.incomingCallIdentityPublisher.value)
+        let acceptedIncomingCallIdentity = try #require(await service.acceptIncomingCall(roomID: "!room:example.com",
+                                                                                         isVoiceCall: true,
+                                                                                         incomingCallIdentity: incomingCallIdentity))
         
         #expect(callProvider.reportCallWithEndedAtReasonCalled)
         #expect(callProvider.reportCallWithEndedAtReasonReceivedArguments?.reason == .remoteEnded)
@@ -113,11 +116,77 @@ final class ElementCallServiceTests {
         
         let generation = ElementCallSessionGeneration()
         service.registerCallSession(generation: generation)
-        await service.setupCallSession(roomID: "!room:example.com", roomDisplayName: "welcome", generation: generation)
+        await service.setupCallSession(roomID: "!room:example.com",
+                                       roomDisplayName: "welcome",
+                                       incomingCallIdentity: acceptedIncomingCallIdentity,
+                                       generation: generation)
         
         #expect(callProvider.reportCallWithEndedAtReasonCallsCount == 1)
         #expect(service.incomingCallRoomIDPublisher.value == nil)
         #expect(service.ongoingCallRoomIDPublisher.value == "!room:example.com")
+    }
+
+    @Test
+    func delayedAcceptedCallSetupCannotClearOrOrphanReplacementIncomingPush() async throws {
+        let acceptedRoomID = "!accepted:example.com"
+        await receiveIncomingPush(PKPushPayloadMock()
+            .updatingExpiration(currentDate, lifetime: 30)
+            .updatingRoomID(acceptedRoomID)
+            .updatingRTCNotificationID("$accepted"))
+        let incomingCallIdentity = try #require(service.incomingCallIdentityPublisher.value)
+        let acceptedIncomingCallIdentity = try #require(await service.acceptIncomingCall(roomID: acceptedRoomID,
+                                                                                         isVoiceCall: true,
+                                                                                         incomingCallIdentity: incomingCallIdentity))
+
+        let replacementRoomID = acceptedRoomID
+        await receiveIncomingPush(PKPushPayloadMock()
+            .updatingExpiration(currentDate, lifetime: 30)
+            .updatingRoomID(replacementRoomID)
+            .updatingRTCNotificationID("$replacement"))
+        let replacementIncomingCallIdentity = try #require(service.incomingCallIdentityPublisher.value)
+        let replacementCallKitID = try #require(callProvider.reportNewIncomingCallWithUpdateCompletionReceivedArguments?.uuid)
+
+        let generation = ElementCallSessionGeneration()
+        service.registerCallSession(generation: generation)
+        await service.setupCallSession(roomID: acceptedRoomID,
+                                       roomDisplayName: "Accepted",
+                                       incomingCallIdentity: acceptedIncomingCallIdentity,
+                                       generation: generation)
+
+        #expect(service.incomingCallIdentityPublisher.value == replacementIncomingCallIdentity)
+        #expect(service.ongoingCallRoomIDPublisher.value == nil)
+        #expect(!callProvider.reportCallWithEndedAtReasonReceivedInvocations.contains { $0.uuid == replacementCallKitID })
+    }
+
+    @Test
+    func matchingAnswerUsesAndPublishesTheExactCallKitIdentity() async throws {
+        let roomID = "!answered:example.com"
+        await receiveIncomingPush(PKPushPayloadMock()
+            .updatingExpiration(currentDate, lifetime: 30)
+            .updatingRoomID(roomID)
+            .updatingRTCNotificationID("$answered")
+            .updateIsVoice(true))
+        let incomingCallIdentity = try #require(service.incomingCallIdentityPublisher.value)
+        var startedIncomingCallIdentity: ElementCallIncomingCallIdentity?
+        let cancellable = service.actions.sink { action in
+            if case .startCall(_, _, let identity) = action {
+                startedIncomingCallIdentity = identity
+            }
+        }
+        let action = CXAnswerCallAction(call: incomingCallIdentity.callKitID)
+        let provider = CXProvider(configuration: CXProviderConfiguration())
+
+        service.provider(provider, perform: action)
+        await Task.yield()
+        await testClock.advance(by: .seconds(1))
+        await waitUntil { startedIncomingCallIdentity != nil }
+
+        #expect(callKitActionRecorder.fulfilledActionIDs.filter { $0 == action.uuid }.count == 1)
+        #expect(startedIncomingCallIdentity == incomingCallIdentity)
+        #expect(service.acceptedIncomingCallIdentity == incomingCallIdentity)
+        #expect(service.incomingCallIdentityPublisher.value == nil)
+        #expect(callProvider.reportCallWithEndedAtReasonReceivedArguments?.uuid == incomingCallIdentity.callKitID)
+        withExtendedLifetime((cancellable, provider)) { }
     }
 
     @Test
@@ -128,6 +197,7 @@ final class ElementCallServiceTests {
 
         await service.setupCallSession(roomID: "!stopped:example.com",
                                        roomDisplayName: "Stopped",
+                                       incomingCallIdentity: nil,
                                        generation: generation)
 
         #expect(service.ongoingCallRoomIDPublisher.value == nil)
@@ -142,11 +212,13 @@ final class ElementCallServiceTests {
 
         await service.setupCallSession(roomID: "!stale:example.com",
                                        roomDisplayName: "Stale",
+                                       incomingCallIdentity: nil,
                                        generation: firstGeneration)
         #expect(service.ongoingCallRoomIDPublisher.value == nil)
 
         await service.setupCallSession(roomID: "!replacement:example.com",
                                        roomDisplayName: "Replacement",
+                                       incomingCallIdentity: nil,
                                        generation: replacementGeneration)
         #expect(service.ongoingCallRoomIDPublisher.value == "!replacement:example.com")
 
@@ -457,7 +529,7 @@ final class ElementCallServiceTests {
 
         var startedRooms = [String]()
         let cancellable = service.actions.sink { action in
-            if case .startCall(let roomID, _) = action {
+            if case .startCall(let roomID, _, _) = action {
                 startedRooms.append(roomID)
             }
         }
@@ -483,7 +555,7 @@ final class ElementCallServiceTests {
         let firstCallUUID = try #require(callProvider.reportNewIncomingCallWithUpdateCompletionReceivedArguments?.uuid)
         var startedRooms = [String]()
         let cancellable = service.actions.sink { action in
-            if case .startCall(let roomID, _) = action {
+            if case .startCall(let roomID, _, _) = action {
                 startedRooms.append(roomID)
             }
         }
@@ -516,9 +588,16 @@ final class ElementCallServiceTests {
             .updatingExpiration(currentDate, lifetime: 30)
             .updatingRoomID(replacementRoomID)
             .updatingRTCNotificationID("$replacement"))
+        let replacementIncomingCallIdentity = try #require(service.incomingCallIdentityPublisher.value)
+        let acceptedReplacementIdentity = try #require(await service.acceptIncomingCall(roomID: replacementRoomID,
+                                                                                        isVoiceCall: false,
+                                                                                        incomingCallIdentity: replacementIncomingCallIdentity))
         let generation = ElementCallSessionGeneration()
         service.registerCallSession(generation: generation)
-        await service.setupCallSession(roomID: replacementRoomID, roomDisplayName: "Replacement", generation: generation)
+        await service.setupCallSession(roomID: replacementRoomID,
+                                       roomDisplayName: "Replacement",
+                                       incomingCallIdentity: acceptedReplacementIdentity,
+                                       generation: generation)
         let action = CXEndCallAction(call: firstCallUUID)
         let provider = CXProvider(configuration: CXProviderConfiguration())
 
@@ -539,9 +618,16 @@ final class ElementCallServiceTests {
             .updatingRoomID(roomID)
             .updatingRTCNotificationID("$current"))
         let callUUID = try #require(callProvider.reportNewIncomingCallWithUpdateCompletionReceivedArguments?.uuid)
+        let incomingCallIdentity = try #require(service.incomingCallIdentityPublisher.value)
+        let acceptedIncomingCallIdentity = try #require(await service.acceptIncomingCall(roomID: roomID,
+                                                                                         isVoiceCall: false,
+                                                                                         incomingCallIdentity: incomingCallIdentity))
         let generation = ElementCallSessionGeneration()
         service.registerCallSession(generation: generation)
-        await service.setupCallSession(roomID: roomID, roomDisplayName: "Current", generation: generation)
+        await service.setupCallSession(roomID: roomID,
+                                       roomDisplayName: "Current",
+                                       incomingCallIdentity: acceptedIncomingCallIdentity,
+                                       generation: generation)
         let action = CXEndCallAction(call: callUUID)
         let provider = CXProvider(configuration: CXProviderConfiguration())
 

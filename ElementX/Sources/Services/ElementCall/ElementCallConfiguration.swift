@@ -18,6 +18,7 @@ struct ElementCallConfiguration {
     let voiceOnly: Bool
     let colorScheme: ColorScheme
     let playConnectedTone: Bool
+    let incomingCallIdentity: ElementCallIncomingCallIdentity?
 
     init(roomProxy: JoinedRoomProxyProtocol,
          clientProxy: ClientProxyProtocol,
@@ -26,7 +27,8 @@ struct ElementCallConfiguration {
          elementCallBaseURLOverride: URL?,
          voiceOnly: Bool,
          colorScheme: ColorScheme,
-         playConnectedTone: Bool = true) {
+         playConnectedTone: Bool = true,
+         incomingCallIdentity: ElementCallIncomingCallIdentity? = nil) {
         self.roomProxy = roomProxy
         self.clientProxy = clientProxy
         self.clientID = clientID
@@ -35,6 +37,7 @@ struct ElementCallConfiguration {
         self.voiceOnly = voiceOnly
         self.colorScheme = colorScheme
         self.playConnectedTone = playConnectedTone
+        self.incomingCallIdentity = incomingCallIdentity
     }
     
     /// A string representing the call being configured.

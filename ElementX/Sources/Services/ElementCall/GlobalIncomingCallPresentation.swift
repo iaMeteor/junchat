@@ -10,11 +10,13 @@ struct GlobalIncomingCallCandidate {
     let roomTitle: String
     let roomAvatar: RoomAvatar
     let isVoiceCall: Bool
+    let incomingCallIdentity: ElementCallIncomingCallIdentity?
     
-    init(roomSummary: RoomSummary) {
+    init(roomSummary: RoomSummary, incomingCallIdentity: ElementCallIncomingCallIdentity? = nil) {
         roomID = roomSummary.id
         roomTitle = roomSummary.name
-        isVoiceCall = roomSummary.activeCallIntent == .audio
+        isVoiceCall = incomingCallIdentity?.isVoiceCall ?? (roomSummary.activeCallIntent == .audio)
+        self.incomingCallIdentity = incomingCallIdentity
         
         if roomSummary.isSpace {
             roomAvatar = .space(id: roomSummary.id, name: roomSummary.name, avatarURL: roomSummary.avatarURL)
@@ -28,16 +30,30 @@ struct GlobalIncomingCallCandidate {
 
 struct GlobalIncomingCallPresentation {
     private var dismissedCallRoomIDs = Set<String>()
+    private var dismissedIncomingCallIdentities = Set<ElementCallIncomingCallIdentity>()
     
-    mutating func dismiss(roomID: String) {
-        dismissedCallRoomIDs.insert(roomID)
+    mutating func dismiss(_ candidate: GlobalIncomingCallCandidate) {
+        if let incomingCallIdentity = candidate.incomingCallIdentity {
+            dismissedIncomingCallIdentities.insert(incomingCallIdentity)
+        } else {
+            dismissedCallRoomIDs.insert(candidate.roomID)
+        }
     }
     
-    mutating func candidate(from rooms: [RoomSummary], ongoingCallRoomID: String?, pendingIncomingCallRoomID: String?, ownUserID: String) -> GlobalIncomingCallCandidate? {
+    mutating func candidate(from rooms: [RoomSummary],
+                            ongoingCallRoomID: String?,
+                            pendingIncomingCallIdentity: ElementCallIncomingCallIdentity?,
+                            ownUserID: String) -> GlobalIncomingCallCandidate? {
         resetDismissedCallsThatHaveEnded(in: rooms, ownUserID: ownUserID)
+        if let pendingIncomingCallIdentity {
+            dismissedIncomingCallIdentities.formIntersection([pendingIncomingCallIdentity])
+        } else {
+            dismissedIncomingCallIdentities.removeAll()
+        }
         
-        if let pendingIncomingCallRoomID {
-            guard !dismissedCallRoomIDs.contains(pendingIncomingCallRoomID) else {
+        if let pendingIncomingCallIdentity {
+            let pendingIncomingCallRoomID = pendingIncomingCallIdentity.roomID
+            guard !dismissedIncomingCallIdentities.contains(pendingIncomingCallIdentity) else {
                 return nil
             }
             
@@ -49,7 +65,7 @@ struct GlobalIncomingCallPresentation {
                 return nil
             }
             
-            return GlobalIncomingCallCandidate(roomSummary: room)
+            return GlobalIncomingCallCandidate(roomSummary: room, incomingCallIdentity: pendingIncomingCallIdentity)
         }
         
         guard ongoingCallRoomID == nil,

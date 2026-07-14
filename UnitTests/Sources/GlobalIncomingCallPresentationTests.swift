@@ -6,6 +6,7 @@
 //
 
 @testable import ElementX
+import Foundation
 import MatrixRustSDKMocks
 import Testing
 
@@ -17,11 +18,24 @@ struct GlobalIncomingCallPresentationTests {
         let candidate = presentation.candidate(from: [
             room(id: "quiet", hasOngoingCall: false),
             room(id: "ringing", name: "测试用户 2", hasOngoingCall: true, activeCallIntent: .audio, activeRoomCallParticipants: ["@caller:junchat.yyzs120.cn"])
-        ], ongoingCallRoomID: nil, pendingIncomingCallRoomID: "ringing", ownUserID: "@me:junchat.yyzs120.cn")
+        ], ongoingCallRoomID: nil, pendingIncomingCallIdentity: incomingCallIdentity(roomID: "ringing"), ownUserID: "@me:junchat.yyzs120.cn")
         
         #expect(candidate?.roomID == "ringing")
         #expect(candidate?.roomTitle == "测试用户 2")
         #expect(candidate?.isVoiceCall == true)
+    }
+
+    @Test
+    func pendingIncomingCallUsesVoiceTypeFromItsExactIdentity() {
+        var presentation = GlobalIncomingCallPresentation()
+        let incomingCallIdentity = ElementCallIncomingCallIdentity(callKitID: UUID(), roomID: "ringing", isVoiceCall: true)
+
+        let candidate = presentation.candidate(from: [
+            room(id: "ringing", hasOngoingCall: true, activeCallIntent: .video, activeRoomCallParticipants: ["@caller:junchat.yyzs120.cn"])
+        ], ongoingCallRoomID: nil, pendingIncomingCallIdentity: incomingCallIdentity, ownUserID: "@me:junchat.yyzs120.cn")
+
+        #expect(candidate?.isVoiceCall == true)
+        #expect(candidate?.incomingCallIdentity == incomingCallIdentity)
     }
     
     @Test
@@ -30,7 +44,7 @@ struct GlobalIncomingCallPresentationTests {
         
         let candidate = presentation.candidate(from: [
             room(id: "ringing", hasOngoingCall: true, activeRoomCallParticipants: ["@caller:junchat.yyzs120.cn"])
-        ], ongoingCallRoomID: "another-room", pendingIncomingCallRoomID: "ringing", ownUserID: "@me:junchat.yyzs120.cn")
+        ], ongoingCallRoomID: "another-room", pendingIncomingCallIdentity: incomingCallIdentity(roomID: "ringing"), ownUserID: "@me:junchat.yyzs120.cn")
         
         #expect(candidate == nil)
     }
@@ -41,7 +55,7 @@ struct GlobalIncomingCallPresentationTests {
         
         let candidate = presentation.candidate(from: [
             room(id: "ringing", name: "测试用户 2", hasOngoingCall: true, activeCallIntent: .audio, activeRoomCallParticipants: ["@caller:junchat.yyzs120.cn"])
-        ], ongoingCallRoomID: "ringing", pendingIncomingCallRoomID: "ringing", ownUserID: "@me:junchat.yyzs120.cn")
+        ], ongoingCallRoomID: "ringing", pendingIncomingCallIdentity: incomingCallIdentity(roomID: "ringing"), ownUserID: "@me:junchat.yyzs120.cn")
         
         #expect(candidate?.roomID == "ringing")
         #expect(candidate?.roomTitle == "测试用户 2")
@@ -52,14 +66,19 @@ struct GlobalIncomingCallPresentationTests {
         var presentation = GlobalIncomingCallPresentation()
         let activeRooms = [room(id: "ringing", hasOngoingCall: true, activeRoomCallParticipants: ["@caller:junchat.yyzs120.cn"])]
         
-        presentation.dismiss(roomID: "ringing")
-        #expect(presentation.candidate(from: activeRooms, ongoingCallRoomID: nil, pendingIncomingCallRoomID: "ringing", ownUserID: "@me:junchat.yyzs120.cn") == nil)
+        let incomingCallIdentity = incomingCallIdentity(roomID: "ringing")
+        let candidate = GlobalIncomingCallCandidate(roomSummary: activeRooms[0], incomingCallIdentity: incomingCallIdentity)
+        presentation.dismiss(candidate)
+        #expect(presentation.candidate(from: activeRooms, ongoingCallRoomID: nil, pendingIncomingCallIdentity: incomingCallIdentity, ownUserID: "@me:junchat.yyzs120.cn") == nil)
         
         #expect(presentation.candidate(from: [
             room(id: "ringing", hasOngoingCall: false)
-        ], ongoingCallRoomID: nil, pendingIncomingCallRoomID: nil, ownUserID: "@me:junchat.yyzs120.cn") == nil)
+        ], ongoingCallRoomID: nil, pendingIncomingCallIdentity: nil, ownUserID: "@me:junchat.yyzs120.cn") == nil)
         
-        let nextCandidate = presentation.candidate(from: activeRooms, ongoingCallRoomID: nil, pendingIncomingCallRoomID: "ringing", ownUserID: "@me:junchat.yyzs120.cn")
+        let nextCandidate = presentation.candidate(from: activeRooms,
+                                                   ongoingCallRoomID: nil,
+                                                   pendingIncomingCallIdentity: self.incomingCallIdentity(roomID: "ringing"),
+                                                   ownUserID: "@me:junchat.yyzs120.cn")
         #expect(nextCandidate?.roomID == "ringing")
     }
 
@@ -69,7 +88,7 @@ struct GlobalIncomingCallPresentationTests {
         
         let candidate = presentation.candidate(from: [
             room(id: "ringing", name: "测试用户 2", hasOngoingCall: false, activeCallIntent: .audio, activeRoomCallParticipants: [])
-        ], ongoingCallRoomID: nil, pendingIncomingCallRoomID: "ringing", ownUserID: "@me:junchat.yyzs120.cn")
+        ], ongoingCallRoomID: nil, pendingIncomingCallIdentity: incomingCallIdentity(roomID: "ringing"), ownUserID: "@me:junchat.yyzs120.cn")
         
         #expect(candidate?.roomID == "ringing")
         #expect(candidate?.roomTitle == "测试用户 2")
@@ -82,7 +101,7 @@ struct GlobalIncomingCallPresentationTests {
         let candidate = presentation.candidate(from: [
             room(id: "quiet", hasOngoingCall: false),
             room(id: "ringing", name: "测试用户 2", hasOngoingCall: true, activeCallIntent: .audio, activeRoomCallParticipants: ["@caller:junchat.yyzs120.cn"])
-        ], ongoingCallRoomID: nil, pendingIncomingCallRoomID: nil, ownUserID: "@me:junchat.yyzs120.cn")
+        ], ongoingCallRoomID: nil, pendingIncomingCallIdentity: nil, ownUserID: "@me:junchat.yyzs120.cn")
 
         #expect(candidate?.roomID == "ringing")
         #expect(candidate?.roomTitle == "测试用户 2")
@@ -95,7 +114,7 @@ struct GlobalIncomingCallPresentationTests {
 
         let candidate = presentation.candidate(from: [
             room(id: "outgoing", name: "测试用户 2", hasOngoingCall: true, activeCallIntent: .audio, activeRoomCallParticipants: ["@me:junchat.yyzs120.cn"])
-        ], ongoingCallRoomID: "outgoing", pendingIncomingCallRoomID: nil, ownUserID: "@me:junchat.yyzs120.cn")
+        ], ongoingCallRoomID: "outgoing", pendingIncomingCallIdentity: nil, ownUserID: "@me:junchat.yyzs120.cn")
 
         #expect(candidate == nil)
     }
@@ -106,7 +125,7 @@ struct GlobalIncomingCallPresentationTests {
 
         let candidate = presentation.candidate(from: [
             room(id: "stale", name: "测试用户 2", hasOngoingCall: true, activeCallIntent: .audio, activeRoomCallParticipants: ["@me:junchat.yyzs120.cn"])
-        ], ongoingCallRoomID: nil, pendingIncomingCallRoomID: nil, ownUserID: "@me:junchat.yyzs120.cn")
+        ], ongoingCallRoomID: nil, pendingIncomingCallIdentity: nil, ownUserID: "@me:junchat.yyzs120.cn")
 
         #expect(candidate == nil)
     }
@@ -140,5 +159,9 @@ struct GlobalIncomingCallPresentationTests {
                     isMarkedUnread: false,
                     isFavourite: false,
                     isTombstoned: false)
+    }
+
+    private func incomingCallIdentity(roomID: String) -> ElementCallIncomingCallIdentity {
+        .init(callKitID: UUID(), roomID: roomID, isVoiceCall: true)
     }
 }

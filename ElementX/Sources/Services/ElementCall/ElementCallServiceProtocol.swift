@@ -11,9 +11,15 @@ import Foundation
 
 enum ElementCallServiceAction {
     case receivedIncomingCallRequest
-    case startCall(roomID: String, isVoiceCall: Bool)
+    case startCall(roomID: String, isVoiceCall: Bool, incomingCallIdentity: ElementCallIncomingCallIdentity)
     case endCall(roomID: String)
     case setAudioEnabled(_ enabled: Bool, roomID: String)
+}
+
+struct ElementCallIncomingCallIdentity: Hashable {
+    let callKitID: UUID
+    let roomID: String
+    let isVoiceCall: Bool
 }
 
 struct ElementCallSessionGeneration: Equatable {
@@ -29,15 +35,28 @@ protocol ElementCallServiceProtocol {
 
     var incomingCallRoomIDPublisher: CurrentValuePublisher<String?, Never> { get }
 
+    var incomingCallIdentityPublisher: CurrentValuePublisher<ElementCallIncomingCallIdentity?, Never> { get }
+
+    var acceptedIncomingCallIdentity: ElementCallIncomingCallIdentity? { get }
+
     func setClientProxy(_ clientProxy: ClientProxyProtocol)
 
     func registerCallSession(generation: ElementCallSessionGeneration)
 
-    func setupCallSession(roomID: String, roomDisplayName: String, generation: ElementCallSessionGeneration) async
+    func setupCallSession(roomID: String,
+                          roomDisplayName: String,
+                          incomingCallIdentity: ElementCallIncomingCallIdentity?,
+                          generation: ElementCallSessionGeneration) async
 
-    func acceptIncomingCall(roomID: String, isVoiceCall: Bool) async
+    func acceptIncomingCall(roomID: String,
+                            isVoiceCall: Bool,
+                            incomingCallIdentity: ElementCallIncomingCallIdentity?) async -> ElementCallIncomingCallIdentity?
 
     func declineIncomingCall(roomID: String) async
+
+    func declineIncomingCall(incomingCallIdentity: ElementCallIncomingCallIdentity) async
+
+    func clearAcceptedIncomingCall(incomingCallIdentity: ElementCallIncomingCallIdentity)
 
     func tearDownCallSession()
 

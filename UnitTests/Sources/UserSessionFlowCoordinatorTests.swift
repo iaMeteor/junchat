@@ -25,6 +25,7 @@ struct UserSessionFlowCoordinatorTests {
     private let staticRoomListSubject = CurrentValueSubject<[RoomSummary], Never>([])
     private let ongoingCallRoomIDSubject = CurrentValueSubject<String?, Never>(nil)
     private let incomingCallRoomIDSubject = CurrentValueSubject<String?, Never>(nil)
+    private let incomingCallIdentitySubject = CurrentValueSubject<ElementCallIncomingCallIdentity?, Never>(nil)
     private let networkReachabilitySubject: CurrentValueSubject<NetworkMonitorReachability, Never> = .init(.reachable)
     private let homeserverReachabilitySubject: CurrentValueSubject<NetworkMonitorReachability, Never> = .init(.reachable)
     private var cancellables = Set<AnyCancellable>()
@@ -68,6 +69,7 @@ struct UserSessionFlowCoordinatorTests {
         elementCallService = ElementCallServiceMock(.init())
         elementCallService.ongoingCallRoomIDPublisher = ongoingCallRoomIDSubject.asCurrentValuePublisher()
         elementCallService.incomingCallRoomIDPublisher = incomingCallRoomIDSubject.asCurrentValuePublisher()
+        elementCallService.incomingCallIdentityPublisher = incomingCallIdentitySubject.asCurrentValuePublisher()
 
         let flowParameters = CommonFlowParameters(userSession: UserSessionMock(.init(clientProxy: clientProxy)),
                                                   bugReportService: BugReportServiceMock(.init()),
@@ -163,7 +165,7 @@ struct UserSessionFlowCoordinatorTests {
     mutating func incomingCallOverlayIsShownEvenWhenViewingTheSameRoom() async throws {
         try await process(route: .room(roomID: "1", via: []), expectedChatsState: .roomList(detailState: .room(roomID: "1")))
 
-        incomingCallRoomIDSubject.send("1")
+        sendIncomingCall(roomID: "1")
         staticRoomListSubject.send([incomingCallRoomSummary(id: "1")])
         try await Task.sleep(for: .milliseconds(100))
 
@@ -172,7 +174,7 @@ struct UserSessionFlowCoordinatorTests {
 
     @Test
     mutating func incomingCallOverlayStaysVisibleWhenSameRoomBecomesOngoingBeforeAccepting() async throws {
-        incomingCallRoomIDSubject.send("1")
+        sendIncomingCall(roomID: "1")
         staticRoomListSubject.send([incomingCallRoomSummary(id: "1")])
         try await Task.sleep(for: .milliseconds(100))
         #expect(tabCoordinator?.overlayCoordinator is IncomingCallScreenCoordinator)
@@ -221,6 +223,35 @@ struct UserSessionFlowCoordinatorTests {
     }
 
     @Test
+    mutating func acceptedReplacementInSameRoomUsesItsExactIdentity() async throws {
+        let firstIdentity = ElementCallIncomingCallIdentity(callKitID: UUID(), roomID: "1", isVoiceCall: true)
+        let replacementIdentity = ElementCallIncomingCallIdentity(callKitID: UUID(), roomID: "1", isVoiceCall: true)
+        let firstCoordinator = ControllableCallScreenCoordinator()
+        let replacementCoordinator = ControllableCallScreenCoordinator()
+        callScreenCoordinatorFactory.overrideClosure = { parameters in
+            parameters.configuration.incomingCallIdentity == firstIdentity ? firstCoordinator : replacementCoordinator
+        }
+
+        elementCallService.acceptedIncomingCallIdentity = firstIdentity
+        userSessionFlowCoordinator.handleAppRoute(.call(roomID: "1",
+                                                        isVoiceCall: true,
+                                                        incomingCallIdentity: firstIdentity),
+                                                  animated: false)
+        try await waitUntil { tabCoordinator?.overlayCoordinator === firstCoordinator }
+
+        elementCallService.acceptedIncomingCallIdentity = replacementIdentity
+        userSessionFlowCoordinator.handleAppRoute(.call(roomID: "1",
+                                                        isVoiceCall: true,
+                                                        incomingCallIdentity: replacementIdentity),
+                                                  animated: false)
+        try await waitUntil { tabCoordinator?.overlayCoordinator === replacementCoordinator }
+
+        #expect(callScreenCoordinatorFactory.makeCount == 2)
+        #expect(firstCoordinator.stopCallsCount == 1)
+        #expect(replacementCoordinator.stopCallsCount == 0)
+    }
+
+    @Test
     mutating func supersededCallCoordinatorActionsCannotAffectReplacement() async throws {
         let firstCoordinator = ControllableCallScreenCoordinator()
         callScreenCoordinatorFactory.override = firstCoordinator
@@ -244,6 +275,29 @@ struct UserSessionFlowCoordinatorTests {
 
         firstCoordinator.send(.dismiss)
         #expect(tabCoordinator?.overlayCoordinator === replacementCoordinator)
+        #expect(replacementCoordinator.stopCallsCount == 0)
+    }
+
+    @Test
+    mutating func replacementCallKeepsExistingOverlayUntilItsTeardownCompletes() async throws {
+        let firstCoordinator = ControllableCallScreenCoordinator()
+        firstCoordinator.suspendsTeardown = true
+        callScreenCoordinatorFactory.override = firstCoordinator
+        userSessionFlowCoordinator.handleAppRoute(.call(roomID: "1", isVoiceCall: true), animated: false)
+        try await waitUntil { tabCoordinator?.overlayCoordinator === firstCoordinator }
+
+        let replacementCoordinator = ControllableCallScreenCoordinator()
+        callScreenCoordinatorFactory.override = replacementCoordinator
+        userSessionFlowCoordinator.handleAppRoute(.call(roomID: "2", isVoiceCall: true), animated: false)
+        try await waitUntil { firstCoordinator.hasPendingTeardown }
+
+        #expect(tabCoordinator?.overlayCoordinator === firstCoordinator)
+        #expect(callScreenCoordinatorFactory.makeCount == 1)
+
+        firstCoordinator.completeTeardown()
+        try await waitUntil { tabCoordinator?.overlayCoordinator === replacementCoordinator }
+
+        #expect(firstCoordinator.stopCallsCount == 1)
         #expect(replacementCoordinator.stopCallsCount == 0)
     }
 
@@ -277,6 +331,41 @@ struct UserSessionFlowCoordinatorTests {
         #expect(callScreenCoordinatorFactory.makeCount == 1)
         #expect(delayedCoordinator.stopCallsCount == 0)
         #expect(currentCoordinator.stopCallsCount == 0)
+    }
+
+    @Test
+    mutating func delayedAcceptedCallLookupCannotReplaceNewerIncomingPushOverlay() async throws {
+        let defaultRoomLookup = try #require(clientProxy.roomForIdentifierClosure)
+        let delayedLookup = SuspendedCallRoomLookup()
+        clientProxy.roomForIdentifierClosure = { roomID in
+            if roomID == "1" {
+                await delayedLookup.wait()
+            }
+            return await defaultRoomLookup(roomID)
+        }
+
+        let acceptedIdentity = ElementCallIncomingCallIdentity(callKitID: UUID(), roomID: "1", isVoiceCall: true)
+        elementCallService.acceptedIncomingCallIdentity = acceptedIdentity
+        userSessionFlowCoordinator.handleAppRoute(.call(roomID: "1",
+                                                        isVoiceCall: true,
+                                                        incomingCallIdentity: acceptedIdentity),
+                                                  animated: false)
+        try await waitUntil { delayedLookup.hasRequest }
+
+        elementCallService.acceptedIncomingCallIdentity = nil
+        let replacementIdentity = ElementCallIncomingCallIdentity(callKitID: UUID(), roomID: "2", isVoiceCall: true)
+        incomingCallRoomIDSubject.send("2")
+        incomingCallIdentitySubject.send(replacementIdentity)
+        staticRoomListSubject.send([incomingCallRoomSummary(id: "2")])
+        try await waitUntil { tabCoordinator?.overlayCoordinator is IncomingCallScreenCoordinator }
+        let replacementOverlay = tabCoordinator?.overlayCoordinator
+
+        delayedLookup.resume()
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(tabCoordinator?.overlayCoordinator === replacementOverlay)
+        #expect(callScreenCoordinatorFactory.makeCount == 0)
+        #expect(incomingCallIdentitySubject.value == replacementIdentity)
     }
 
     @Test
@@ -544,6 +633,11 @@ struct UserSessionFlowCoordinatorTests {
                     isTombstoned: false)
     }
 
+    private func sendIncomingCall(roomID: String) {
+        incomingCallRoomIDSubject.send(roomID)
+        incomingCallIdentitySubject.send(.init(callKitID: UUID(), roomID: roomID, isVoiceCall: true))
+    }
+
     private func makeCommonFlowParameters(userSession: UserSessionProtocol,
                                           appSettings: AppSettings) -> CommonFlowParameters {
         CommonFlowParameters(userSession: userSession,
@@ -614,8 +708,11 @@ private final class SuspendedCallRoomLookup {
 private final class ControllableCallScreenCoordinator: CallScreenCoordinatorProtocol {
     private let actionsSubject = PassthroughSubject<CallScreenCoordinatorAction, Never>()
     private var pictureInPictureRequestContinuation: CheckedContinuation<Result<Void, CallScreenError>, Never>?
+    private var teardownContinuation: CheckedContinuation<Void, Never>?
+    private var hasStopped = false
 
     private(set) var stopCallsCount = 0
+    var suspendsTeardown = false
 
     var actions: AnyPublisher<CallScreenCoordinatorAction, Never> {
         actionsSubject.eraseToAnyPublisher()
@@ -625,6 +722,10 @@ private final class ControllableCallScreenCoordinator: CallScreenCoordinatorProt
         pictureInPictureRequestContinuation != nil
     }
 
+    var hasPendingTeardown: Bool {
+        teardownContinuation != nil
+    }
+
     func requestPictureInPicture() async -> Result<Void, CallScreenError> {
         await withCheckedContinuation { pictureInPictureRequestContinuation = $0 }
     }
@@ -632,7 +733,15 @@ private final class ControllableCallScreenCoordinator: CallScreenCoordinatorProt
     func stopPictureInPicture() { }
 
     func stop() {
+        guard !hasStopped else { return }
+        hasStopped = true
         stopCallsCount += 1
+    }
+
+    func stopAndWaitForTeardown() async {
+        stop()
+        guard suspendsTeardown else { return }
+        await withCheckedContinuation { teardownContinuation = $0 }
     }
 
     func send(_ action: CallScreenCoordinatorAction) {
@@ -642,5 +751,10 @@ private final class ControllableCallScreenCoordinator: CallScreenCoordinatorProt
     func completePictureInPictureRequest(with result: Result<Void, CallScreenError>) {
         pictureInPictureRequestContinuation?.resume(returning: result)
         pictureInPictureRequestContinuation = nil
+    }
+
+    func completeTeardown() {
+        teardownContinuation?.resume()
+        teardownContinuation = nil
     }
 }

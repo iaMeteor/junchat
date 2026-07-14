@@ -21,5 +21,7 @@ extension ElementCallServiceMock {
         underlyingActions = PassthroughSubject().eraseToAnyPublisher()
         underlyingOngoingCallRoomIDPublisher = .init(.init(configuration.ongoingCallRoomID))
         underlyingIncomingCallRoomIDPublisher = .init(.init(configuration.incomingCallRoomID))
+        underlyingIncomingCallIdentityPublisher = .init(.init(nil))
+        acceptedIncomingCallIdentity = nil
     }
 }

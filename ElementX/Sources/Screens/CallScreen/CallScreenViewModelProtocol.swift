@@ -16,4 +16,5 @@ protocol CallScreenViewModelProtocol {
     func requestPictureInPicture() async -> Result<Void, CallScreenError>
     func stopPictureInPicture()
     func stop()
+    func stopAndWaitForTeardown() async
 }

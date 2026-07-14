@@ -299,23 +299,26 @@ struct CallScreenJunchatTests {
 
     @Test
     @MainActor
-    func endCallWaitsForJavaScriptHangupBeforeTearingDown() async {
+    func endCallWaitsForElementCallHangupAcknowledgementBeforeTearingDown() async throws {
         let fixture = makeLifecycleViewModel()
         let viewModel = fixture.viewModel
         let widgetDriver = fixture.widgetDriver
         let elementCallService = fixture.elementCallService
         var events = [String]()
-        var hangupContinuation: CheckedContinuation<Any, Error>?
+        var hangupJavaScript: String?
         var cancellables = Set<AnyCancellable>()
 
         widgetDriver.stopClosure = { events.append("widgetStopped") }
+        widgetDriver.handleMessageClosure = { _ in
+            events.append("acknowledgementForwarded")
+            return .success(true)
+        }
         elementCallService.tearDownCallSessionGenerationClosure = { _ in events.append("serviceTornDown") }
         viewModel.context.javaScriptEvaluator = { script in
             guard script.contains(#""action":"im.vector.hangup""#) else { return "ignored" }
-            events.append("hangupStarted")
-            let result = try await withCheckedThrowingContinuation { hangupContinuation = $0 }
-            events.append("hangupFinished")
-            return result
+            events.append("hangupEvaluated")
+            hangupJavaScript = script
+            return "scheduled"
         }
         viewModel.actions.sink { action in
             if case .dismiss = action {
@@ -325,32 +328,36 @@ struct CallScreenJunchatTests {
         .store(in: &cancellables)
 
         viewModel.process(viewAction: .endCall)
-        await waitUntil { hangupContinuation != nil }
+        await waitUntil { hangupJavaScript != nil }
 
         #expect(widgetDriver.stopCallsCount == 0)
         #expect(elementCallService.tearDownCallSessionGenerationCallsCount == 0)
         #expect(!events.contains("dismissed"))
 
-        hangupContinuation?.resume(returning: "ok")
+        let request = try hangupRequest(from: #require(hangupJavaScript))
+        #expect(request["api"] as? String == "toWidget")
+        let requestID = try #require(request["requestId"] as? String)
+        viewModel.process(viewAction: .widgetAction(message: hangupAcknowledgement(requestID: requestID)))
         await waitUntil { events.contains("dismissed") }
 
-        #expect(events == ["hangupStarted", "hangupFinished", "widgetStopped", "serviceTornDown", "dismissed"])
+        #expect(events == ["hangupEvaluated", "acknowledgementForwarded", "widgetStopped", "serviceTornDown", "dismissed"])
     }
 
     @Test
     @MainActor
-    func lateJavaScriptHangupCompletionAfterTimeoutDoesNotRepeatTeardown() async throws {
+    func missingElementCallHangupAcknowledgementTimesOutWithoutRepeatingTeardown() async throws {
         let fixture = makeLifecycleViewModel(hangupDeliveryTimeout: .milliseconds(20))
         let viewModel = fixture.viewModel
         let widgetDriver = fixture.widgetDriver
         let elementCallService = fixture.elementCallService
-        var hangupContinuation: CheckedContinuation<Any, Error>?
+        var hangupJavaScript: String?
         var dismissCount = 0
         var cancellables = Set<AnyCancellable>()
 
         viewModel.context.javaScriptEvaluator = { script in
             guard script.contains(#""action":"im.vector.hangup""#) else { return "ignored" }
-            return try await withCheckedThrowingContinuation { hangupContinuation = $0 }
+            hangupJavaScript = script
+            return "scheduled"
         }
         viewModel.actions.sink { action in
             if case .dismiss = action {
@@ -360,7 +367,7 @@ struct CallScreenJunchatTests {
         .store(in: &cancellables)
 
         viewModel.process(viewAction: .endCall)
-        await waitUntil { hangupContinuation != nil }
+        await waitUntil { hangupJavaScript != nil }
 
         #expect(widgetDriver.stopCallsCount == 0)
         #expect(elementCallService.tearDownCallSessionGenerationCallsCount == 0)
@@ -370,12 +377,60 @@ struct CallScreenJunchatTests {
         #expect(elementCallService.tearDownCallSessionGenerationCallsCount == 1)
         #expect(dismissCount == 1)
 
-        hangupContinuation?.resume(returning: "late")
+        let requestID = try hangupRequestID(from: #require(hangupJavaScript))
+        viewModel.process(viewAction: .widgetAction(message: hangupAcknowledgement(requestID: requestID)))
         try await Task.sleep(for: .milliseconds(50))
 
         #expect(widgetDriver.stopCallsCount == 1)
         #expect(elementCallService.tearDownCallSessionGenerationCallsCount == 1)
         #expect(dismissCount == 1)
+    }
+
+    @Test
+    @MainActor
+    func rejectedHangupAcknowledgementForwardingFallsBackToTeardown() async throws {
+        let fixture = makeLifecycleViewModel()
+        let viewModel = fixture.viewModel
+        let widgetDriver = fixture.widgetDriver
+        let elementCallService = fixture.elementCallService
+        var hangupJavaScript: String?
+
+        widgetDriver.handleMessageReturnValue = .failure(.driverNotSetup)
+        viewModel.context.javaScriptEvaluator = { script in
+            guard script.contains(#""action":"im.vector.hangup""#) else { return "ignored" }
+            hangupJavaScript = script
+            return "scheduled"
+        }
+
+        viewModel.process(viewAction: .endCall)
+        await waitUntil { hangupJavaScript != nil }
+        let requestID = try hangupRequestID(from: #require(hangupJavaScript))
+        viewModel.process(viewAction: .widgetAction(message: hangupAcknowledgement(requestID: requestID)))
+        await waitUntil { elementCallService.tearDownCallSessionGenerationCallsCount == 1 }
+
+        #expect(widgetDriver.handleMessageCallsCount == 1)
+        #expect(widgetDriver.stopCallsCount == 1)
+        #expect(elementCallService.tearDownCallSessionGenerationCallsCount == 1)
+    }
+
+    @Test
+    @MainActor
+    func failedHangupInjectionFallsBackToBoundedTeardown() async {
+        let fixture = makeLifecycleViewModel()
+        let viewModel = fixture.viewModel
+        let widgetDriver = fixture.widgetDriver
+        let elementCallService = fixture.elementCallService
+
+        viewModel.context.javaScriptEvaluator = { script in
+            guard script.contains(#""action":"im.vector.hangup""#) else { return "ignored" }
+            throw CallScreenJunchatTestError.javaScriptEvaluationFailed
+        }
+
+        viewModel.process(viewAction: .endCall)
+        await waitUntil { elementCallService.tearDownCallSessionGenerationCallsCount == 1 }
+
+        #expect(widgetDriver.stopCallsCount == 1)
+        #expect(elementCallService.tearDownCallSessionGenerationCallsCount == 1)
     }
 
     @Test
@@ -419,7 +474,7 @@ struct CallScreenJunchatTests {
         try await Task.sleep(for: .milliseconds(50))
 
         #expect(elementCallService.registerCallSessionGenerationCallsCount == 1)
-        #expect(elementCallService.setupCallSessionRoomIDRoomDisplayNameGenerationCallsCount == 0)
+        #expect(elementCallService.setupCallSessionRoomIDRoomDisplayNameIncomingCallIdentityGenerationCallsCount == 0)
         #expect(elementCallService.tearDownCallSessionGenerationCallsCount == 1)
         #expect(elementCallService.tearDownCallSessionGenerationReceivedGeneration == elementCallService.registerCallSessionGenerationReceivedGeneration)
         #expect(viewModel.context.viewState.url == nil)
@@ -934,6 +989,21 @@ struct CallScreenJunchatTests {
         return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 
+    private func hangupRequestID(from javaScript: String) throws -> String {
+        let object = try hangupRequest(from: javaScript)
+        return try #require(object["requestId"] as? String)
+    }
+
+    private func hangupRequest(from javaScript: String) throws -> [String: Any] {
+        let jsonStart = try #require(javaScript.firstIndex(of: "{"))
+        let jsonEnd = try #require(javaScript.lastIndex(of: "}"))
+        return try jsonObject(String(javaScript[jsonStart...jsonEnd]))
+    }
+
+    private func hangupAcknowledgement(requestID: String) -> String {
+        #"{"api":"toWidget","widgetId":"widget","requestId":"\#(requestID)","action":"im.vector.hangup","response":{}}"#
+    }
+
     @MainActor
     private struct LifecycleViewModelFixture {
         let viewModel: CallScreenViewModel
@@ -984,6 +1054,10 @@ struct CallScreenJunchatTests {
 
         #expect(condition(), sourceLocation: sourceLocation)
     }
+}
+
+private enum CallScreenJunchatTestError: Error {
+    case javaScriptEvaluationFailed
 }
 
 struct RoomScreenCallInvitationTests {

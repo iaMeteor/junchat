@@ -130,6 +130,27 @@ extension CallMediaCoordinatorProtocol {
 }
 
 @MainActor
+final class CallMediaSessionOwnership {
+    static let shared = CallMediaSessionOwnership()
+
+    private var owningGeneration: ElementCallSessionGeneration?
+
+    func claim(_ generation: ElementCallSessionGeneration) {
+        owningGeneration = generation
+    }
+
+    func isOwner(_ generation: ElementCallSessionGeneration) -> Bool {
+        owningGeneration == generation
+    }
+
+    func release(_ generation: ElementCallSessionGeneration) -> Bool {
+        guard owningGeneration == generation else { return false }
+        owningGeneration = nil
+        return true
+    }
+}
+
+@MainActor
 final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
     private struct PictureInPictureRecoveryState {
         let id = UUID()
@@ -154,6 +175,8 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
     private let pictureInPictureMaxAttempts: Int
     private let pictureInPictureMaxTransitionWaits: Int
     private let pictureInPictureMaxReadinessWaits: Int
+    private let sessionGeneration: ElementCallSessionGeneration
+    private let sessionOwnership: CallMediaSessionOwnership
 
     private(set) var selectedOutput = CallAudioOutputSelection.nativeEarpiece
     private(set) var currentAudioEnabled = true
@@ -184,7 +207,9 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
          pictureInPictureRetryDelay: Duration = .milliseconds(350),
          pictureInPictureMaxAttempts: Int = 6,
          pictureInPictureMaxTransitionWaits: Int = 30,
-         pictureInPictureMaxReadinessWaits: Int = 30) {
+         pictureInPictureMaxReadinessWaits: Int = 30,
+         sessionGeneration: ElementCallSessionGeneration = .init(),
+         sessionOwnership: CallMediaSessionOwnership? = nil) {
         self.voiceOnly = voiceOnly
         self.playConnectedTone = playConnectedTone
         self.audioSessionController = audioSessionController
@@ -198,11 +223,15 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
         self.pictureInPictureMaxAttempts = pictureInPictureMaxAttempts
         self.pictureInPictureMaxTransitionWaits = pictureInPictureMaxTransitionWaits
         self.pictureInPictureMaxReadinessWaits = max(1, pictureInPictureMaxReadinessWaits)
+        self.sessionGeneration = sessionGeneration
+        let sessionOwnership = sessionOwnership ?? CallMediaSessionOwnership()
+        self.sessionOwnership = sessionOwnership
+        sessionOwnership.claim(sessionGeneration)
     }
 
     func startLifecycleHandling(eventHandler: @escaping CallMediaLifecycleEventHandler,
                                 pictureInPictureAttemptHandler: @escaping CallPictureInPictureAttemptHandler) {
-        guard !hasStopped else { return }
+        guard !hasStopped, ownsSharedMediaState else { return }
 
         lifecycleEventHandler = eventHandler
         self.pictureInPictureAttemptHandler = pictureInPictureAttemptHandler
@@ -213,7 +242,7 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
     }
 
     func prepareForCall() {
-        guard !hasStopped else { return }
+        guard !hasStopped, ownsSharedMediaState else { return }
 
         if playConnectedTone {
             ringbackTonePlayer.start()
@@ -223,14 +252,14 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
     }
 
     func mediaCapturePermissionGranted() {
-        guard !hasStopped else { return }
+        guard !hasStopped, ownsSharedMediaState else { return }
 
         audioSessionController.activateForCall()
         restoreSelectedOutput()
     }
 
     func selectOutput(_ output: CallAudioOutputSelection) {
-        guard !hasStopped else { return }
+        guard !hasStopped, ownsSharedMediaState else { return }
 
         selectedOutput = output
         restoreSelectedOutput()
@@ -241,14 +270,14 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
     }
 
     func recoverAfterLifecycleEvent() {
-        guard !hasStopped else { return }
+        guard !hasStopped, ownsSharedMediaState else { return }
 
         audioSessionController.activateForCall()
         restoreSelectedOutput()
     }
 
     func restoreSelectedOutput() {
-        guard !hasStopped else { return }
+        guard !hasStopped, ownsSharedMediaState else { return }
 
         if voiceOnly {
             switch selectedOutput {
@@ -264,6 +293,7 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
     }
 
     func handleInterruption(_ notification: Notification) -> Bool {
+        guard !hasStopped, ownsSharedMediaState else { return false }
         audioSessionController.handleInterruption(notification: notification)
 
         guard let rawType = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
@@ -275,12 +305,13 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
     }
 
     func handleMediaServicesReset() {
+        guard !hasStopped, ownsSharedMediaState else { return }
         audioSessionController.handleMediaServicesReset()
     }
 
     @discardableResult
     func remoteMediaConnected() -> Bool {
-        guard !hasStopped, !hasRemoteMediaConnected else { return false }
+        guard !hasStopped, ownsSharedMediaState, !hasRemoteMediaConnected else { return false }
 
         hasRemoteMediaConnected = true
         restoreSelectedOutput()
@@ -293,14 +324,14 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
     }
 
     func schedulePictureInPictureRecovery(reason: CallMediaRecoveryReason, forceFirstAttempt: Bool) {
-        guard !hasStopped, allowsPictureInPicture, pictureInPictureAttemptHandler != nil else { return }
+        guard !hasStopped, ownsSharedMediaState, allowsPictureInPicture, pictureInPictureAttemptHandler != nil else { return }
 
         pictureInPictureRecoveryState = .init(reason: reason, forceFirstAttempt: forceFirstAttempt)
         startPictureInPictureRecoveryTask()
     }
 
     func pictureInPictureReadinessChanged() {
-        guard !hasStopped, allowsPictureInPicture else { return }
+        guard !hasStopped, ownsSharedMediaState, allowsPictureInPicture else { return }
 
         pictureInPictureReadinessVersion &+= 1
         guard var recoveryState = pictureInPictureRecoveryState,
@@ -329,12 +360,15 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
         pictureInPictureRecoveryState = nil
         lifecycleEventHandler = nil
         pictureInPictureAttemptHandler = nil
-        audioSessionController.deactivateAfterCall()
         ringbackTonePlayer.stop()
-        setProximityMonitoringEnabled(false)
+        if sessionOwnership.release(sessionGeneration) {
+            audioSessionController.deactivateAfterCall()
+            setProximityMonitoringEnabled(false)
+        }
     }
 
     private func applyProximityMonitoringPolicy() {
+        guard ownsSharedMediaState else { return }
         setProximityMonitoringEnabled(CallAudioRoutePolicy.shouldEnableProximityMonitoring(voiceOnly: voiceOnly,
                                                                                            selectedOutput: selectedOutput,
                                                                                            remoteMediaConnected: hasRemoteMediaConnected))
@@ -381,22 +415,22 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
     }
 
     private func emitAudioRouteChanged() {
-        guard !hasStopped else { return }
+        guard !hasStopped, ownsSharedMediaState else { return }
 
         routeRecoveryTask?.cancel()
         routeRecoveryTask = Task { @MainActor [weak self] in
-            guard let self, !hasStopped, let lifecycleEventHandler else { return }
+            guard let self, !hasStopped, ownsSharedMediaState, let lifecycleEventHandler else { return }
             await lifecycleEventHandler(.audioRouteChanged)
         }
     }
 
     private func recoverAfterLifecycleEvent(reason: CallMediaRecoveryReason) {
-        guard !hasStopped else { return }
+        guard !hasStopped, ownsSharedMediaState else { return }
 
         recoverAfterLifecycleEvent()
         lifecycleRecoveryTask?.cancel()
         lifecycleRecoveryTask = Task { @MainActor [weak self] in
-            guard let self, !hasStopped else { return }
+            guard let self, !hasStopped, ownsSharedMediaState else { return }
             if let lifecycleEventHandler {
                 await lifecycleEventHandler(.lifecycleRecovery(reason))
             }
@@ -429,6 +463,7 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
         while true {
             guard !Task.isCancelled,
                   !hasStopped,
+                  ownsSharedMediaState,
                   var recoveryState = pictureInPictureRecoveryState,
                   recoveryState.id == recoveryID else {
                 return
@@ -445,6 +480,7 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
                                                                     attempt: recoveryState.attempt))
             guard !Task.isCancelled,
                   !hasStopped,
+                  ownsSharedMediaState,
                   pictureInPictureRecoveryState?.id == recoveryID else {
                 return
             }
@@ -494,5 +530,9 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
             pictureInPictureRecoveryState = recoveryState
             try? await Task.sleep(for: pictureInPictureRetryDelay)
         }
+    }
+
+    private var ownsSharedMediaState: Bool {
+        sessionOwnership.isOwner(sessionGeneration)
     }
 }

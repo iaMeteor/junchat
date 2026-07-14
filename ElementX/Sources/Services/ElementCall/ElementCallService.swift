@@ -33,6 +33,10 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
         let roomID: String
         let rtcNotificationID: String?
         let isVoiceCall: Bool
+
+        var incomingCallIdentity: ElementCallIncomingCallIdentity {
+            .init(callKitID: callKitID, roomID: roomID, isVoiceCall: isVoiceCall)
+        }
     }
 
     private struct IncomingCallIdentity: Equatable {
@@ -87,6 +91,7 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
             answerCallTask = nil
             MXLog.info("[JunchatCall] incomingCallID changed present=\(incomingCallID != nil) voice=\(incomingCallID?.isVoiceCall.description ?? "nil")")
             incomingCallRoomIDSubject.send(incomingCallID?.roomID)
+            incomingCallIdentitySubject.send(incomingCallID?.incomingCallIdentity)
             restartIncomingCallObservation()
         }
     }
@@ -111,6 +116,15 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
     let incomingCallRoomIDSubject = CurrentValueSubject<String?, Never>(nil)
     var incomingCallRoomIDPublisher: CurrentValuePublisher<String?, Never> {
         incomingCallRoomIDSubject.asCurrentValuePublisher()
+    }
+
+    let incomingCallIdentitySubject = CurrentValueSubject<ElementCallIncomingCallIdentity?, Never>(nil)
+    var incomingCallIdentityPublisher: CurrentValuePublisher<ElementCallIncomingCallIdentity?, Never> {
+        incomingCallIdentitySubject.asCurrentValuePublisher()
+    }
+
+    var acceptedIncomingCallIdentity: ElementCallIncomingCallIdentity? {
+        acceptedIncomingCallID?.incomingCallIdentity
     }
 
     private let actionsSubject: PassthroughSubject<ElementCallServiceAction, Never> = .init()
@@ -178,13 +192,29 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
         latestCallSessionGeneration = generation
     }
 
-    func setupCallSession(roomID: String, roomDisplayName: String, generation: ElementCallSessionGeneration) async {
+    func setupCallSession(roomID: String,
+                          roomDisplayName: String,
+                          incomingCallIdentity: ElementCallIncomingCallIdentity?,
+                          generation: ElementCallSessionGeneration) async {
         guard latestCallSessionGeneration == generation else {
             MXLog.info("[JunchatCall] ignoring superseded call session setup")
             return
         }
 
-        MXLog.info("[JunchatCall] setupCallSession hasIncoming=\(incomingCallID?.roomID == roomID) hasAccepted=\(acceptedIncomingCallID?.roomID == roomID) hasOngoing=\(ongoingCallID != nil)")
+        let callID: CallID
+        if let incomingCallIdentity {
+            guard let acceptedIncomingCallID,
+                  acceptedIncomingCallID.incomingCallIdentity == incomingCallIdentity,
+                  acceptedIncomingCallID.roomID == roomID else {
+                MXLog.info("[JunchatCall] ignoring setup for a superseded accepted call")
+                return
+            }
+            callID = acceptedIncomingCallID
+        } else {
+            callID = CallID(callKitID: UUID(), roomID: roomID, rtcNotificationID: nil, isVoiceCall: false)
+        }
+
+        MXLog.info("[JunchatCall] setupCallSession accepted=\(incomingCallIdentity != nil) hasOngoing=\(ongoingCallID != nil)")
 
         // Drop any ongoing calls when starting a new one
         if ongoingCallID != nil {
@@ -192,30 +222,7 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
             tearDownOngoingCallSession(sendEndCallAction: true)
         }
 
-        // If this starting from a ring reuse those identifiers
-        // Make sure the roomID matches
-        let isAnsweringIncomingCall = incomingCallID?.roomID == roomID
-        let acceptedCallID = acceptedIncomingCallID?.roomID == roomID ? acceptedIncomingCallID : nil
-        let callID = if let incomingCallID, incomingCallID.roomID == roomID {
-            incomingCallID
-        } else if let acceptedCallID {
-            acceptedCallID
-        } else {
-            CallID(callKitID: UUID(), roomID: roomID, rtcNotificationID: nil, isVoiceCall: false)
-        }
-
-        if isAnsweringIncomingCall {
-            endUnansweredCallTask?.cancel()
-            endUnansweredCallTask = nil
-            declineListenerHandle?.cancel()
-            declineListenerHandle = nil
-            MXLog.info("[JunchatCall] ending CallKit incoming ring for accepted call")
-            reportedIncomingCallKitIDs.remove(callID.callKitID)
-            callProvider.reportCall(with: callID.callKitID, endedAt: nil, reason: .remoteEnded)
-        }
-
-        incomingCallID = nil
-        if acceptedCallID != nil {
+        if incomingCallIdentity != nil {
             acceptedIncomingCallID = nil
         }
         guard latestCallSessionGeneration == generation else {
@@ -260,18 +267,29 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
         tearDownOngoingCallSession(sendEndCallAction: true)
     }
 
-    func acceptIncomingCall(roomID: String, isVoiceCall: Bool) async {
-        guard let incomingCallID else {
+    func acceptIncomingCall(roomID: String,
+                            isVoiceCall: Bool,
+                            incomingCallIdentity: ElementCallIncomingCallIdentity?) async -> ElementCallIncomingCallIdentity? {
+        guard let incomingCallIdentity else {
+            guard incomingCallID == nil else {
+                MXLog.info("[JunchatCall] refusing foreground accept while a push-backed call is tracked")
+                return nil
+            }
+
             MXLog.info("[JunchatCall] accepting foreground synced call voice=\(isVoiceCall)")
-            acceptedIncomingCallID = CallID(callKitID: UUID(), roomID: roomID, rtcNotificationID: nil, isVoiceCall: isVoiceCall)
-            return
+            let acceptedCallID = CallID(callKitID: UUID(), roomID: roomID, rtcNotificationID: nil, isVoiceCall: isVoiceCall)
+            acceptedIncomingCallID = acceptedCallID
+            return acceptedCallID.incomingCallIdentity
         }
 
-        guard incomingCallID.roomID == roomID else {
-            MXLog.info("Incoming call room does not match accept request")
-            return
+        guard let trackedIncomingCallIdentity = currentIncomingCallIdentity,
+              trackedIncomingCallIdentity.callID.incomingCallIdentity == incomingCallIdentity,
+              trackedIncomingCallIdentity.callID.roomID == roomID else {
+            MXLog.info("Incoming call identity does not match accept request")
+            return nil
         }
 
+        let incomingCallID = trackedIncomingCallIdentity.callID
         endUnansweredCallTask?.cancel()
         endUnansweredCallTask = nil
         declineListenerHandle?.cancel()
@@ -280,7 +298,8 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
         MXLog.info("[JunchatCall] acceptIncomingCall stopping CallKit ring")
         reportedIncomingCallKitIDs.remove(incomingCallID.callKitID)
         callProvider.reportCall(with: incomingCallID.callKitID, endedAt: nil, reason: .remoteEnded)
-        self.incomingCallID = nil
+        clearIncomingCall(ifMatches: trackedIncomingCallIdentity)
+        return incomingCallID.incomingCallIdentity
     }
 
     func declineIncomingCall(roomID: String) async {
@@ -297,6 +316,22 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
 
         await sendDeclineCallEvent(incomingCallID)
         reportEndedCall(incomingCallIdentity: incomingCallIdentity, reason: .declinedElsewhere)
+    }
+
+    func declineIncomingCall(incomingCallIdentity: ElementCallIncomingCallIdentity) async {
+        guard let trackedIncomingCallIdentity = currentIncomingCallIdentity,
+              trackedIncomingCallIdentity.callID.incomingCallIdentity == incomingCallIdentity else {
+            MXLog.info("Incoming call identity does not match decline request")
+            return
+        }
+
+        await sendDeclineCallEvent(trackedIncomingCallIdentity.callID)
+        reportEndedCall(incomingCallIdentity: trackedIncomingCallIdentity, reason: .declinedElsewhere)
+    }
+
+    func clearAcceptedIncomingCall(incomingCallIdentity: ElementCallIncomingCallIdentity) {
+        guard acceptedIncomingCallID?.incomingCallIdentity == incomingCallIdentity else { return }
+        acceptedIncomingCallID = nil
     }
 
     func setAudioEnabled(_ enabled: Bool, roomID: String) {
@@ -338,6 +373,7 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
                             roomID: details.roomID,
                             rtcNotificationID: details.rtcNotificationID,
                             isVoiceCall: details.isVoiceCall)
+        acceptedIncomingCallID = nil
         incomingCallID = callID
         guard let incomingCallIdentity = currentIncomingCallIdentity else {
             completion()
@@ -381,7 +417,7 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
                 if let error {
                     MXLog.error("Failed reporting new incoming call: \(CallDiagnostics.errorSummary(error))")
                     reportedIncomingCallKitIDs.remove(callID.callKitID)
-                    incomingCallID = nil
+                    clearIncomingCall(ifMatches: incomingCallIdentity)
                     return
                 }
 
@@ -445,14 +481,15 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
                 return
             }
 
-            // Then end the and call rely on `setupCallSession` to create a new one
+            // Then end the call and rely on `setupCallSession` to create a new one.
+            acceptedIncomingCallID = incomingCallID
             reportedIncomingCallKitIDs.remove(incomingCallID.callKitID)
             callProvider.reportCall(with: incomingCallID.callKitID, endedAt: nil, reason: .remoteEnded)
 
-            actionsSubject.send(.startCall(roomID: incomingCallID.roomID, isVoiceCall: incomingCallID.isVoiceCall))
-            endUnansweredCallTask?.cancel()
-            endUnansweredCallTask = nil
-            answerCallTask = nil
+            clearIncomingCall(ifMatches: incomingCallIdentity)
+            actionsSubject.send(.startCall(roomID: incomingCallID.roomID,
+                                           isVoiceCall: incomingCallID.isVoiceCall,
+                                           incomingCallIdentity: incomingCallID.incomingCallIdentity))
         }
     }
 
@@ -490,7 +527,7 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
                 return
             }
 
-            incomingCallID = nil
+            clearIncomingCall(ifMatches: incomingCallIdentity)
             reportedIncomingCallKitIDs.remove(incomingCallIdentity.callID.callKitID)
             Task {
                 await sendDeclineCallEvent(incomingCallIdentity.callID)
@@ -583,11 +620,6 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
         MXLog.info("[JunchatCall] tearDownCallSession sendEndCallAction=\(sendEndCallAction) hasOngoing=\(ongoingCallID != nil) hasIncoming=\(incomingCallID != nil)")
 
         tearDownOngoingCallSession(sendEndCallAction: sendEndCallAction)
-        if let incomingCallID {
-            reportedIncomingCallKitIDs.remove(incomingCallID.callKitID)
-        }
-        incomingCallID = nil
-        acceptedIncomingCallID = nil
     }
 
     private func tearDownOngoingCallSession(sendEndCallAction: Bool) {
@@ -736,6 +768,15 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
         MXLog.info("[JunchatCall] reportEndedCall reason=\(reason.rawValue)")
         reportedIncomingCallKitIDs.remove(incomingCallIdentity.callID.callKitID)
         callProvider.reportCall(with: incomingCallIdentity.callID.callKitID, endedAt: nil, reason: reason)
+        clearIncomingCall(ifMatches: incomingCallIdentity)
+    }
+
+    private func clearIncomingCall(ifMatches incomingCallIdentity: IncomingCallIdentity) {
+        guard isCurrentIncomingCall(incomingCallIdentity) else {
+            MXLog.info("[JunchatCall] ignoring clear for superseded incoming call")
+            return
+        }
+
         incomingCallID = nil
     }
 }

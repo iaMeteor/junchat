@@ -33,6 +33,7 @@ protocol CallScreenCoordinatorProtocol: CoordinatorProtocol {
 
     func requestPictureInPicture() async -> Result<Void, CallScreenError>
     func stopPictureInPicture()
+    func stopAndWaitForTeardown() async
 }
 
 final class CallScreenCoordinator: CallScreenCoordinatorProtocol {
@@ -71,6 +72,10 @@ final class CallScreenCoordinator: CallScreenCoordinatorProtocol {
     
     func stop() {
         viewModel.stop()
+    }
+
+    func stopAndWaitForTeardown() async {
+        await viewModel.stopAndWaitForTeardown()
     }
 
     func requestPictureInPicture() async -> Result<Void, CallScreenError> {

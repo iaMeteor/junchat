@@ -16,6 +16,11 @@ import UIKit
 typealias CallScreenViewModelType = StateStoreViewModel<CallScreenViewState, CallScreenViewAction>
 
 class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol {
+    private struct PendingHangupAcknowledgement {
+        let requestID: String
+        let gate: CallHangupDeliveryGate
+    }
+
     private let elementCallService: ElementCallServiceProtocol
     private let configuration: ElementCallConfiguration
     private let isPictureInPictureAllowed: Bool
@@ -46,6 +51,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
     private var hasCompletedCall = false
     private var hasRequestedHangup = false
     private var shouldDismissAfterHangup = false
+    private var pendingHangupAcknowledgement: PendingHangupAcknowledgement?
     private let hangupDeliveryTimeout: Duration
 
     /// Designated initialiser
@@ -79,7 +85,9 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
                                                                                  ringbackTonePlayer: callRingbackTonePlayer,
                                                                                  setProximityMonitoringEnabled: setProximityMonitoringEnabled,
                                                                                  allowsPictureInPicture: allowPictureInPicture,
-                                                                                 applicationStateProvider: applicationStateProvider)
+                                                                                 applicationStateProvider: applicationStateProvider,
+                                                                                 sessionGeneration: callSessionGeneration,
+                                                                                 sessionOwnership: .shared)
         self.callEndedTonePlayer = callEndedTonePlayer
         self.hangupDeliveryTimeout = hangupDeliveryTimeout
         isPictureInPictureAllowed = allowPictureInPicture
@@ -191,6 +199,12 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         }
     }
 
+    func stopAndWaitForTeardown() async {
+        stop()
+        let callTerminationTask = callTerminationTask
+        await callTerminationTask?.value
+    }
+
     func requestPictureInPicture() async -> Result<Void, CallScreenError> {
         guard let requestPictureInPictureHandler = state.bindings.requestPictureInPictureHandler else {
             return .failure(.pictureInPictureNotAvailable)
@@ -212,25 +226,36 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
 
         hasRequestedHangup = true
         let evaluator = state.bindings.javaScriptEvaluator
-        let javaScript = hangupJavaScript()
+        let hangupRequest = hangupRequest()
         let timeout = hangupDeliveryTimeout
+        let acknowledgementGate = CallHangupDeliveryGate()
+        if let hangupRequest {
+            pendingHangupAcknowledgement = .init(requestID: hangupRequest.requestID, gate: acknowledgementGate)
+        }
 
         callTerminationTask = Task { [self] in
-            let outcome = await Self.deliverHangup(javaScript: javaScript,
+            defer {
+                if pendingHangupAcknowledgement?.gate === acknowledgementGate {
+                    pendingHangupAcknowledgement = nil
+                }
+            }
+
+            let outcome = await Self.deliverHangup(javaScript: hangupRequest?.javaScript,
                                                    evaluator: evaluator,
-                                                   timeout: timeout)
+                                                   timeout: timeout,
+                                                   acknowledgementGate: acknowledgementGate)
             guard !Task.isCancelled, !hasCompletedCall else { return }
 
             callTerminationTask = nil
             switch outcome {
             case .delivered:
-                MXLog.info("[JunchatCall] JavaScript hangup delivered")
+                MXLog.info("[JunchatCall] Element Call hangup acknowledged")
             case .failed:
-                MXLog.warning("[JunchatCall] JavaScript hangup failed; continuing teardown")
+                MXLog.warning("[JunchatCall] Element Call hangup request failed; continuing teardown")
             case .timedOut:
-                MXLog.warning("[JunchatCall] JavaScript hangup timed out; continuing teardown")
+                MXLog.warning("[JunchatCall] Element Call hangup acknowledgement timed out; continuing teardown")
             case .unavailable:
-                MXLog.warning("[JunchatCall] JavaScript hangup unavailable; continuing teardown")
+                MXLog.warning("[JunchatCall] Element Call hangup request unavailable; continuing teardown")
             case .cancelled:
                 return
             }
@@ -254,6 +279,9 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         stopPictureInPicture()
         callMediaCoordinator.stop()
         elementCallService.tearDownCallSession(generation: callSessionGeneration)
+        if let incomingCallIdentity = configuration.incomingCallIdentity {
+            elementCallService.clearAcceptedIncomingCall(incomingCallIdentity: incomingCallIdentity)
+        }
         logAudioSessionSnapshot(reason: "after call cleanup")
     }
 
@@ -284,7 +312,25 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
                 timeoutTask = nil
             }
         }
-        await widgetDriver.handleMessage(message)
+        let widgetMessage = try? JSONDecoder().decode(ElementCallWidgetMessage.self, from: Data(message.utf8))
+        let result = await widgetDriver.handleMessage(message)
+
+        guard let pendingHangupAcknowledgement,
+              let widgetMessage,
+              widgetMessage.direction == .toWidget,
+              widgetMessage.action == .hangup,
+              widgetMessage.widgetId == widgetDriver.widgetID,
+              widgetMessage.requestId == pendingHangupAcknowledgement.requestID,
+              widgetMessage.response != nil else {
+            return
+        }
+
+        switch result {
+        case .success(true):
+            pendingHangupAcknowledgement.gate.resolve(.delivered)
+        case .success(false), .failure:
+            pendingHangupAcknowledgement.gate.resolve(.failed)
+        }
     }
 
     private func handleWidgetDriverMessage(_ message: String) async {
@@ -323,7 +369,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
 
     private func setupCall() {
         setupTask = Task { [weak self] in
-            guard let self, !Task.isCancelled else { return }
+            guard let self, !Task.isCancelled, !hasRequestedHangup else { return }
 
             MXLog.info("[JunchatCall] setupCall start voice=\(configuration.voiceOnly) playConnectedTone=\(configuration.playConnectedTone)")
 
@@ -354,11 +400,11 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
                                             rageshakeURL: rageshakeURL,
                                             analyticsConfiguration: analyticsConfiguration) {
             case .success(let url):
-                guard !Task.isCancelled, !hasCleanedUpLocalCallState else { return }
+                guard !Task.isCancelled, !hasRequestedHangup, !hasCleanedUpLocalCallState else { return }
                 state.url = url
                 callMediaCoordinator.pictureInPictureReadinessChanged()
             case .failure(let error):
-                guard !Task.isCancelled, !hasCleanedUpLocalCallState else { return }
+                guard !Task.isCancelled, !hasRequestedHangup, !hasCleanedUpLocalCallState else { return }
                 MXLog.error("Failed starting ElementCall Widget Driver with \(CallDiagnostics.errorSummary(error))")
                 state.bindings.alertInfo = .init(id: UUID(),
                                                  title: L10n.errorUnknown,
@@ -368,11 +414,12 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
                 return
             }
 
-            guard !Task.isCancelled, !hasCleanedUpLocalCallState else { return }
+            guard !Task.isCancelled, !hasRequestedHangup, !hasCleanedUpLocalCallState else { return }
             callMediaCoordinator.prepareForCall()
 
             await elementCallService.setupCallSession(roomID: configuration.roomProxy.id,
                                                       roomDisplayName: configuration.roomProxy.infoPublisher.value.displayName ?? configuration.roomProxy.id,
+                                                      incomingCallIdentity: configuration.incomingCallIdentity,
                                                       generation: callSessionGeneration)
         }
 
@@ -553,15 +600,15 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
     }
 
     func hangup() async {
-        let message = ElementCallWidgetMessage(direction: .fromWidget,
+        let message = ElementCallWidgetMessage(direction: .toWidget,
                                                action: .hangup,
                                                widgetId: widgetDriver.widgetID)
 
         await postMessageToWidget(message)
     }
 
-    private func hangupJavaScript() -> String? {
-        let message = ElementCallWidgetMessage(direction: .fromWidget,
+    private func hangupRequest() -> (javaScript: String, requestID: String)? {
+        let message = ElementCallWidgetMessage(direction: .toWidget,
                                                action: .hangup,
                                                widgetId: widgetDriver.widgetID)
         guard let data = try? JSONEncoder().encode(message),
@@ -569,33 +616,32 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
             MXLog.error("Failed encoding hangup widget message")
             return nil
         }
-        return "postMessage(\(json), '*')"
+        return ("postMessage(\(json), '*')", message.requestId)
     }
 
     private nonisolated static func deliverHangup(javaScript: String?,
                                                   evaluator: ((String) async throws -> Any)?,
-                                                  timeout: Duration) async -> CallHangupDeliveryOutcome {
+                                                  timeout: Duration,
+                                                  acknowledgementGate: CallHangupDeliveryGate) async -> CallHangupDeliveryOutcome {
         guard let javaScript, let evaluator else { return .unavailable }
 
-        let gate = CallHangupDeliveryGate()
         let evaluatorTask = Task { @MainActor in
             do {
                 _ = try await evaluator(javaScript)
-                gate.resolve(.delivered)
             } catch {
-                gate.resolve(.failed)
+                acknowledgementGate.resolve(.failed)
             }
         }
         let timeoutTask = Task.detached {
             try? await Task.sleep(for: timeout)
             guard !Task.isCancelled else { return }
-            gate.resolve(.timedOut)
+            acknowledgementGate.resolve(.timedOut)
         }
 
         let outcome = await withTaskCancellationHandler {
-            await gate.value
+            await acknowledgementGate.value
         } onCancel: {
-            gate.resolve(.cancelled)
+            acknowledgementGate.resolve(.cancelled)
         }
         evaluatorTask.cancel()
         timeoutTask.cancel()
