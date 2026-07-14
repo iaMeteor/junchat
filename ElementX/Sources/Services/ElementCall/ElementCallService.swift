@@ -20,6 +20,12 @@ struct TimeProvider {
     var now: () -> Date
 }
 
+#if targetEnvironment(simulator)
+private let ignoresCallKitEndActionsByDefault = true
+#else
+private let ignoresCallKitEndActionsByDefault = false
+#endif
+
 @MainActor
 class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency PKPushRegistryDelegate, @preconcurrency CXProviderDelegate {
     private struct CallID: Equatable {
@@ -29,32 +35,64 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
         let isVoiceCall: Bool
     }
 
+    private struct IncomingCallIdentity: Equatable {
+        let callID: CallID
+        let generation: UUID
+    }
+
+    private struct IncomingPushDetails {
+        let roomID: String
+        let rtcNotificationID: String
+        let roomDisplayName: String?
+        let isVoiceCall: Bool
+        let ringDuration: Duration
+    }
+
     private let pushRegistry: PKPushRegistry
     private let callController = CXCallController()
     private var callProvider: CXProviderProtocol
     private let timeProvider: TimeProvider
+    private let ignoresCallKitEndActions: Bool
+    private let fulfillCallKitAction: @MainActor (CXAction) -> Void
 
     private weak var clientProxy: ClientProxyProtocol? {
         didSet {
             // There's a race condition where a call starts when the app has been killed and the
             // observation set in `incomingCallID` occurs *before* the user session is restored.
             // So observe when the client proxy is set to fix this (the method guards for the call).
-            Task { await observeIncomingCall() }
+            restartIncomingCallObservation()
         }
     }
 
     private var incomingCallRoomInfoCancellable: AnyCancellable?
+    private var incomingCallObservationTask: Task<Void, Never>?
+    private var incomingCallObservationRequestID = UUID()
+    private var incomingCallGeneration = UUID()
+    private var reportedIncomingCallKitIDs = Set<UUID>()
     private var callRingtoneCancellable: AnyCancellable?
     private var acceptedIncomingCallID: CallID?
     private var incomingCallID: CallID? {
         didSet {
+            if let oldValue,
+               let incomingCallID,
+               oldValue.callKitID != incomingCallID.callKitID,
+               reportedIncomingCallKitIDs.remove(oldValue.callKitID) != nil {
+                callProvider.reportCall(with: oldValue.callKitID, endedAt: nil, reason: .remoteEnded)
+            }
+
+            incomingCallGeneration = UUID()
+            endUnansweredCallTask?.cancel()
+            endUnansweredCallTask = nil
+            answerCallTask?.cancel()
+            answerCallTask = nil
             MXLog.info("[JunchatCall] incomingCallID changed present=\(incomingCallID != nil) voice=\(incomingCallID?.isVoiceCall.description ?? "nil")")
             incomingCallRoomIDSubject.send(incomingCallID?.roomID)
-            Task { await observeIncomingCall() }
+            restartIncomingCallObservation()
         }
     }
 
     private var endUnansweredCallTask: Task<Void, Never>?
+    private var answerCallTask: Task<Void, Never>?
     private var latestCallSessionGeneration: ElementCallSessionGeneration?
     private var ongoingCallSessionGeneration: ElementCallSessionGeneration?
 
@@ -82,10 +120,16 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
 
     private var declineListenerHandle: TaskHandle?
 
-    init(callProvider: CXProviderProtocol? = nil, timeProvider: TimeProvider? = nil, appSettings: AppSettings? = nil) {
+    init(callProvider: CXProviderProtocol? = nil,
+         timeProvider: TimeProvider? = nil,
+         appSettings: AppSettings? = nil,
+         ignoresCallKitEndActions: Bool = ignoresCallKitEndActionsByDefault,
+         fulfillCallKitAction: @escaping @MainActor (CXAction) -> Void = { $0.fulfill() }) {
         pushRegistry = PKPushRegistry(queue: nil)
 
         self.timeProvider = timeProvider ?? TimeProvider(clock: ContinuousClock(), now: Date.init)
+        self.ignoresCallKitEndActions = ignoresCallKitEndActions
+        self.fulfillCallKitAction = fulfillCallKitAction
 
         if let callProvider {
             self.callProvider = callProvider
@@ -166,6 +210,7 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
             declineListenerHandle?.cancel()
             declineListenerHandle = nil
             MXLog.info("[JunchatCall] ending CallKit incoming ring for accepted call")
+            reportedIncomingCallKitIDs.remove(callID.callKitID)
             callProvider.reportCall(with: callID.callKitID, endedAt: nil, reason: .remoteEnded)
         }
 
@@ -233,24 +278,25 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
         declineListenerHandle = nil
         acceptedIncomingCallID = incomingCallID
         MXLog.info("[JunchatCall] acceptIncomingCall stopping CallKit ring")
+        reportedIncomingCallKitIDs.remove(incomingCallID.callKitID)
         callProvider.reportCall(with: incomingCallID.callKitID, endedAt: nil, reason: .remoteEnded)
         self.incomingCallID = nil
     }
 
     func declineIncomingCall(roomID: String) async {
-        guard let incomingCallID else {
+        guard let incomingCallIdentity = currentIncomingCallIdentity else {
             MXLog.info("No incoming call to decline.")
             return
         }
 
+        let incomingCallID = incomingCallIdentity.callID
         guard incomingCallID.roomID == roomID else {
             MXLog.info("Incoming call room does not match decline request")
             return
         }
 
         await sendDeclineCallEvent(incomingCallID)
-        reportEndedCall(incomingCallID: incomingCallID, reason: .declinedElsewhere)
-        self.incomingCallID = nil
+        reportEndedCall(incomingCallIdentity: incomingCallIdentity, reason: .declinedElsewhere)
     }
 
     func setAudioEnabled(_ enabled: Bool, roomID: String) {
@@ -277,46 +323,26 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
     func pushRegistry(_ registry: PKPushRegistry, didUpdate pushCredentials: PKPushCredentials, for type: PKPushType) { }
 
     func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, completion: @escaping () -> Void) {
-        guard let roomID = payload.dictionaryPayload[ElementCallServiceNotificationKey.roomID.rawValue] as? String else {
-            MXLog.error("Missing room identifier for incoming voip call: \(CallDiagnostics.dictionarySummary(payload.dictionaryPayload))")
+        guard let details = incomingPushDetails(from: payload) else {
             completion()
             return
         }
 
-        guard let rtcNotificationID = payload.dictionaryPayload[ElementCallServiceNotificationKey.rtcNotifyEventID.rawValue] as? String else {
-            MXLog.error("Missing rtc notification event identifier for incoming voip call: \(CallDiagnostics.dictionarySummary(payload.dictionaryPayload))")
-            completion()
-            return
-        }
-
-        guard ongoingCallID?.roomID != roomID else {
+        guard ongoingCallID?.roomID != details.roomID else {
             MXLog.warning("Call already ongoing, ignoring incoming push")
             completion()
             return
         }
 
-        let isVoiceCall = payload.dictionaryPayload[ElementCallServiceNotificationKey.isVoiceCall.rawValue] as? Bool ?? false
-
-        let callID = CallID(callKitID: UUID(), roomID: roomID, rtcNotificationID: rtcNotificationID, isVoiceCall: isVoiceCall)
+        let callID = CallID(callKitID: UUID(),
+                            roomID: details.roomID,
+                            rtcNotificationID: details.rtcNotificationID,
+                            isVoiceCall: details.isVoiceCall)
         incomingCallID = callID
-
-        guard let expirationDate = (payload.dictionaryPayload[ElementCallServiceNotificationKey.expirationDate.rawValue] as? Date) else {
-            MXLog.error("Missing expiration timestamp for incoming voip call: \(CallDiagnostics.dictionarySummary(payload.dictionaryPayload))")
+        guard let incomingCallIdentity = currentIncomingCallIdentity else {
             completion()
             return
         }
-
-        let nowDate = timeProvider.now()
-
-        guard nowDate < expirationDate else {
-            MXLog.warning("Call expired, ignoring incoming push")
-            completion()
-            return
-        }
-
-        let ringDuration: Duration = .seconds(min(expirationDate.timeIntervalSince1970 - nowDate.timeIntervalSince1970, 90))
-
-        let roomDisplayName = payload.dictionaryPayload[ElementCallServiceNotificationKey.roomDisplayName.rawValue] as? String
 
         let update = CXCallUpdate()
         // Work Around: Always set video to true! https://github.com/element-hq/element-x-ios/issues/5335
@@ -324,31 +350,43 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
         // Consequence: The call will be presented to the user as a video call in CallKit UI,
         // but once Element Call is launched it will correctly route to a voice-only call.
         update.hasVideo = true
-        update.localizedCallerName = roomDisplayName
+        update.localizedCallerName = details.roomDisplayName
         // https://stackoverflow.com/a/41230020/730924
-        update.remoteHandle = .init(type: .generic, value: roomID)
-
-        callProvider.reportNewIncomingCall(with: callID.callKitID, update: update) { [weak self] error in
-            if let error {
-                MXLog.error("Failed reporting new incoming call: \(CallDiagnostics.errorSummary(error))")
-            }
-
-            Task { @MainActor [weak self] in
-                self?.actionsSubject.send(.receivedIncomingCallRequest)
-            }
-
-            completion()
-        }
+        update.remoteHandle = .init(type: .generic, value: details.roomID)
 
         endUnansweredCallTask = Task { [weak self] in
-            try? await self?.timeProvider.clock.sleep(for: ringDuration)
+            try? await self?.timeProvider.clock.sleep(for: details.ringDuration)
 
             guard let self, !Task.isCancelled else {
                 return
             }
 
-            if let incomingCallID, incomingCallID.callKitID == callID.callKitID {
-                reportEndedCall(incomingCallID: incomingCallID, reason: .unanswered)
+            reportEndedCall(incomingCallIdentity: incomingCallIdentity, reason: .unanswered)
+        }
+
+        callProvider.reportNewIncomingCall(with: callID.callKitID, update: update) { [weak self] error in
+            completion()
+            Task { @MainActor [weak self] in
+                guard let self else {
+                    return
+                }
+
+                guard isCurrentIncomingCall(incomingCallIdentity) else {
+                    if error == nil {
+                        callProvider.reportCall(with: callID.callKitID, endedAt: nil, reason: .remoteEnded)
+                    }
+                    return
+                }
+
+                if let error {
+                    MXLog.error("Failed reporting new incoming call: \(CallDiagnostics.errorSummary(error))")
+                    reportedIncomingCallKitIDs.remove(callID.callKitID)
+                    incomingCallID = nil
+                    return
+                }
+
+                reportedIncomingCallKitIDs.insert(callID.callKitID)
+                actionsSubject.send(.receivedIncomingCallRequest)
             }
         }
     }
@@ -368,11 +406,14 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
     }
 
     func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
-        guard let incomingCallID else {
-            MXLog.error("Failed answering incoming call, missing incomingCallID")
+        guard let incomingCallIdentity = currentIncomingCallIdentity,
+              incomingCallIdentity.callID.callKitID == action.callUUID else {
+            MXLog.warning("Ignoring CallKit answer for a superseded call")
+            fulfillCallKitAction(action)
             return
         }
 
+        let incomingCallID = incomingCallIdentity.callID
         MXLog.info("[JunchatCall] CallKit answer voice=\(incomingCallID.isVoiceCall)")
 
         // Fixes broken videos on EC web when a CallKit session is established.
@@ -390,17 +431,28 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
         // https://forums.developer.apple.com/forums/thread/685268
         // https://stackoverflow.com/questions/71483732/webrtc-running-from-wkwebview-avaudiosession-development-roadblock
 
-        // First fullfill the action
-        action.fulfill()
+        // First fulfill the action
+        fulfillCallKitAction(action)
 
         // And delay ending the call so that the app has enough time
         // to get deeplinked into
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            // Then end the and call rely on `setupCallSession` to create a new one
-            provider.reportCall(with: incomingCallID.callKitID, endedAt: nil, reason: .remoteEnded)
+        answerCallTask = Task { [weak self] in
+            try? await self?.timeProvider.clock.sleep(for: .seconds(1))
 
-            self.actionsSubject.send(.startCall(roomID: incomingCallID.roomID, isVoiceCall: incomingCallID.isVoiceCall))
-            self.endUnansweredCallTask?.cancel()
+            guard let self,
+                  !Task.isCancelled,
+                  isCurrentIncomingCall(incomingCallIdentity) else {
+                return
+            }
+
+            // Then end the and call rely on `setupCallSession` to create a new one
+            reportedIncomingCallKitIDs.remove(incomingCallID.callKitID)
+            callProvider.reportCall(with: incomingCallID.callKitID, endedAt: nil, reason: .remoteEnded)
+
+            actionsSubject.send(.startCall(roomID: incomingCallID.roomID, isVoiceCall: incomingCallID.isVoiceCall))
+            endUnansweredCallTask?.cancel()
+            endUnansweredCallTask = nil
+            answerCallTask = nil
         }
     }
 
@@ -411,38 +463,129 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
             MXLog.error("Failed muting/unmuting call, missing ongoingCallID")
         }
 
-        action.fulfill()
+        fulfillCallKitAction(action)
     }
 
     func provider(_ provider: CXProvider, perform action: CXEndCallAction) {
-        #if targetEnvironment(simulator)
-        // This gets called for no reason on simulators, where CallKit
-        // isn't even supported, ignore it.
-        #else
-        if let ongoingCallID {
-            actionsSubject.send(.endCall(roomID: ongoingCallID.roomID))
-        }
-
-        if let incomingCallID {
-            Task {
-                await sendDeclineCallEvent(incomingCallID)
+        if let ongoingCallID, ongoingCallID.callKitID == action.callUUID {
+            guard !ignoresCallKitEndActions else {
+                fulfillCallKitAction(action)
+                return
             }
+
+            actionsSubject.send(.endCall(roomID: ongoingCallID.roomID))
+            if latestCallSessionGeneration == ongoingCallSessionGeneration {
+                latestCallSessionGeneration = nil
+            }
+            ongoingCallSessionGeneration = nil
+            tearDownOngoingCallSession(sendEndCallAction: false)
+            fulfillCallKitAction(action)
+            return
         }
 
-        latestCallSessionGeneration = nil
-        ongoingCallSessionGeneration = nil
-        tearDownCallSession(sendEndCallAction: false)
+        if let incomingCallIdentity = currentIncomingCallIdentity,
+           incomingCallIdentity.callID.callKitID == action.callUUID {
+            guard !ignoresCallKitEndActions else {
+                fulfillCallKitAction(action)
+                return
+            }
 
-        action.fulfill()
-        #endif
+            incomingCallID = nil
+            reportedIncomingCallKitIDs.remove(incomingCallIdentity.callID.callKitID)
+            Task {
+                await sendDeclineCallEvent(incomingCallIdentity.callID)
+            }
+            fulfillCallKitAction(action)
+            return
+        }
+
+        if let acceptedIncomingCallID, acceptedIncomingCallID.callKitID == action.callUUID {
+            guard !ignoresCallKitEndActions else {
+                fulfillCallKitAction(action)
+                return
+            }
+
+            self.acceptedIncomingCallID = nil
+            Task {
+                await sendDeclineCallEvent(acceptedIncomingCallID)
+            }
+            fulfillCallKitAction(action)
+            return
+        }
+
+        MXLog.warning("Ignoring CallKit end for a superseded call")
+        fulfillCallKitAction(action)
     }
 
     // MARK: - Private
+
+    private func incomingPushDetails(from payload: PKPushPayload) -> IncomingPushDetails? {
+        let dictionary = payload.dictionaryPayload
+        guard let roomID = dictionary[ElementCallServiceNotificationKey.roomID.rawValue] as? String,
+              !roomID.isEmpty else {
+            MXLog.error("Missing room identifier for incoming voip call: \(CallDiagnostics.dictionarySummary(dictionary))")
+            return nil
+        }
+
+        guard let rtcNotificationID = dictionary[ElementCallServiceNotificationKey.rtcNotifyEventID.rawValue] as? String,
+              !rtcNotificationID.isEmpty else {
+            MXLog.error("Missing rtc notification event identifier for incoming voip call: \(CallDiagnostics.dictionarySummary(dictionary))")
+            return nil
+        }
+
+        guard let expirationDate = dictionary[ElementCallServiceNotificationKey.expirationDate.rawValue] as? Date else {
+            MXLog.error("Missing expiration timestamp for incoming voip call: \(CallDiagnostics.dictionarySummary(dictionary))")
+            return nil
+        }
+
+        let now = timeProvider.now()
+        guard now < expirationDate else {
+            MXLog.warning("Call expired, ignoring incoming push")
+            return nil
+        }
+
+        return IncomingPushDetails(roomID: roomID,
+                                   rtcNotificationID: rtcNotificationID,
+                                   roomDisplayName: dictionary[ElementCallServiceNotificationKey.roomDisplayName.rawValue] as? String,
+                                   isVoiceCall: dictionary[ElementCallServiceNotificationKey.isVoiceCall.rawValue] as? Bool ?? false,
+                                   ringDuration: .seconds(min(expirationDate.timeIntervalSince1970 - now.timeIntervalSince1970, 90)))
+    }
+
+    private var currentIncomingCallIdentity: IncomingCallIdentity? {
+        guard let incomingCallID else { return nil }
+        return IncomingCallIdentity(callID: incomingCallID, generation: incomingCallGeneration)
+    }
+
+    private func isCurrentIncomingCall(_ identity: IncomingCallIdentity) -> Bool {
+        currentIncomingCallIdentity == identity
+    }
+
+    private func restartIncomingCallObservation() {
+        incomingCallObservationRequestID = UUID()
+        let requestID = incomingCallObservationRequestID
+
+        incomingCallObservationTask?.cancel()
+        incomingCallObservationTask = nil
+        incomingCallRoomInfoCancellable = nil
+        declineListenerHandle?.cancel()
+        declineListenerHandle = nil
+
+        guard let incomingCallIdentity = currentIncomingCallIdentity else {
+            return
+        }
+
+        incomingCallObservationTask = Task { [weak self] in
+            await self?.observeIncomingCall(incomingCallIdentity: incomingCallIdentity, requestID: requestID)
+        }
+    }
 
     private func tearDownCallSession(sendEndCallAction: Bool = true) {
         MXLog.info("[JunchatCall] tearDownCallSession sendEndCallAction=\(sendEndCallAction) hasOngoing=\(ongoingCallID != nil) hasIncoming=\(incomingCallID != nil)")
 
         tearDownOngoingCallSession(sendEndCallAction: sendEndCallAction)
+        if let incomingCallID {
+            reportedIncomingCallKitIDs.remove(incomingCallID.callKitID)
+        }
         incomingCallID = nil
         acceptedIncomingCallID = nil
     }
@@ -489,48 +632,34 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
         callProvider.setDelegate(self, queue: nil)
     }
 
-    private func observeIncomingCall() async {
-        incomingCallRoomInfoCancellable = nil
-
-        guard let incomingCallID else {
-            MXLog.info("No incoming call to observe for.")
-            return
-        }
-
+    private func observeIncomingCall(incomingCallIdentity: IncomingCallIdentity, requestID: UUID) async {
         guard let clientProxy else {
             MXLog.warning("A ClientProxy is needed to fetch the room.")
             return
         }
 
+        let incomingCallID = incomingCallIdentity.callID
         guard case let .joined(roomProxy) = await clientProxy.roomForIdentifier(incomingCallID.roomID) else {
             MXLog.warning("Failed to fetch a joined room for the incoming call.")
             return
         }
 
+        guard isCurrentIncomingCall(incomingCallIdentity),
+              incomingCallObservationRequestID == requestID else {
+            return
+        }
+
         roomProxy.subscribeToRoomInfoUpdates()
+        let roomInfoCancellable = makeIncomingCallRoomInfoCancellable(roomProxy: roomProxy,
+                                                                      incomingCallIdentity: incomingCallIdentity,
+                                                                      requestID: requestID)
 
-        incomingCallRoomInfoCancellable = roomProxy
-            .infoPublisher
-            .compactMap { ($0.hasRoomCall, $0.activeRoomCallParticipants) }
-            .removeDuplicates { $0 == $1 }
-            .drop { hasRoomCall, _ in
-                // Filter all updates before hasRoomCall becomes `true`. Then we can correctly
-                // detect its change to `false` to stop ringing when the caller hangs up.
-                !hasRoomCall
-            }
-            .sink { [weak self] hasOngoingCall, activeRoomCallParticipants in
-                guard let self else { return }
-
-                let participants: [String] = activeRoomCallParticipants
-
-                if !hasOngoingCall {
-                    MXLog.info("Call cancelled by remote")
-                    reportEndedCall(incomingCallID: incomingCallID, reason: .remoteEnded)
-                } else if participants.contains(roomProxy.ownUserID) {
-                    MXLog.info("Call answered elsewhere")
-                    reportEndedCall(incomingCallID: incomingCallID, reason: .answeredElsewhere)
-                }
-            }
+        guard isCurrentIncomingCall(incomingCallIdentity),
+              incomingCallObservationRequestID == requestID else {
+            roomInfoCancellable.cancel()
+            return
+        }
+        incomingCallRoomInfoCancellable = roomInfoCancellable
 
         guard let rtcNotificationID = incomingCallID.rtcNotificationID else {
             MXLog.warning("Decline: No RTC notification ID found for the incoming call.")
@@ -538,34 +667,75 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
         }
 
         MXLog.info("Observe decline events for incoming call")
-
-        let listener: CallDeclineListener = SDKListener { [weak self] senderID in
-            guard let self else { return }
-
-            MXLog.debug("Call declined event received")
-
-            if senderID == roomProxy.ownUserID {
-                // Stop ringing!
-                MXLog.debug("Call declined elsewhere")
-                reportEndedCall(incomingCallID: incomingCallID, reason: .declinedElsewhere)
-            }
-        }
+        let listener = makeIncomingCallDeclineListener(roomProxy: roomProxy,
+                                                       incomingCallIdentity: incomingCallIdentity,
+                                                       requestID: requestID)
 
         guard case let .success(handle) = roomProxy.subscribeToCallDeclineEvents(rtcNotificationEventID: rtcNotificationID, listener: listener) else {
             MXLog.error("Unable to listen for decline events.")
             return
         }
 
+        guard isCurrentIncomingCall(incomingCallIdentity),
+              incomingCallObservationRequestID == requestID else {
+            handle.cancel()
+            return
+        }
         declineListenerHandle = handle
     }
 
-    private func reportEndedCall(incomingCallID: CallID, reason: CXCallEndedReason) {
+    private func makeIncomingCallRoomInfoCancellable(roomProxy: any JoinedRoomProxyProtocol,
+                                                     incomingCallIdentity: IncomingCallIdentity,
+                                                     requestID: UUID) -> AnyCancellable {
+        roomProxy
+            .infoPublisher
+            .compactMap { ($0.hasRoomCall, $0.activeRoomCallParticipants) }
+            .removeDuplicates { $0 == $1 }
+            .drop { hasRoomCall, _ in
+                // Ignore updates until a call exists so a later `false` means the caller hung up.
+                !hasRoomCall
+            }
+            .sink { [weak self] hasOngoingCall, activeRoomCallParticipants in
+                guard let self,
+                      isCurrentIncomingCall(incomingCallIdentity),
+                      incomingCallObservationRequestID == requestID else { return }
+
+                let participants: [String] = activeRoomCallParticipants
+                if !hasOngoingCall {
+                    MXLog.info("Call cancelled by remote")
+                    reportEndedCall(incomingCallIdentity: incomingCallIdentity, reason: .remoteEnded)
+                } else if participants.contains(roomProxy.ownUserID) {
+                    MXLog.info("Call answered elsewhere")
+                    reportEndedCall(incomingCallIdentity: incomingCallIdentity, reason: .answeredElsewhere)
+                }
+            }
+    }
+
+    private func makeIncomingCallDeclineListener(roomProxy: any JoinedRoomProxyProtocol,
+                                                 incomingCallIdentity: IncomingCallIdentity,
+                                                 requestID: UUID) -> CallDeclineListener {
+        SDKListener { [weak self] senderID in
+            guard let self,
+                  isCurrentIncomingCall(incomingCallIdentity),
+                  incomingCallObservationRequestID == requestID else { return }
+
+            MXLog.debug("Call declined event received")
+            guard senderID == roomProxy.ownUserID else { return }
+
+            MXLog.debug("Call declined elsewhere")
+            reportEndedCall(incomingCallIdentity: incomingCallIdentity, reason: .declinedElsewhere)
+        }
+    }
+
+    private func reportEndedCall(incomingCallIdentity: IncomingCallIdentity, reason: CXCallEndedReason) {
+        guard isCurrentIncomingCall(incomingCallIdentity) else {
+            MXLog.info("[JunchatCall] ignoring ended callback for superseded incoming call")
+            return
+        }
+
         MXLog.info("[JunchatCall] reportEndedCall reason=\(reason.rawValue)")
-        declineListenerHandle?.cancel()
-        declineListenerHandle = nil
-        endUnansweredCallTask?.cancel()
-        endUnansweredCallTask = nil
-        callProvider.reportCall(with: incomingCallID.callKitID, endedAt: nil, reason: reason)
-        self.incomingCallID = nil
+        reportedIncomingCallKitIDs.remove(incomingCallIdentity.callID.callKitID)
+        callProvider.reportCall(with: incomingCallIdentity.callID.callKitID, endedAt: nil, reason: reason)
+        incomingCallID = nil
     }
 }

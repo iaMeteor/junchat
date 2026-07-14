@@ -5,13 +5,17 @@
 // Please see LICENSE files in the repository root for full details.
 //
 
+import CallKit
 import Clocks
+import Combine
 @testable import ElementX
+import MatrixRustSDKMocks
 import PushKit
 import Testing
 
 @MainActor
 final class ElementCallServiceTests {
+    private var callKitActionRecorder: CallKitActionRecorder!
     private var callProvider: CXProviderMock!
     private var currentDate: Date!
     private var testClock: TestClock<Duration>!
@@ -23,13 +27,18 @@ final class ElementCallServiceTests {
         callProvider = CXProviderMock(.init())
         currentDate = Date()
         testClock = TestClock()
+        callKitActionRecorder = CallKitActionRecorder()
         let dateProvider: () -> Date = {
             self.currentDate
         }
-        service = ElementCallService(callProvider: callProvider, timeProvider: TimeProvider(clock: testClock, now: dateProvider))
+        service = ElementCallService(callProvider: callProvider,
+                                     timeProvider: TimeProvider(clock: testClock, now: dateProvider),
+                                     ignoresCallKitEndActions: false,
+                                     fulfillCallKitAction: callKitActionRecorder.fulfill)
     }
     
     deinit {
+        callKitActionRecorder = nil
         callProvider = nil
         currentDate = nil
         testClock = nil
@@ -193,6 +202,354 @@ final class ElementCallServiceTests {
         }
         
         #expect(!callProvider.reportNewIncomingCallWithUpdateCompletionCalled)
+        #expect(service.incomingCallRoomIDPublisher.value == nil)
+    }
+
+    @Test(arguments: [ElementCallServiceNotificationKey.roomID.rawValue,
+                      ElementCallServiceNotificationKey.rtcNotifyEventID.rawValue,
+                      ElementCallServiceNotificationKey.expirationDate.rawValue])
+    func missingRequiredPushFieldDoesNotPublishIncomingCall(key: String) async {
+        let payload = PKPushPayloadMock()
+            .updatingExpiration(currentDate, lifetime: 30)
+            .removing(key)
+
+        await receiveIncomingPush(payload)
+
+        #expect(!callProvider.reportNewIncomingCallWithUpdateCompletionCalled)
+        #expect(service.incomingCallRoomIDPublisher.value == nil)
+    }
+
+    @Test
+    func invalidRequiredPushFieldsDoNotPublishIncomingCall() async {
+        let invalidPayloads = [
+            PKPushPayloadMock().updatingExpiration(currentDate, lifetime: 30).updatingRoomID(""),
+            PKPushPayloadMock().updatingExpiration(currentDate, lifetime: 30).updatingRTCNotificationID(""),
+            PKPushPayloadMock().updatingExpiration(currentDate, lifetime: 30)
+                .updatingValue("not-a-date", for: ElementCallServiceNotificationKey.expirationDate.rawValue)
+        ]
+
+        for payload in invalidPayloads {
+            await receiveIncomingPush(payload)
+        }
+
+        #expect(!callProvider.reportNewIncomingCallWithUpdateCompletionCalled)
+        #expect(service.incomingCallRoomIDPublisher.value == nil)
+    }
+
+    @Test
+    func delayedIncomingObservationCannotReplaceCurrentSubscriptionsOrClearReplacement() async throws {
+        let firstRoomID = "!first:example.com"
+        let replacementRoomID = "!replacement:example.com"
+        let firstRoom = JoinedRoomProxyMock(.init(id: firstRoomID, name: "First"))
+        let replacementRoom = JoinedRoomProxyMock(.init(id: replacementRoomID, name: "Replacement"))
+        let firstRoomInfo = CurrentValueSubject<RoomInfoProxyProtocol, Never>(firstRoom.infoPublisher.value)
+        firstRoom.infoPublisher = firstRoomInfo.asCurrentValuePublisher()
+        firstRoom.subscribeToCallDeclineEventsRtcNotificationEventIDListenerReturnValue = .success(TaskHandleSDKMock())
+        replacementRoom.subscribeToCallDeclineEventsRtcNotificationEventIDListenerReturnValue = .success(TaskHandleSDKMock())
+
+        let delayedLookup = SuspendedIncomingCallRoomLookup()
+        let clientProxy = ClientProxyMock(.init())
+        clientProxy.roomForIdentifierClosure = { roomID in
+            switch roomID {
+            case firstRoomID:
+                await delayedLookup.wait()
+                return .joined(firstRoom)
+            case replacementRoomID:
+                return .joined(replacementRoom)
+            default:
+                return nil
+            }
+        }
+        service.setClientProxy(clientProxy)
+
+        await receiveIncomingPush(PKPushPayloadMock()
+            .updatingExpiration(currentDate, lifetime: 30)
+            .updatingRoomID(firstRoomID)
+            .updatingRTCNotificationID("$first"))
+        await waitUntil { delayedLookup.hasRequest }
+
+        await receiveIncomingPush(PKPushPayloadMock()
+            .updatingExpiration(currentDate, lifetime: 30)
+            .updatingRoomID(replacementRoomID)
+            .updatingRTCNotificationID("$replacement"))
+        await waitUntil { replacementRoom.subscribeToRoomInfoUpdatesCallsCount == 1 }
+
+        delayedLookup.resume()
+        try await Task.sleep(for: .milliseconds(50))
+        firstRoomInfo.send(RoomInfoProxyMock(.init(id: firstRoomID, name: "First", hasOngoingCall: false)))
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(firstRoom.subscribeToRoomInfoUpdatesCallsCount == 0)
+        #expect(service.incomingCallRoomIDPublisher.value == replacementRoomID)
+    }
+
+    @Test
+    func staleIncomingDeclineCallbackCannotClearReplacement() async throws {
+        let firstRoomID = "!first:example.com"
+        let replacementRoomID = "!replacement:example.com"
+        let firstRoom = JoinedRoomProxyMock(.init(id: firstRoomID, name: "First"))
+        let replacementRoom = JoinedRoomProxyMock(.init(id: replacementRoomID, name: "Replacement"))
+        firstRoom.subscribeToCallDeclineEventsRtcNotificationEventIDListenerReturnValue = .success(TaskHandleSDKMock())
+        replacementRoom.subscribeToCallDeclineEventsRtcNotificationEventIDListenerReturnValue = .success(TaskHandleSDKMock())
+
+        let clientProxy = ClientProxyMock(.init())
+        clientProxy.roomForIdentifierClosure = { roomID in
+            switch roomID {
+            case firstRoomID: .joined(firstRoom)
+            case replacementRoomID: .joined(replacementRoom)
+            default: nil
+            }
+        }
+        service.setClientProxy(clientProxy)
+
+        await receiveIncomingPush(PKPushPayloadMock()
+            .updatingExpiration(currentDate, lifetime: 30)
+            .updatingRoomID(firstRoomID)
+            .updatingRTCNotificationID("$first"))
+        await waitUntil { firstRoom.subscribeToCallDeclineEventsRtcNotificationEventIDListenerReceivedArguments != nil }
+        let staleListener = try #require(firstRoom.subscribeToCallDeclineEventsRtcNotificationEventIDListenerReceivedArguments?.listener)
+
+        await receiveIncomingPush(PKPushPayloadMock()
+            .updatingExpiration(currentDate, lifetime: 30)
+            .updatingRoomID(replacementRoomID)
+            .updatingRTCNotificationID("$replacement"))
+        await waitUntil { replacementRoom.subscribeToCallDeclineEventsRtcNotificationEventIDListenerReceivedArguments != nil }
+
+        staleListener.call(declinerUserId: firstRoom.ownUserID)
+
+        #expect(service.incomingCallRoomIDPublisher.value == replacementRoomID)
+    }
+
+    @Test
+    func failedCallKitReportDoesNotPublishIncomingCall() async {
+        var receivedIncomingCallActionCount = 0
+        let cancellable = service.actions.sink { action in
+            if case .receivedIncomingCallRequest = action {
+                receivedIncomingCallActionCount += 1
+            }
+        }
+        callProvider.reportNewIncomingCallWithUpdateCompletionClosure = { _, _, completion in
+            completion(ElementCallServiceTestError.callKitReportFailed)
+        }
+
+        await receiveIncomingPush(PKPushPayloadMock().updatingExpiration(currentDate, lifetime: 30))
+        await waitUntil { service.incomingCallRoomIDPublisher.value == nil }
+
+        #expect(service.incomingCallRoomIDPublisher.value == nil)
+        #expect(receivedIncomingCallActionCount == 0)
+        withExtendedLifetime(cancellable) { }
+    }
+
+    @Test
+    func staleCallKitReportCompletionCannotClearReplacement() async {
+        var reportCompletions = [@Sendable (Error?) -> Void]()
+        var pushCompletionCount = 0
+        var receivedIncomingCallActionCount = 0
+        let cancellable = service.actions.sink { action in
+            if case .receivedIncomingCallRequest = action {
+                receivedIncomingCallActionCount += 1
+            }
+        }
+        callProvider.reportNewIncomingCallWithUpdateCompletionClosure = { _, _, completion in
+            reportCompletions.append(completion)
+        }
+
+        service.pushRegistry(pushRegistry,
+                             didReceiveIncomingPushWith: PKPushPayloadMock()
+                                 .updatingExpiration(currentDate, lifetime: 30)
+                                 .updatingRoomID("!first:example.com")
+                                 .updatingRTCNotificationID("$first"),
+                             for: .voIP) {
+            pushCompletionCount += 1
+        }
+        service.pushRegistry(pushRegistry,
+                             didReceiveIncomingPushWith: PKPushPayloadMock()
+                                 .updatingExpiration(currentDate, lifetime: 30)
+                                 .updatingRoomID("!replacement:example.com")
+                                 .updatingRTCNotificationID("$replacement"),
+                             for: .voIP) {
+            pushCompletionCount += 1
+        }
+
+        #expect(reportCompletions.count == 2)
+        reportCompletions[1](nil)
+        await waitUntil { pushCompletionCount == 1 }
+        await waitUntil { receivedIncomingCallActionCount == 1 }
+        reportCompletions[0](ElementCallServiceTestError.callKitReportFailed)
+        await waitUntil { pushCompletionCount == 2 }
+
+        #expect(service.incomingCallRoomIDPublisher.value == "!replacement:example.com")
+        #expect(receivedIncomingCallActionCount == 1)
+        withExtendedLifetime(cancellable) { }
+    }
+
+    @Test
+    func lateSuccessfulCallKitReportEndsOnlyTheSupersededCall() async throws {
+        var reportedCallIDs = [UUID]()
+        var reportCompletions = [@Sendable (Error?) -> Void]()
+        callProvider.reportNewIncomingCallWithUpdateCompletionClosure = { callID, _, completion in
+            reportedCallIDs.append(callID)
+            reportCompletions.append(completion)
+        }
+
+        service.pushRegistry(pushRegistry,
+                             didReceiveIncomingPushWith: PKPushPayloadMock()
+                                 .updatingExpiration(currentDate, lifetime: 30)
+                                 .updatingRoomID("!first:example.com")
+                                 .updatingRTCNotificationID("$first"),
+                             for: .voIP) { }
+        service.pushRegistry(pushRegistry,
+                             didReceiveIncomingPushWith: PKPushPayloadMock()
+                                 .updatingExpiration(currentDate, lifetime: 30)
+                                 .updatingRoomID("!replacement:example.com")
+                                 .updatingRTCNotificationID("$replacement"),
+                             for: .voIP) { }
+
+        #expect(reportCompletions.count == 2)
+        reportCompletions[1](nil)
+        reportCompletions[0](nil)
+        await waitUntil { callProvider.reportCallWithEndedAtReasonCalled }
+
+        let endedCall = try #require(callProvider.reportCallWithEndedAtReasonReceivedArguments)
+        #expect(endedCall.uuid == reportedCallIDs[0])
+        #expect(endedCall.reason == .remoteEnded)
+        #expect(service.incomingCallRoomIDPublisher.value == "!replacement:example.com")
+    }
+
+    @Test
+    func replacingReportedIncomingCallEndsTheOldCallKitUUID() async throws {
+        var receivedIncomingCallActionCount = 0
+        let cancellable = service.actions.sink { action in
+            if case .receivedIncomingCallRequest = action {
+                receivedIncomingCallActionCount += 1
+            }
+        }
+        await receiveIncomingPush(PKPushPayloadMock()
+            .updatingExpiration(currentDate, lifetime: 30)
+            .updatingRoomID("!first:example.com")
+            .updatingRTCNotificationID("$first"))
+        let firstCallUUID = try #require(callProvider.reportNewIncomingCallWithUpdateCompletionReceivedArguments?.uuid)
+        await waitUntil { receivedIncomingCallActionCount == 1 }
+
+        await receiveIncomingPush(PKPushPayloadMock()
+            .updatingExpiration(currentDate, lifetime: 30)
+            .updatingRoomID("!replacement:example.com")
+            .updatingRTCNotificationID("$replacement"))
+
+        let endedCall = try #require(callProvider.reportCallWithEndedAtReasonReceivedArguments)
+        #expect(endedCall.uuid == firstCallUUID)
+        #expect(endedCall.reason == .remoteEnded)
+        #expect(service.incomingCallRoomIDPublisher.value == "!replacement:example.com")
+        withExtendedLifetime(cancellable) { }
+    }
+
+    @Test
+    func staleAnswerActionCannotStartReplacementCall() async throws {
+        await receiveIncomingPush(PKPushPayloadMock()
+            .updatingExpiration(currentDate, lifetime: 30)
+            .updatingRoomID("!first:example.com")
+            .updatingRTCNotificationID("$first"))
+        let firstCallUUID = try #require(callProvider.reportNewIncomingCallWithUpdateCompletionReceivedArguments?.uuid)
+        await receiveIncomingPush(PKPushPayloadMock()
+            .updatingExpiration(currentDate, lifetime: 30)
+            .updatingRoomID("!replacement:example.com")
+            .updatingRTCNotificationID("$replacement"))
+
+        var startedRooms = [String]()
+        let cancellable = service.actions.sink { action in
+            if case .startCall(let roomID, _) = action {
+                startedRooms.append(roomID)
+            }
+        }
+        let action = CXAnswerCallAction(call: firstCallUUID)
+        let provider = CXProvider(configuration: CXProviderConfiguration())
+
+        service.provider(provider, perform: action)
+        await Task.yield()
+        await testClock.advance(by: .seconds(1))
+
+        #expect(callKitActionRecorder.fulfilledActionIDs.filter { $0 == action.uuid }.count == 1)
+        #expect(startedRooms.isEmpty)
+        #expect(service.incomingCallRoomIDPublisher.value == "!replacement:example.com")
+        withExtendedLifetime((cancellable, provider)) { }
+    }
+
+    @Test
+    func delayedAnswerCannotStartCallAfterIncomingReplacement() async throws {
+        await receiveIncomingPush(PKPushPayloadMock()
+            .updatingExpiration(currentDate, lifetime: 30)
+            .updatingRoomID("!first:example.com")
+            .updatingRTCNotificationID("$first"))
+        let firstCallUUID = try #require(callProvider.reportNewIncomingCallWithUpdateCompletionReceivedArguments?.uuid)
+        var startedRooms = [String]()
+        let cancellable = service.actions.sink { action in
+            if case .startCall(let roomID, _) = action {
+                startedRooms.append(roomID)
+            }
+        }
+        let action = CXAnswerCallAction(call: firstCallUUID)
+        let provider = CXProvider(configuration: CXProviderConfiguration())
+
+        service.provider(provider, perform: action)
+        await Task.yield()
+        await receiveIncomingPush(PKPushPayloadMock()
+            .updatingExpiration(currentDate, lifetime: 30)
+            .updatingRoomID("!replacement:example.com")
+            .updatingRTCNotificationID("$replacement"))
+        await testClock.advance(by: .seconds(1))
+
+        #expect(callKitActionRecorder.fulfilledActionIDs.filter { $0 == action.uuid }.count == 1)
+        #expect(startedRooms.isEmpty)
+        #expect(service.incomingCallRoomIDPublisher.value == "!replacement:example.com")
+        withExtendedLifetime((cancellable, provider)) { }
+    }
+
+    @Test
+    func staleEndActionCannotTearDownReplacementOrClearItsGeneration() async throws {
+        await receiveIncomingPush(PKPushPayloadMock()
+            .updatingExpiration(currentDate, lifetime: 30)
+            .updatingRoomID("!first:example.com")
+            .updatingRTCNotificationID("$first"))
+        let firstCallUUID = try #require(callProvider.reportNewIncomingCallWithUpdateCompletionReceivedArguments?.uuid)
+        let replacementRoomID = "!replacement:example.com"
+        await receiveIncomingPush(PKPushPayloadMock()
+            .updatingExpiration(currentDate, lifetime: 30)
+            .updatingRoomID(replacementRoomID)
+            .updatingRTCNotificationID("$replacement"))
+        let generation = ElementCallSessionGeneration()
+        service.registerCallSession(generation: generation)
+        await service.setupCallSession(roomID: replacementRoomID, roomDisplayName: "Replacement", generation: generation)
+        let action = CXEndCallAction(call: firstCallUUID)
+        let provider = CXProvider(configuration: CXProviderConfiguration())
+
+        service.provider(provider, perform: action)
+
+        #expect(callKitActionRecorder.fulfilledActionIDs.filter { $0 == action.uuid }.count == 1)
+        #expect(service.ongoingCallRoomIDPublisher.value == replacementRoomID)
+        service.tearDownCallSession(generation: generation)
+        #expect(service.ongoingCallRoomIDPublisher.value == nil)
+        withExtendedLifetime(provider) { }
+    }
+
+    @Test
+    func matchingEndActionTearsDownOnlyItsCall() async throws {
+        let roomID = "!current:example.com"
+        await receiveIncomingPush(PKPushPayloadMock()
+            .updatingExpiration(currentDate, lifetime: 30)
+            .updatingRoomID(roomID)
+            .updatingRTCNotificationID("$current"))
+        let callUUID = try #require(callProvider.reportNewIncomingCallWithUpdateCompletionReceivedArguments?.uuid)
+        let generation = ElementCallSessionGeneration()
+        service.registerCallSession(generation: generation)
+        await service.setupCallSession(roomID: roomID, roomDisplayName: "Current", generation: generation)
+        let action = CXEndCallAction(call: callUUID)
+        let provider = CXProvider(configuration: CXProviderConfiguration())
+
+        service.provider(provider, perform: action)
+
+        #expect(callKitActionRecorder.fulfilledActionIDs.filter { $0 == action.uuid }.count == 1)
+        #expect(service.ongoingCallRoomIDPublisher.value == nil)
+        withExtendedLifetime(provider) { }
     }
     
     @Test
@@ -213,10 +570,28 @@ final class ElementCallServiceTests {
             service.pushRegistry(pushRegistry,
                                  didReceiveIncomingPushWith: pushPayload,
                                  for: .voIP) { }
-            
+
+            await Task.yield()
             // Advance past the max timeout but below the 300
             await testClock.advance(by: .seconds(100))
         }
+    }
+
+    private func receiveIncomingPush(_ payload: PKPushPayloadMock) async {
+        await confirmation { confirmation in
+            service.pushRegistry(pushRegistry, didReceiveIncomingPushWith: payload, for: .voIP) {
+                confirmation()
+            }
+        }
+    }
+
+    private func waitUntil(_ condition: () -> Bool,
+                           sourceLocation: SourceLocation = #_sourceLocation) async {
+        for _ in 0..<100 {
+            guard !condition() else { return }
+            await Task.yield()
+        }
+        #expect(condition(), sourceLocation: sourceLocation)
     }
 }
 
@@ -242,5 +617,56 @@ private class PKPushPayloadMock: PKPushPayload {
     func updateIsVoice(_ isVoice: Bool) -> Self {
         dict[ElementCallServiceNotificationKey.isVoiceCall.rawValue] = isVoice
         return self
+    }
+
+    func updatingRoomID(_ roomID: String) -> Self {
+        dict[ElementCallServiceNotificationKey.roomID.rawValue] = roomID
+        return self
+    }
+
+    func updatingRTCNotificationID(_ eventID: String) -> Self {
+        dict[ElementCallServiceNotificationKey.rtcNotifyEventID.rawValue] = eventID
+        return self
+    }
+
+    func removing(_ key: String) -> Self {
+        dict[key] = nil
+        return self
+    }
+
+    func updatingValue(_ value: Any, for key: String) -> Self {
+        dict[key] = value
+        return self
+    }
+}
+
+@MainActor
+private final class SuspendedIncomingCallRoomLookup {
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    var hasRequest: Bool {
+        continuation != nil
+    }
+
+    func wait() async {
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func resume() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+private enum ElementCallServiceTestError: Error {
+    case callKitReportFailed
+}
+
+@MainActor
+private final class CallKitActionRecorder {
+    private(set) var fulfilledActionIDs = [UUID]()
+
+    func fulfill(_ action: CXAction) {
+        fulfilledActionIDs.append(action.uuid)
     }
 }
