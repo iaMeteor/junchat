@@ -63,6 +63,41 @@ struct CallMediaCoordinatorTests {
     }
 
     @Test
+    func videoCallOnlyOverridesNativeRouteForExplicitSelections() {
+        let audioSession = AudioSessionMock()
+        var proximityValues = [Bool]()
+        let setProximityMonitoringEnabled: (Bool) -> Void = { proximityValues.append($0) }
+        let coordinator = CallMediaCoordinator(voiceOnly: false,
+                                               playConnectedTone: false,
+                                               audioSessionController: .init(audioSession: audioSession),
+                                               connectedTonePlayer: { },
+                                               ringbackTonePlayer: TestCallRingbackTonePlayer(),
+                                               setProximityMonitoringEnabled: setProximityMonitoringEnabled)
+
+        coordinator.prepareForCall()
+        coordinator.restoreSelectedOutput()
+        coordinator.recoverAfterLifecycleEvent()
+
+        #expect(audioSession.overrideOutputAudioPortCallsCount == 0)
+
+        coordinator.selectOutput(.nativeSpeaker)
+
+        #expect(audioSession.overrideOutputAudioPortCallsCount == 1)
+        #expect(audioSession.overrideOutputAudioPortReceivedPortOverride == AVAudioSession.PortOverride.speaker)
+
+        coordinator.restoreSelectedOutput()
+        _ = coordinator.remoteMediaConnected()
+
+        #expect(audioSession.overrideOutputAudioPortCallsCount == 1)
+
+        coordinator.selectOutput(.nativeEarpiece)
+
+        #expect(audioSession.overrideOutputAudioPortCallsCount == 2)
+        #expect(audioSession.overrideOutputAudioPortReceivedPortOverride == AVAudioSession.PortOverride.none)
+        #expect(!proximityValues.contains(true))
+    }
+
+    @Test
     func lifecycleNotificationsAreOwnedByTheCoordinator() async {
         let notificationCenter = NotificationCenter()
         let audioSession = AudioSessionMock()

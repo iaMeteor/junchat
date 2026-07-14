@@ -334,6 +334,99 @@ struct UserSessionFlowCoordinatorTests {
     }
 
     @Test
+    mutating func delayedAcceptedCallLookupSupersededByOutgoingCallClearsExactIdentity() async throws {
+        let defaultRoomLookup = try #require(clientProxy.roomForIdentifierClosure)
+        let delayedLookup = SuspendedCallRoomLookup()
+        clientProxy.roomForIdentifierClosure = { roomID in
+            if roomID == "1" {
+                await delayedLookup.wait()
+            }
+            return await defaultRoomLookup(roomID)
+        }
+
+        let delayedIdentity = ElementCallIncomingCallIdentity(callKitID: UUID(), roomID: "1", isVoiceCall: true)
+        let callService = try #require(elementCallService)
+        callService.acceptedIncomingCallIdentity = delayedIdentity
+        callService.clearAcceptedIncomingCallIncomingCallIdentityClosure = { identity in
+            guard callService.acceptedIncomingCallIdentity == identity else { return }
+            callService.acceptedIncomingCallIdentity = nil
+        }
+
+        let delayedCoordinator = ControllableCallScreenCoordinator()
+        let currentCoordinator = ControllableCallScreenCoordinator()
+        callScreenCoordinatorFactory.overrideClosure = { parameters in
+            parameters.configuration.callRoomID == "1" ? delayedCoordinator : currentCoordinator
+        }
+
+        userSessionFlowCoordinator.handleAppRoute(.call(roomID: "1",
+                                                        isVoiceCall: true,
+                                                        incomingCallIdentity: delayedIdentity),
+                                                  animated: false)
+        try await waitUntil { delayedLookup.hasRequest }
+
+        userSessionFlowCoordinator.handleAppRoute(.call(roomID: "2", isVoiceCall: false), animated: false)
+        try await waitUntil { tabCoordinator?.overlayCoordinator === currentCoordinator }
+
+        delayedLookup.resume()
+        try await waitUntil { callService.clearAcceptedIncomingCallIncomingCallIdentityCallsCount == 1 }
+
+        #expect(callService.clearAcceptedIncomingCallIncomingCallIdentityReceivedIncomingCallIdentity == delayedIdentity)
+        #expect(callService.acceptedIncomingCallIdentity == nil)
+        #expect(tabCoordinator?.overlayCoordinator === currentCoordinator)
+        #expect(callScreenCoordinatorFactory.makeCount == 1)
+        #expect(delayedCoordinator.stopCallsCount == 0)
+    }
+
+    @Test
+    mutating func delayedAcceptedCallLookupCannotClearReplacementAcceptedIdentity() async throws {
+        let defaultRoomLookup = try #require(clientProxy.roomForIdentifierClosure)
+        let delayedLookup = SuspendedCallRoomLookup()
+        clientProxy.roomForIdentifierClosure = { roomID in
+            if roomID == "1" {
+                await delayedLookup.wait()
+            }
+            return await defaultRoomLookup(roomID)
+        }
+
+        let delayedIdentity = ElementCallIncomingCallIdentity(callKitID: UUID(), roomID: "1", isVoiceCall: true)
+        let replacementIdentity = ElementCallIncomingCallIdentity(callKitID: UUID(), roomID: "2", isVoiceCall: false)
+        let callService = try #require(elementCallService)
+        callService.acceptedIncomingCallIdentity = delayedIdentity
+        callService.clearAcceptedIncomingCallIncomingCallIdentityClosure = { identity in
+            guard callService.acceptedIncomingCallIdentity == identity else { return }
+            callService.acceptedIncomingCallIdentity = nil
+        }
+
+        let delayedCoordinator = ControllableCallScreenCoordinator()
+        let replacementCoordinator = ControllableCallScreenCoordinator()
+        callScreenCoordinatorFactory.overrideClosure = { parameters in
+            parameters.configuration.incomingCallIdentity == delayedIdentity ? delayedCoordinator : replacementCoordinator
+        }
+
+        userSessionFlowCoordinator.handleAppRoute(.call(roomID: "1",
+                                                        isVoiceCall: true,
+                                                        incomingCallIdentity: delayedIdentity),
+                                                  animated: false)
+        try await waitUntil { delayedLookup.hasRequest }
+
+        callService.acceptedIncomingCallIdentity = replacementIdentity
+        userSessionFlowCoordinator.handleAppRoute(.call(roomID: "2",
+                                                        isVoiceCall: false,
+                                                        incomingCallIdentity: replacementIdentity),
+                                                  animated: false)
+        try await waitUntil { tabCoordinator?.overlayCoordinator === replacementCoordinator }
+
+        delayedLookup.resume()
+        try await waitUntil { callService.clearAcceptedIncomingCallIncomingCallIdentityCallsCount == 1 }
+
+        #expect(callService.clearAcceptedIncomingCallIncomingCallIdentityReceivedIncomingCallIdentity == delayedIdentity)
+        #expect(callService.acceptedIncomingCallIdentity == replacementIdentity)
+        #expect(tabCoordinator?.overlayCoordinator === replacementCoordinator)
+        #expect(callScreenCoordinatorFactory.makeCount == 1)
+        #expect(delayedCoordinator.stopCallsCount == 0)
+    }
+
+    @Test
     mutating func delayedAcceptedCallLookupCannotReplaceNewerIncomingPushOverlay() async throws {
         let defaultRoomLookup = try #require(clientProxy.roomForIdentifierClosure)
         let delayedLookup = SuspendedCallRoomLookup()

@@ -494,8 +494,10 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
     }
 
     func provider(_ provider: CXProvider, perform action: CXSetMutedCallAction) {
-        if let ongoingCallID {
+        if let ongoingCallID, ongoingCallID.callKitID == action.callUUID {
             actionsSubject.send(.setAudioEnabled(!action.isMuted, roomID: ongoingCallID.roomID))
+        } else if ongoingCallID != nil {
+            MXLog.warning("Ignoring CallKit mute for a superseded call")
         } else {
             MXLog.error("Failed muting/unmuting call, missing ongoingCallID")
         }

@@ -262,7 +262,8 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
         guard !hasStopped, ownsSharedMediaState else { return }
 
         selectedOutput = output
-        restoreSelectedOutput()
+        applySelectedOutputRoute()
+        applyProximityMonitoringPolicy()
     }
 
     func updateAudioEnabled(_ enabled: Bool) {
@@ -280,14 +281,7 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
         guard !hasStopped, ownsSharedMediaState else { return }
 
         if voiceOnly {
-            switch selectedOutput {
-            case .nativeEarpiece:
-                audioSessionController.routeAudioToNativeEarpiece()
-            case .nativeSpeaker:
-                audioSessionController.routeAudioToSpeaker()
-            case .system:
-                break
-            }
+            applySelectedOutputRoute()
         }
         applyProximityMonitoringPolicy()
     }
@@ -372,6 +366,17 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
         setProximityMonitoringEnabled(CallAudioRoutePolicy.shouldEnableProximityMonitoring(voiceOnly: voiceOnly,
                                                                                            selectedOutput: selectedOutput,
                                                                                            remoteMediaConnected: hasRemoteMediaConnected))
+    }
+
+    private func applySelectedOutputRoute() {
+        switch selectedOutput {
+        case .nativeEarpiece:
+            audioSessionController.routeAudioToNativeEarpiece()
+        case .nativeSpeaker:
+            audioSessionController.routeAudioToSpeaker()
+        case .system:
+            break
+        }
     }
 
     private func observeLifecycleNotifications() {

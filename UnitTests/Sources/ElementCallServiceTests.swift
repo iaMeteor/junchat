@@ -611,6 +611,55 @@ final class ElementCallServiceTests {
     }
 
     @Test
+    func staleMuteActionCannotAlterReplacementMicrophone() async throws {
+        await receiveIncomingPush(PKPushPayloadMock()
+            .updatingExpiration(currentDate, lifetime: 30)
+            .updatingRoomID("!first:example.com")
+            .updatingRTCNotificationID("$first"))
+        let staleCallUUID = try #require(callProvider.reportNewIncomingCallWithUpdateCompletionReceivedArguments?.uuid)
+
+        let replacementRoomID = "!replacement:example.com"
+        await receiveIncomingPush(PKPushPayloadMock()
+            .updatingExpiration(currentDate, lifetime: 30)
+            .updatingRoomID(replacementRoomID)
+            .updatingRTCNotificationID("$replacement"))
+        let replacementIncomingCallIdentity = try #require(service.incomingCallIdentityPublisher.value)
+        let acceptedReplacementIdentity = try #require(await service.acceptIncomingCall(roomID: replacementRoomID,
+                                                                                        isVoiceCall: false,
+                                                                                        incomingCallIdentity: replacementIncomingCallIdentity))
+        let generation = ElementCallSessionGeneration()
+        service.registerCallSession(generation: generation)
+        await service.setupCallSession(roomID: replacementRoomID,
+                                       roomDisplayName: "Replacement",
+                                       incomingCallIdentity: acceptedReplacementIdentity,
+                                       generation: generation)
+
+        var audioActions = [(enabled: Bool, roomID: String)]()
+        let cancellable = service.actions.sink { action in
+            if case .setAudioEnabled(let enabled, let roomID) = action {
+                audioActions.append((enabled, roomID))
+            }
+        }
+        let provider = CXProvider(configuration: CXProviderConfiguration())
+        let staleAction = CXSetMutedCallAction(call: staleCallUUID, muted: true)
+
+        service.provider(provider, perform: staleAction)
+
+        #expect(callKitActionRecorder.fulfilledActionIDs.filter { $0 == staleAction.uuid }.count == 1)
+        #expect(audioActions.isEmpty)
+        #expect(service.ongoingCallRoomIDPublisher.value == replacementRoomID)
+
+        let matchingAction = CXSetMutedCallAction(call: acceptedReplacementIdentity.callKitID, muted: true)
+        service.provider(provider, perform: matchingAction)
+
+        #expect(callKitActionRecorder.fulfilledActionIDs.filter { $0 == matchingAction.uuid }.count == 1)
+        #expect(audioActions.count == 1)
+        #expect(audioActions.first?.enabled == false)
+        #expect(audioActions.first?.roomID == replacementRoomID)
+        withExtendedLifetime((cancellable, provider)) { }
+    }
+
+    @Test
     func matchingEndActionTearsDownOnlyItsCall() async throws {
         let roomID = "!current:example.com"
         await receiveIncomingPush(PKPushPayloadMock()
