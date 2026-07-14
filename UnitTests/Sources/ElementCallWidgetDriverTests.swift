@@ -147,6 +147,62 @@ struct ElementCallWidgetDriverTests {
         #expect(probe.snapshot.sendFinished == 1)
     }
 
+    @Test
+    func stopWaitsForInFlightRustCallbackBeforeFreeingFuture() async throws {
+        let probe = ElementCallRustFutureABIProbe()
+        let registry = ElementCallRustFutureRegistry()
+        let token = try #require(registry.register(42, operations: probe.operations))
+        let waitTask = Task { await registry.waitUntilReady(token) }
+        await waitUntil { probe.hasPendingCallback }
+
+        registry.stop()
+
+        #expect(probe.events == [.poll, .cancel, .cancelReturned])
+        probe.resumePoll(returning: 0)
+        #expect(await !waitTask.value)
+        await waitUntil { probe.events.last == .free }
+
+        #expect(probe.events == [.poll, .cancel, .cancelReturned, .callback, .free])
+        registry.stop()
+        #expect(probe.events.filter { $0 == .free }.count == 1)
+    }
+
+    @Test
+    func synchronousCancellationCallbackReturnsBeforeFreeingFuture() async throws {
+        let probe = ElementCallRustFutureABIProbe(callbackOnCancel: true)
+        let registry = ElementCallRustFutureRegistry()
+        let token = try #require(registry.register(42, operations: probe.operations))
+        let waitTask = Task { await registry.waitUntilReady(token) }
+        await waitUntil { probe.hasPendingCallback }
+
+        registry.stop()
+
+        #expect(await !waitTask.value)
+        await waitUntil { probe.events.last == .free }
+        #expect(probe.events == [.poll, .cancel, .callback, .cancelReturned, .free])
+    }
+
+    @Test
+    func readyRustFutureCompletesBeforeBeingFreed() async throws {
+        let probe = ElementCallRustFutureABIProbe()
+        let registry = ElementCallRustFutureRegistry()
+        let token = try #require(registry.register(42, operations: probe.operations))
+        let waitTask = Task { await registry.waitUntilReady(token) }
+        await waitUntil { probe.hasPendingCallback }
+
+        probe.resumePoll(returning: 0)
+        #expect(await waitTask.value)
+        let completedHandle = registry.complete(token) { future in
+            probe.recordCompletion()
+            return future.handle
+        }
+
+        #expect(completedHandle == 42)
+        #expect(probe.events == [.poll, .callback, .complete, .free])
+        registry.stop()
+        #expect(probe.events.filter { $0 == .free }.count == 1)
+    }
+
     private func makeDriver(probe: ElementCallWidgetDriverLifecycleProbe,
                             receiveMessageOnStop: String? = nil) -> ElementCallWidgetDriver {
         ElementCallWidgetDriver(room: RoomSDKMock(),
@@ -190,6 +246,80 @@ struct ElementCallWidgetDriverTests {
             try? await Task.sleep(for: .milliseconds(10))
         }
         #expect(await condition(), sourceLocation: sourceLocation)
+    }
+}
+
+private final class ElementCallRustFutureABIProbe: @unchecked Sendable {
+    enum Event: Equatable {
+        case poll
+        case cancel
+        case cancelReturned
+        case callback
+        case complete
+        case free
+    }
+
+    private let lock = NSLock()
+    private let callbackOnCancel: Bool
+    private var value = [Event]()
+    private var callbackData: UInt64?
+
+    init(callbackOnCancel: Bool = false) {
+        self.callbackOnCancel = callbackOnCancel
+    }
+
+    var events: [Event] {
+        lock.withLock { value }
+    }
+
+    var hasPendingCallback: Bool {
+        lock.withLock { callbackData != nil }
+    }
+
+    var operations: ElementCallRustFutureOperations {
+        .init(poll: { [weak self] _, callbackData in
+                  self?.lock.withLock {
+                      self?.value.append(.poll)
+                      self?.callbackData = callbackData
+                  }
+              },
+              cancel: { [weak self] _ in
+                  self?.cancel()
+              },
+              free: { [weak self] _ in
+                  self?.lock.withLock { self?.value.append(.free) }
+              })
+    }
+
+    func resumePoll(returning result: Int8) {
+        let callbackData = takeCallbackData()
+        guard let callbackData else { return }
+        elementCallRustFutureCallback(callbackData, result)
+    }
+
+    func recordCompletion() {
+        lock.withLock { value.append(.complete) }
+    }
+
+    private func cancel() {
+        let callbackData = lock.withLock {
+            value.append(.cancel)
+            return callbackOnCancel ? takeCallbackDataLocked() : nil
+        }
+        if let callbackData {
+            elementCallRustFutureCallback(callbackData, 0)
+        }
+        lock.withLock { value.append(.cancelReturned) }
+    }
+
+    private func takeCallbackData() -> UInt64? {
+        lock.withLock { takeCallbackDataLocked() }
+    }
+
+    private func takeCallbackDataLocked() -> UInt64? {
+        value.append(.callback)
+        defer { callbackData = nil }
+        return callbackData
     }
 }
 

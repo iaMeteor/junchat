@@ -441,11 +441,205 @@ final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked
     }
 }
 
+struct ElementCallRustFutureOperations: @unchecked Sendable {
+    let poll: (UInt64, UInt64) -> Void
+    let cancel: (UInt64) -> Void
+    let free: (UInt64) -> Void
+}
+
+struct ElementCallRustFuture: @unchecked Sendable {
+    let handle: UInt64
+    let operations: ElementCallRustFutureOperations
+
+    func cancelAndFree() {
+        operations.cancel(handle)
+        operations.free(handle)
+    }
+}
+
+final class ElementCallRustFutureRegistry: @unchecked Sendable {
+    // UniFFI owns one callback per poll. Keep the future alive until that callback
+    // consumes its retained continuation and any concurrent cancel call returns.
+
+    private struct PendingFuture {
+        let future: ElementCallRustFuture
+        var isPolling = false
+        var isCancellationRequested = false
+        var isCancelCallInFlight = false
+    }
+
+    private struct CancellationRequest {
+        let token: UUID
+        let future: ElementCallRustFuture
+    }
+
+    private let lock = NSLock()
+    private var pendingFutures = [UUID: PendingFuture]()
+    private var hasStopped = false
+
+    var canCreateFuture: Bool {
+        lock.withLock { !hasStopped }
+    }
+
+    func register(_ handle: UInt64, operations: ElementCallRustFutureOperations) -> UUID? {
+        let token = UUID()
+        let future = ElementCallRustFuture(handle: handle, operations: operations)
+        let didRegister = lock.withLock {
+            guard !hasStopped else { return false }
+            pendingFutures[token] = PendingFuture(future: future)
+            return true
+        }
+
+        guard didRegister else {
+            future.cancelAndFree()
+            return nil
+        }
+        return token
+    }
+
+    func waitUntilReady(_ token: UUID) async -> Bool {
+        await withTaskCancellationHandler {
+            if Task.isCancelled {
+                requestCancellation(token)
+                return false
+            }
+
+            while await poll(token) != 0 {
+                if Task.isCancelled {
+                    requestCancellation(token)
+                    return false
+                }
+            }
+
+            return !Task.isCancelled && isActive(token)
+        } onCancel: { [weak self] in
+            self?.requestCancellation(token)
+        }
+    }
+
+    func complete<T>(_ token: UUID, operation: (ElementCallRustFuture) -> T) -> T? {
+        guard let future = lock.withLock({ () -> ElementCallRustFuture? in
+            guard let pendingFuture = pendingFutures[token],
+                  !pendingFuture.isCancellationRequested else {
+                return nil
+            }
+            pendingFutures[token] = nil
+            return pendingFuture.future
+        }) else {
+            return nil
+        }
+
+        let result = operation(future)
+        future.operations.free(future.handle)
+        return result
+    }
+
+    func stop() {
+        let cancellationRequests = lock.withLock {
+            guard !hasStopped else { return [CancellationRequest]() }
+            hasStopped = true
+            return Array(pendingFutures.keys).compactMap { beginCancellationLocked($0) }
+        }
+
+        cancellationRequests.forEach(performCancellation)
+    }
+
+    private func poll(_ token: UUID) async -> Int8 {
+        let result = await withCheckedContinuation { continuation in
+            let continuationBox = ElementCallRustFutureContinuation(continuation)
+            let didPoll = lock.withLock {
+                guard var pendingFuture = pendingFutures[token],
+                      !pendingFuture.isCancellationRequested else { return false }
+                pendingFuture.isPolling = true
+                pendingFutures[token] = pendingFuture
+                let pointer = Unmanaged.passRetained(continuationBox).toOpaque()
+                pendingFuture.future.operations.poll(pendingFuture.future.handle,
+                                                     UInt64(UInt(bitPattern: pointer)))
+                return true
+            }
+
+            if !didPoll {
+                continuationBox.resume(returning: 0)
+            }
+        }
+        finishPoll(token)
+        return result
+    }
+
+    private func isActive(_ token: UUID) -> Bool {
+        lock.withLock {
+            guard let pendingFuture = pendingFutures[token] else { return false }
+            return !pendingFuture.isCancellationRequested
+        }
+    }
+
+    private func requestCancellation(_ token: UUID) {
+        guard let cancellationRequest = lock.withLock({ beginCancellationLocked(token) }) else { return }
+        performCancellation(cancellationRequest)
+    }
+
+    private func beginCancellationLocked(_ token: UUID) -> CancellationRequest? {
+        guard var pendingFuture = pendingFutures[token],
+              !pendingFuture.isCancellationRequested else {
+            return nil
+        }
+
+        pendingFuture.isCancellationRequested = true
+        pendingFuture.isCancelCallInFlight = true
+        pendingFutures[token] = pendingFuture
+        return CancellationRequest(token: token, future: pendingFuture.future)
+    }
+
+    private func performCancellation(_ request: CancellationRequest) {
+        request.future.operations.cancel(request.future.handle)
+
+        let futureToFree = lock.withLock { () -> ElementCallRustFuture? in
+            guard var pendingFuture = pendingFutures[request.token] else { return nil }
+            pendingFuture.isCancelCallInFlight = false
+            guard !pendingFuture.isPolling else {
+                pendingFutures[request.token] = pendingFuture
+                return nil
+            }
+            pendingFutures[request.token] = nil
+            return pendingFuture.future
+        }
+        free(futureToFree)
+    }
+
+    private func finishPoll(_ token: UUID) {
+        let futureToFree = lock.withLock { () -> ElementCallRustFuture? in
+            guard var pendingFuture = pendingFutures[token] else { return nil }
+            pendingFuture.isPolling = false
+            guard pendingFuture.isCancellationRequested,
+                  !pendingFuture.isCancelCallInFlight else {
+                pendingFutures[token] = pendingFuture
+                return nil
+            }
+            pendingFutures[token] = nil
+            return pendingFuture.future
+        }
+        free(futureToFree)
+    }
+
+    private func free(_ future: ElementCallRustFuture?) {
+        guard let future else { return }
+        future.operations.free(future.handle)
+    }
+}
+
 private final class MatrixElementCallWidgetDriverRuntime: ElementCallWidgetDriverRuntimeProtocol, @unchecked Sendable {
     private enum FutureKind {
         case run
         case receive
         case send
+
+        var operations: ElementCallRustFutureOperations {
+            .init(poll: { handle, callbackData in
+                      poll(handle: handle, callbackData: callbackData)
+                  },
+                  cancel: { handle in cancel(handle: handle) },
+                  free: { handle in free(handle: handle) })
+        }
 
         func poll(handle: UInt64, callbackData: UInt64) {
             switch self {
@@ -481,24 +675,11 @@ private final class MatrixElementCallWidgetDriverRuntime: ElementCallWidgetDrive
         }
     }
 
-    private struct PendingFuture {
-        let handle: UInt64
-        let kind: FutureKind
-
-        func cancelAndFree() {
-            kind.cancel(handle: handle)
-            kind.free(handle: handle)
-        }
-    }
-
     private let driver: WidgetDriver
     private let handle: WidgetDriverHandle
     private let room: Room
     private let capabilitiesProvider: WidgetCapabilitiesProvider
-
-    private let lock = NSLock()
-    private var pendingFutures = [UUID: PendingFuture]()
-    private var hasStopped = false
+    private let futureRegistry = ElementCallRustFutureRegistry()
 
     init(sdkDriver: WidgetDriverAndHandle,
          room: Room,
@@ -522,11 +703,12 @@ private final class MatrixElementCallWidgetDriverRuntime: ElementCallWidgetDrive
         let futureHandle = uniffi_matrix_sdk_ffi_fn_method_widgetdriver_run(driver.uniffiCloneHandle(),
                                                                             FfiConverterTypeRoom_lower(room),
                                                                             FfiConverterCallbackInterfaceWidgetCapabilitiesProvider_lower(capabilitiesProvider))
-        guard let token = register(futureHandle, kind: .run), await waitUntilReady(token) else {
+        guard let token = futureRegistry.register(futureHandle, operations: FutureKind.run.operations),
+              await futureRegistry.waitUntilReady(token) else {
             return
         }
 
-        guard let status = complete(token, operation: { pendingFuture in
+        guard let status = futureRegistry.complete(token, operation: { pendingFuture in
             var status = Self.emptyCallStatus
             ffi_matrix_sdk_ffi_rust_future_complete_void(pendingFuture.handle, &status)
             return status
@@ -540,11 +722,12 @@ private final class MatrixElementCallWidgetDriverRuntime: ElementCallWidgetDrive
         guard beginFutureCreation() else { return nil }
 
         let futureHandle = uniffi_matrix_sdk_ffi_fn_method_widgetdriverhandle_recv(handle.uniffiCloneHandle())
-        guard let token = register(futureHandle, kind: .receive), await waitUntilReady(token) else {
+        guard let token = futureRegistry.register(futureHandle, operations: FutureKind.receive.operations),
+              await futureRegistry.waitUntilReady(token) else {
             return nil
         }
 
-        guard let completion = complete(token, operation: { pendingFuture in
+        guard let completion = futureRegistry.complete(token, operation: { pendingFuture in
             var status = Self.emptyCallStatus
             let buffer = ffi_matrix_sdk_ffi_rust_future_complete_rust_buffer(pendingFuture.handle, &status)
             return (buffer, status)
@@ -563,11 +746,12 @@ private final class MatrixElementCallWidgetDriverRuntime: ElementCallWidgetDrive
         guard beginFutureCreation(), let messageBuffer = encode(message) else { return false }
 
         let futureHandle = uniffi_matrix_sdk_ffi_fn_method_widgetdriverhandle_send(handle.uniffiCloneHandle(), messageBuffer)
-        guard let token = register(futureHandle, kind: .send), await waitUntilReady(token) else {
+        guard let token = futureRegistry.register(futureHandle, operations: FutureKind.send.operations),
+              await futureRegistry.waitUntilReady(token) else {
             return false
         }
 
-        guard let completion = complete(token, operation: { pendingFuture in
+        guard let completion = futureRegistry.complete(token, operation: { pendingFuture in
             var status = Self.emptyCallStatus
             let result = ffi_matrix_sdk_ffi_rust_future_complete_i8(pendingFuture.handle, &status)
             return (result, status)
@@ -578,87 +762,11 @@ private final class MatrixElementCallWidgetDriverRuntime: ElementCallWidgetDrive
     }
 
     func stop() {
-        let pendingFutures = lock.withLock {
-            guard !hasStopped else { return [PendingFuture]() }
-            hasStopped = true
-            let pendingFutures = Array(self.pendingFutures.values)
-            self.pendingFutures.removeAll()
-            return pendingFutures
-        }
-
-        pendingFutures.forEach { $0.cancelAndFree() }
+        futureRegistry.stop()
     }
 
     private func beginFutureCreation() -> Bool {
-        !Task.isCancelled && lock.withLock { !hasStopped }
-    }
-
-    private func register(_ handle: UInt64, kind: FutureKind) -> UUID? {
-        let token = UUID()
-        let pendingFuture = PendingFuture(handle: handle, kind: kind)
-        let didRegister = lock.withLock {
-            guard !hasStopped else { return false }
-            pendingFutures[token] = pendingFuture
-            return true
-        }
-
-        guard didRegister else {
-            pendingFuture.cancelAndFree()
-            return nil
-        }
-        return token
-    }
-
-    private func waitUntilReady(_ token: UUID) async -> Bool {
-        await withTaskCancellationHandler {
-            if Task.isCancelled {
-                cancelAndFree(token)
-                return false
-            }
-
-            while await poll(token) != 0 {
-                if Task.isCancelled {
-                    cancelAndFree(token)
-                    return false
-                }
-            }
-
-            return !Task.isCancelled && lock.withLock { pendingFutures[token] != nil }
-        } onCancel: { [weak self] in
-            self?.cancelAndFree(token)
-        }
-    }
-
-    private func poll(_ token: UUID) async -> Int8 {
-        await withCheckedContinuation { continuation in
-            let continuationBox = ElementCallRustFutureContinuation(continuation)
-            let didPoll = lock.withLock {
-                guard let pendingFuture = pendingFutures[token] else { return false }
-                let pointer = Unmanaged.passRetained(continuationBox).toOpaque()
-                pendingFuture.kind.poll(handle: pendingFuture.handle,
-                                        callbackData: UInt64(UInt(bitPattern: pointer)))
-                return true
-            }
-
-            if !didPoll {
-                continuationBox.resume(returning: 0)
-            }
-        }
-    }
-
-    private func cancelAndFree(_ token: UUID) {
-        let pendingFuture = lock.withLock { pendingFutures.removeValue(forKey: token) }
-        pendingFuture?.cancelAndFree()
-    }
-
-    private func complete<T>(_ token: UUID, operation: (PendingFuture) -> T) -> T? {
-        guard let pendingFuture = lock.withLock({ pendingFutures.removeValue(forKey: token) }) else {
-            return nil
-        }
-
-        let result = operation(pendingFuture)
-        pendingFuture.kind.free(handle: pendingFuture.handle)
-        return result
+        !Task.isCancelled && futureRegistry.canCreateFuture
     }
 
     private func check(_ status: RustCallStatus, operation: String) -> Bool {
@@ -753,7 +861,7 @@ private final class ElementCallRustFutureContinuation: @unchecked Sendable {
     }
 }
 
-private let elementCallRustFutureCallback: UniffiRustFutureContinuationCallback = { callbackData, result in
+let elementCallRustFutureCallback: UniffiRustFutureContinuationCallback = { callbackData, result in
     guard let pointer = UnsafeRawPointer(bitPattern: UInt(callbackData)) else { return }
     Unmanaged<ElementCallRustFutureContinuation>.fromOpaque(pointer).takeRetainedValue().resume(returning: result)
 }
