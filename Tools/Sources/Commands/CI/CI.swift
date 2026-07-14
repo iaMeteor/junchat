@@ -149,6 +149,39 @@ struct CI: ParsableCommand {
         return commit
     }
 
+    static func gitRepositoryStatus() async throws -> String {
+        try await CI.run(.name("git"),
+                         ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+                         output: .string(limit: 1_048_576)).standardOutput ?? ""
+    }
+
+    static func gitCurrentCommitMessage() async throws -> String {
+        guard let message = try await CI.run(.name("git"),
+                                             ["show", "-s", "--format=%B", "HEAD"],
+                                             output: .string(limit: 65536)).standardOutput else {
+            throw ValidationError("Could not determine the current commit message.")
+        }
+        return message
+    }
+
+    static func gitCurrentCommitParents() async throws -> [String] {
+        guard let output = try await CI.run(.name("git"),
+                                            ["show", "-s", "--format=%P", "HEAD"],
+                                            output: .string(limit: 4096)).standardOutput else {
+            throw ValidationError("Could not determine the current commit parents.")
+        }
+        return output.split(whereSeparator: \.isWhitespace).map(String.init)
+    }
+
+    static func gitCurrentCommitChangedPaths() async throws -> [String] {
+        guard let output = try await CI.run(.name("git"),
+                                            ["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", "HEAD"],
+                                            output: .string(limit: 1_048_576)).standardOutput else {
+            throw ValidationError("Could not determine the current commit paths.")
+        }
+        return output.split(separator: "\0").map(String.init)
+    }
+
     static func gitPush(tagName: String? = nil) async throws {
         guard let apiToken = ProcessInfo.processInfo.environment["GITHUB_TOKEN"], !apiToken.isEmpty
         else {

@@ -31,7 +31,7 @@ enum JunchatReleaseNotes {
         guard existingContent == heading || existingContent.hasPrefix("\(heading)\n") else {
             throw ReleaseNotesError.invalidChangelog
         }
-        guard isISODate(releaseDate) else {
+        guard isValidISODate(releaseDate) else {
             throw ReleaseNotesError.invalidReleaseDate
         }
 
@@ -95,7 +95,7 @@ enum JunchatReleaseNotes {
         return sections.joined(separator: "\n\n") + "\n"
     }
 
-    private static func isISODate(_ value: String) -> Bool {
+    static func isValidISODate(_ value: String) -> Bool {
         let parts = value.split(separator: "-", omittingEmptySubsequences: false)
         guard parts.count == 3,
               parts[0].count == 4,
