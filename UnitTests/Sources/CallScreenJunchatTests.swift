@@ -299,6 +299,87 @@ struct CallScreenJunchatTests {
 
     @Test
     @MainActor
+    func endCallWaitsForJavaScriptHangupBeforeTearingDown() async {
+        let fixture = makeLifecycleViewModel()
+        let viewModel = fixture.viewModel
+        let widgetDriver = fixture.widgetDriver
+        let elementCallService = fixture.elementCallService
+        var events = [String]()
+        var hangupContinuation: CheckedContinuation<Any, Error>?
+        var cancellables = Set<AnyCancellable>()
+
+        widgetDriver.stopClosure = { events.append("widgetStopped") }
+        elementCallService.tearDownCallSessionGenerationClosure = { _ in events.append("serviceTornDown") }
+        viewModel.context.javaScriptEvaluator = { script in
+            guard script.contains(#""action":"im.vector.hangup""#) else { return "ignored" }
+            events.append("hangupStarted")
+            let result = try await withCheckedThrowingContinuation { hangupContinuation = $0 }
+            events.append("hangupFinished")
+            return result
+        }
+        viewModel.actions.sink { action in
+            if case .dismiss = action {
+                events.append("dismissed")
+            }
+        }
+        .store(in: &cancellables)
+
+        viewModel.process(viewAction: .endCall)
+        await waitUntil { hangupContinuation != nil }
+
+        #expect(widgetDriver.stopCallsCount == 0)
+        #expect(elementCallService.tearDownCallSessionGenerationCallsCount == 0)
+        #expect(!events.contains("dismissed"))
+
+        hangupContinuation?.resume(returning: "ok")
+        await waitUntil { events.contains("dismissed") }
+
+        #expect(events == ["hangupStarted", "hangupFinished", "widgetStopped", "serviceTornDown", "dismissed"])
+    }
+
+    @Test
+    @MainActor
+    func lateJavaScriptHangupCompletionAfterTimeoutDoesNotRepeatTeardown() async throws {
+        let fixture = makeLifecycleViewModel(hangupDeliveryTimeout: .milliseconds(20))
+        let viewModel = fixture.viewModel
+        let widgetDriver = fixture.widgetDriver
+        let elementCallService = fixture.elementCallService
+        var hangupContinuation: CheckedContinuation<Any, Error>?
+        var dismissCount = 0
+        var cancellables = Set<AnyCancellable>()
+
+        viewModel.context.javaScriptEvaluator = { script in
+            guard script.contains(#""action":"im.vector.hangup""#) else { return "ignored" }
+            return try await withCheckedThrowingContinuation { hangupContinuation = $0 }
+        }
+        viewModel.actions.sink { action in
+            if case .dismiss = action {
+                dismissCount += 1
+            }
+        }
+        .store(in: &cancellables)
+
+        viewModel.process(viewAction: .endCall)
+        await waitUntil { hangupContinuation != nil }
+
+        #expect(widgetDriver.stopCallsCount == 0)
+        #expect(elementCallService.tearDownCallSessionGenerationCallsCount == 0)
+
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(widgetDriver.stopCallsCount == 1)
+        #expect(elementCallService.tearDownCallSessionGenerationCallsCount == 1)
+        #expect(dismissCount == 1)
+
+        hangupContinuation?.resume(returning: "late")
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(widgetDriver.stopCallsCount == 1)
+        #expect(elementCallService.tearDownCallSessionGenerationCallsCount == 1)
+        #expect(dismissCount == 1)
+    }
+
+    @Test
+    @MainActor
     func stoppingDuringWidgetSetupDoesNotCreateAnOngoingCall() async throws {
         let widgetDriver = ElementCallWidgetDriverMock()
         widgetDriver.underlyingWidgetID = "widget"
@@ -851,6 +932,46 @@ struct CallScreenJunchatTests {
     private func jsonObject(_ string: String) throws -> [String: Any] {
         let data = try #require(string.data(using: .utf8))
         return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    @MainActor
+    private struct LifecycleViewModelFixture {
+        let viewModel: CallScreenViewModel
+        let widgetDriver: ElementCallWidgetDriverMock
+        let elementCallService: ElementCallServiceMock
+    }
+
+    @MainActor
+    private func makeLifecycleViewModel(hangupDeliveryTimeout: Duration = .seconds(1)) -> LifecycleViewModelFixture {
+        let widgetDriver = ElementCallWidgetDriverMock()
+        widgetDriver.underlyingWidgetID = "widget"
+        widgetDriver.underlyingMessagePublisher = .init()
+        widgetDriver.underlyingActions = Empty().eraseToAnyPublisher()
+        widgetDriver.startBaseURLClientIDColorSchemeVoiceOnlyRageshakeURLAnalyticsConfigurationReturnValue = .success(URL.userDirectory)
+        widgetDriver.handleMessageReturnValue = .success(true)
+
+        let roomProxy = JoinedRoomProxyMock(.init(id: "room-id", name: "Call Room"))
+        roomProxy.elementCallWidgetDriverDeviceIDReturnValue = widgetDriver
+        let elementCallService = ElementCallServiceMock(.init())
+        let appSettings = AppSettings()
+        let viewModel = CallScreenViewModel(elementCallService: elementCallService,
+                                            configuration: .init(roomProxy: roomProxy,
+                                                                 clientProxy: ClientProxyMock(.init(deviceID: "device-id")),
+                                                                 clientID: "com.heyujk.junchat",
+                                                                 elementCallBaseURL: URL.homeDirectory,
+                                                                 elementCallBaseURLOverride: nil,
+                                                                 voiceOnly: true,
+                                                                 colorScheme: .dark),
+                                            allowPictureInPicture: false,
+                                            appHooks: AppHooks(),
+                                            appSettings: appSettings,
+                                            analyticsService: AnalyticsService(client: AnalyticsClientMock(), appSettings: appSettings),
+                                            callConnectedTonePlayer: { },
+                                            callEndedTonePlayer: { },
+                                            hangupDeliveryTimeout: hangupDeliveryTimeout)
+        return .init(viewModel: viewModel,
+                     widgetDriver: widgetDriver,
+                     elementCallService: elementCallService)
     }
 
     @MainActor

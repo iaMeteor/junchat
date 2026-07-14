@@ -39,10 +39,14 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
     @CancellableTask
     private var setupTask: Task<Void, Never>?
 
+    private var callTerminationTask: Task<Void, Never>?
+
     private var hasAppliedInitialVoiceOutputDevice = false
     private var hasCleanedUpLocalCallState = false
     private var hasCompletedCall = false
     private var hasRequestedHangup = false
+    private var shouldDismissAfterHangup = false
+    private let hangupDeliveryTimeout: Duration
 
     /// Designated initialiser
     /// - Parameters:
@@ -62,7 +66,8 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
          callRingbackTonePlayer: CallRingbackTonePlaying = DefaultCallRingbackTonePlayer(),
          setProximityMonitoringEnabled: @escaping (Bool) -> Void = { UIDevice.current.isProximityMonitoringEnabled = $0 },
          applicationStateProvider: @escaping @MainActor () -> UIApplication.State = { UIApplication.shared.applicationState },
-         callMediaCoordinator: CallMediaCoordinatorProtocol? = nil) {
+         callMediaCoordinator: CallMediaCoordinatorProtocol? = nil,
+         hangupDeliveryTimeout: Duration = .seconds(1)) {
         self.elementCallService = elementCallService
         self.configuration = configuration
         self.appSettings = appSettings
@@ -76,6 +81,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
                                                                                  allowsPictureInPicture: allowPictureInPicture,
                                                                                  applicationStateProvider: applicationStateProvider)
         self.callEndedTonePlayer = callEndedTonePlayer
+        self.hangupDeliveryTimeout = hangupDeliveryTimeout
         isPictureInPictureAllowed = allowPictureInPicture
 
         guard let deviceID = configuration.clientProxy.deviceID else { fatalError("Missing device ID for the call.") }
@@ -160,8 +166,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
             actionsSubject.send(.pictureInPictureStopped)
         case .endCall:
             MXLog.info("[JunchatCall] end call requested by user")
-            requestHangup()
-            completeCall()
+            requestHangup(shouldDismiss: true)
         case .mediaCapturePermissionGranted:
             logAudioSessionSnapshot(reason: "before media capture permission grant handling")
             callMediaCoordinator.mediaCapturePermissionGranted()
@@ -180,11 +185,10 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
     func stop() {
         if hasCompletedCall {
             MXLog.info("[JunchatCall] skip hangup on stop because call is already complete")
+            cleanUpLocalCallState()
         } else {
-            requestHangup()
+            requestHangup(shouldDismiss: false)
         }
-
-        cleanUpLocalCallState()
     }
 
     func requestPictureInPicture() async -> Result<Void, CallScreenError> {
@@ -198,15 +202,44 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         state.bindings.stopPictureInPictureHandler?()
     }
 
-    private func requestHangup() {
+    private func requestHangup(shouldDismiss: Bool) {
+        shouldDismissAfterHangup = shouldDismissAfterHangup || shouldDismiss
+
         guard !hasRequestedHangup else {
             MXLog.info("[JunchatCall] skip duplicate hangup request")
             return
         }
 
         hasRequestedHangup = true
-        Task { [weak self] in
-            await self?.hangup()
+        let evaluator = state.bindings.javaScriptEvaluator
+        let javaScript = hangupJavaScript()
+        let timeout = hangupDeliveryTimeout
+
+        callTerminationTask = Task { [self] in
+            let outcome = await Self.deliverHangup(javaScript: javaScript,
+                                                   evaluator: evaluator,
+                                                   timeout: timeout)
+            guard !Task.isCancelled, !hasCompletedCall else { return }
+
+            callTerminationTask = nil
+            switch outcome {
+            case .delivered:
+                MXLog.info("[JunchatCall] JavaScript hangup delivered")
+            case .failed:
+                MXLog.warning("[JunchatCall] JavaScript hangup failed; continuing teardown")
+            case .timedOut:
+                MXLog.warning("[JunchatCall] JavaScript hangup timed out; continuing teardown")
+            case .unavailable:
+                MXLog.warning("[JunchatCall] JavaScript hangup unavailable; continuing teardown")
+            case .cancelled:
+                return
+            }
+
+            if shouldDismissAfterHangup {
+                completeCall()
+            } else {
+                cleanUpLocalCallState()
+            }
         }
     }
 
@@ -280,6 +313,8 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         }
 
         MXLog.info("[JunchatCall] completeCall")
+        callTerminationTask?.cancel()
+        callTerminationTask = nil
         hasCompletedCall = true
         cleanUpLocalCallState()
         callEndedTonePlayer()
@@ -525,6 +560,48 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         await postMessageToWidget(message)
     }
 
+    private func hangupJavaScript() -> String? {
+        let message = ElementCallWidgetMessage(direction: .fromWidget,
+                                               action: .hangup,
+                                               widgetId: widgetDriver.widgetID)
+        guard let data = try? JSONEncoder().encode(message),
+              let json = String(data: data, encoding: .utf8) else {
+            MXLog.error("Failed encoding hangup widget message")
+            return nil
+        }
+        return "postMessage(\(json), '*')"
+    }
+
+    private nonisolated static func deliverHangup(javaScript: String?,
+                                                  evaluator: ((String) async throws -> Any)?,
+                                                  timeout: Duration) async -> CallHangupDeliveryOutcome {
+        guard let javaScript, let evaluator else { return .unavailable }
+
+        let gate = CallHangupDeliveryGate()
+        let evaluatorTask = Task { @MainActor in
+            do {
+                _ = try await evaluator(javaScript)
+                gate.resolve(.delivered)
+            } catch {
+                gate.resolve(.failed)
+            }
+        }
+        let timeoutTask = Task.detached {
+            try? await Task.sleep(for: timeout)
+            guard !Task.isCancelled else { return }
+            gate.resolve(.timedOut)
+        }
+
+        let outcome = await withTaskCancellationHandler {
+            await gate.value
+        } onCancel: {
+            gate.resolve(.cancelled)
+        }
+        evaluatorTask.cancel()
+        timeoutTask.cancel()
+        return outcome
+    }
+
     private func postMessageToWidget(_ message: ElementCallWidgetMessage) async {
         let data: Data
         do {
@@ -612,5 +689,47 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         } catch {
             MXLog.error("Received javascript evaluation \(CallDiagnostics.errorSummary(error))")
         }
+    }
+}
+
+private enum CallHangupDeliveryOutcome {
+    case delivered
+    case failed
+    case timedOut
+    case unavailable
+    case cancelled
+}
+
+private final class CallHangupDeliveryGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<CallHangupDeliveryOutcome, Never>?
+    private var outcome: CallHangupDeliveryOutcome?
+
+    var value: CallHangupDeliveryOutcome {
+        get async {
+            await withCheckedContinuation { continuation in
+                let outcome: CallHangupDeliveryOutcome? = lock.withLock {
+                    if let outcome = self.outcome {
+                        return outcome
+                    }
+                    self.continuation = continuation
+                    return nil
+                }
+                if let outcome {
+                    continuation.resume(returning: outcome)
+                }
+            }
+        }
+    }
+
+    func resolve(_ outcome: CallHangupDeliveryOutcome) {
+        let continuation: CheckedContinuation<CallHangupDeliveryOutcome, Never>? = lock.withLock {
+            guard self.outcome == nil else { return nil }
+            self.outcome = outcome
+            let continuation = self.continuation
+            self.continuation = nil
+            return continuation
+        }
+        continuation?.resume(returning: outcome)
     }
 }
