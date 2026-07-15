@@ -113,6 +113,34 @@ final class GitHubReleaseAPITests: XCTestCase {
         XCTAssertEqual(tagRequest.url?.path, "/repos/acme/junchat-ios/git/ref/tags/release/1.8.2")
     }
 
+    func testDraftPostcheckObservesATagCreatedAfterAStalePreflight404() async throws {
+        let targetCommit = String(repeating: "b", count: 40)
+        let stub = CacheAwareGitHubHTTPStub(responsesByRoute: [
+            .get("/repos/acme/junchat-ios/releases", query: "per_page=100&page=1"): [
+                .json(200, [])
+            ],
+            .get("/repos/acme/junchat-ios/git/ref/tags/release/1.8.2"): [
+                .json(404, ["message": "Not Found"]),
+                .json(200, referenceRecord(commit: targetCommit))
+            ],
+            .post("/repos/acme/junchat-ios/releases"): [
+                .json(201, releaseRecord(targetCommit: targetCommit))
+            ]
+        ])
+        let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+
+        let body = try await api.createOrReuseDraft(version: "1.8.2",
+                                                    targetCommit: targetCommit,
+                                                    repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
+                                                    token: "secret")
+
+        XCTAssertEqual(body, "Generated notes")
+        XCTAssertEqual(stub.requests.map(\.httpMethod), ["GET", "GET", "POST", "GET"])
+        XCTAssertTrue(stub.requests.allSatisfy {
+            $0.cachePolicy == .reloadIgnoringLocalAndRemoteCacheData
+        })
+    }
+
     func testCreatesADraftOnlyWhenItsAnnotatedTagPeelsToTheArchivedCommit() async throws {
         let targetCommit = String(repeating: "3", count: 40)
         let tagObject = String(repeating: "4", count: 40)
@@ -361,6 +389,61 @@ final class GitHubReleaseAPITests: XCTestCase {
 
         XCTAssertEqual(body, "Generated notes")
         XCTAssertEqual(stub.requests.map(\.httpMethod), ["GET", "GET", "POST", "GET", "GET"])
+    }
+
+    func testRetryAfter422ObservesTheNewDraftAndTagInsteadOfCachedAbsence() async throws {
+        let targetCommit = String(repeating: "f", count: 40)
+        let stub = CacheAwareGitHubHTTPStub(responsesByRoute: [
+            .get("/repos/acme/junchat-ios/releases", query: "per_page=100&page=1"): [
+                .json(200, []),
+                .json(200, [releaseRecord(targetCommit: targetCommit)])
+            ],
+            .get("/repos/acme/junchat-ios/git/ref/tags/release/1.8.2"): [
+                .json(404, ["message": "Not Found"]),
+                .json(200, referenceRecord(commit: targetCommit))
+            ],
+            .post("/repos/acme/junchat-ios/releases"): [
+                .json(422, ["message": "already_exists"])
+            ]
+        ])
+        let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+
+        let body = try await api.createOrReuseDraft(version: "1.8.2",
+                                                    targetCommit: targetCommit,
+                                                    repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
+                                                    token: "secret")
+
+        XCTAssertEqual(body, "Generated notes")
+        XCTAssertEqual(stub.requests.map(\.httpMethod), ["GET", "GET", "POST", "GET", "GET"])
+        XCTAssertTrue(stub.requests.allSatisfy {
+            $0.cachePolicy == .reloadIgnoringLocalAndRemoteCacheData
+        })
+    }
+
+    func testRepeatedBranchVerificationObservesThePostMutationCommit() async throws {
+        let archivedCommit = String(repeating: "a", count: 40)
+        let preparedCommit = String(repeating: "b", count: 40)
+        let stub = CacheAwareGitHubHTTPStub(responsesByRoute: [
+            .get("/repos/acme/junchat-ios/git/ref/heads/release/ios"): [
+                .json(200, referenceRecord(commit: archivedCommit)),
+                .json(200, referenceRecord(commit: preparedCommit))
+            ]
+        ])
+        let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+        let repository = try GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git")
+
+        let beforeMutation = try await api.remoteBranchCommit(branch: "release/ios",
+                                                              repository: repository,
+                                                              token: "secret")
+        let afterMutation = try await api.remoteBranchCommit(branch: "release/ios",
+                                                             repository: repository,
+                                                             token: "secret")
+
+        XCTAssertEqual(beforeMutation, archivedCommit)
+        XCTAssertEqual(afterMutation, preparedCommit)
+        XCTAssertTrue(stub.requests.allSatisfy {
+            $0.cachePolicy == .reloadIgnoringLocalAndRemoteCacheData
+        })
     }
 
     func testRecognizesAnAlreadyPushedPreparationWhenRebuildingTheArchivedCommit() async throws {
@@ -716,5 +799,71 @@ private final class GitHubHTTPStub: @unchecked Sendable {
     private enum StubError: Error {
         case invalidResponse
         case missingResponse
+    }
+}
+
+private final class CacheAwareGitHubHTTPStub: @unchecked Sendable {
+    struct Route: Hashable {
+        let method: String
+        let path: String
+        let query: String?
+
+        static func get(_ path: String, query: String? = nil) -> Route {
+            Route(method: "GET", path: path, query: query)
+        }
+
+        static func post(_ path: String) -> Route {
+            Route(method: "POST", path: path, query: nil)
+        }
+    }
+
+    private let lock = NSLock()
+    private var pendingResponses: [Route: [GitHubHTTPStub.Response]]
+    private var cachedResponses = [Route: GitHubHTTPStub.Response]()
+    private var recordedRequests = [URLRequest]()
+
+    init(responsesByRoute: [Route: [GitHubHTTPStub.Response]]) {
+        pendingResponses = responsesByRoute
+    }
+
+    var requests: [URLRequest] {
+        lock.withLock { recordedRequests }
+    }
+
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        try lock.withLock {
+            recordedRequests.append(request)
+            let url = try XCTUnwrap(request.url)
+            let route = Route(method: request.httpMethod ?? "GET",
+                              path: url.path,
+                              query: url.query.flatMap { $0.isEmpty ? nil : $0 })
+            let response: GitHubHTTPStub.Response
+            if request.httpMethod != "POST",
+               request.cachePolicy == .useProtocolCachePolicy,
+               let cachedResponse = cachedResponses[route] {
+                response = cachedResponse
+            } else {
+                guard var responses = pendingResponses[route], !responses.isEmpty else {
+                    throw StubError.missingResponse(route)
+                }
+                response = responses.removeFirst()
+                pendingResponses[route] = responses
+                if request.httpMethod != "POST" {
+                    cachedResponses[route] = response
+                }
+            }
+            guard let httpResponse = HTTPURLResponse(url: url,
+                                                     statusCode: response.statusCode,
+                                                     httpVersion: nil,
+                                                     headerFields: nil) else {
+                throw StubError.invalidResponse
+            }
+            return (response.data, httpResponse)
+        }
+    }
+
+    private enum StubError: Error {
+        case invalidResponse
+        case missingResponse(Route)
     }
 }

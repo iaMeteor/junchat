@@ -380,7 +380,8 @@ struct GitHubReleaseAPI {
     }
 
     private func authenticatedRequest(url: URL, token: String) -> URLRequest {
-        var request = URLRequest(url: url)
+        var request = URLRequest(url: url,
+                                 cachePolicy: .reloadIgnoringLocalAndRemoteCacheData)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue(Self.apiVersion, forHTTPHeaderField: "X-GitHub-Api-Version")
