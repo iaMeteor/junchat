@@ -12,6 +12,26 @@ trap 'rm -rf "$TEST_ROOT"' EXIT
 source "$COMMON_SCRIPT"
 unset JUNCHAT_FIRST_RELEASE_BASELINE_COMMIT
 
+ASCII_3999=$(printf '%*s' 3999 '' | tr ' ' a)
+ASCII_4000="${ASCII_3999}a"
+ASCII_4001="${ASCII_4000}a"
+EMOJI=$(printf '\360\237\230\200')
+COMBINING_ACUTE=$(printf 'e\314\201')
+CURRENT_NOTES=$(git -C "$REPOSITORY_ROOT" log -1 --pretty='- %an: %s')
+
+validate_what_to_test_notes "$ASCII_3999"
+validate_what_to_test_notes "$ASCII_4000"
+validate_what_to_test_notes "$CURRENT_NOTES"
+validate_what_to_test_notes "${ASCII_3999}${EMOJI}"
+if validate_what_to_test_notes "$ASCII_4001"; then
+    printf '%s\n' 'App Store Connect WhatToTest accepted 4,001 Unicode scalars.' >&2
+    exit 69
+fi
+if validate_what_to_test_notes "${ASCII_3999}${COMBINING_ACUTE}"; then
+    printf '%s\n' 'WhatToTest counted grapheme clusters instead of Unicode scalars.' >&2
+    exit 70
+fi
+
 resolve_with_first_release_baseline() {
     JUNCHAT_FIRST_RELEASE_BASELINE_COMMIT="$1" \
         resolve_junchat_release_notes_baseline "$2" "$3" "$4"

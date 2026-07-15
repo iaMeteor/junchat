@@ -171,13 +171,34 @@ what_to_test_notes_for_range() {
     printf '%s\n' "$notes"
 }
 
+validate_what_to_test_notes() {
+    local notes="$1"
+    local scalar_count
+    local LC_ALL=C.UTF-8
+
+    if [[ -z "${notes//[[:space:]]/}" ]]; then
+        printf '%s\n' 'validate_what_to_test_notes: TestFlight notes must not be empty.' >&2
+        return 1
+    fi
+    if ! printf '%s' "$notes" | iconv -f UTF-8 -t UTF-8 >/dev/null; then
+        printf '%s\n' 'validate_what_to_test_notes: TestFlight notes are not valid UTF-8.' >&2
+        return 1
+    fi
+
+    scalar_count=${#notes}
+    if ((scalar_count > 4000)); then
+        printf 'validate_what_to_test_notes: TestFlight notes contain %s Unicode scalars; App Store Connect allows at most 4000.\n' "$scalar_count" >&2
+        return 1
+    fi
+}
+
 validate_what_to_test_notes_range() {
     local notes
 
     if ! notes=$(what_to_test_notes_for_range "$1" "$2"); then
         return 1
     fi
-    [[ -n "$notes" ]]
+    validate_what_to_test_notes "$notes"
 }
 
 generate_what_to_test_notes() {
@@ -204,10 +225,12 @@ generate_what_to_test_notes() {
         return 1
     fi
 
+    validate_what_to_test_notes "$notes" || return 1
+
     printf "generate_what_to_test_notes: Generated notes:\n%s\n" "$notes"
 
     mkdir -p "$testflight_dir_path"
-    printf '%s\n' "$notes" > "$testflight_dir_path/$testflight_notes_file_name"
+    printf '%s' "$notes" > "$testflight_dir_path/$testflight_notes_file_name"
 }
 
 fetch_unshallow_repository() {

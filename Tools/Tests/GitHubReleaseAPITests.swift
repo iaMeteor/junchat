@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 @testable import Tools
 import XCTest
@@ -497,50 +498,64 @@ final class GitHubReleaseAPITests: XCTestCase {
     }
 
     func testRecognizesAnAlreadyPushedPreparationWhenRebuildingTheArchivedCommit() async throws {
-        let releaseCommit = String(repeating: "a", count: 40)
-        let preparationCommit = String(repeating: "b", count: 40)
-        let releaseVersion = JunchatReleaseVersion(name: "1.8.2", build: 37)
-        let preparation = try JunchatReleasePreparation(releaseVersion: releaseVersion,
-                                                        releaseCommit: releaseCommit,
-                                                        releaseDate: "2026-07-14")
-        let preparedProject = try JunchatReleaseVersion.updatedProjectYAML(releaseProjectYAML,
-                                                                           name: "1.8.3",
-                                                                           build: 38)
-        let preparedChanges = try JunchatReleaseNotes.updatedChangelog(existingContent: releaseChangelog,
-                                                                       version: releaseVersion.name,
-                                                                       generatedNotes: "## Highlights\n- Fixed retry",
-                                                                       releaseDate: preparation.releaseDate)
-        let stub = GitHubHTTPStub(responses: [
-            .json(200, referenceRecord(commit: preparationCommit)),
-            .json(200, preparationCommitRecord(commit: preparationCommit,
-                                               preparation: preparation)),
-            .json(200, preparationTreeRecord()),
-            .json(200, contentRecord(releaseProjectYAML)),
-            .json(200, contentRecord(preparedProject)),
-            .json(200, contentRecord(releaseChangelog)),
-            .json(200, contentRecord(preparedChanges)),
-            .json(200, contentRecord(releaseXcodeProject)),
-            .json(200, contentRecord(preparedXcodeProject))
-        ])
+        let fixture = try RemotePreparationBlobFixture()
+        let stub = CacheAwareGitHubHTTPStub(responsesByRoute: fixture.responses())
         let api = GitHubReleaseAPI(urlSession: stub)
 
         let isPrepared = try await api.isPreparationAlreadyPushed(branch: "release/ios",
-                                                                  releaseVersion: releaseVersion,
-                                                                  releaseCommit: releaseCommit,
-                                                                  generatedNotes: "## Highlights\n- Fixed retry",
+                                                                  releaseVersion: fixture.preparation.releaseVersion,
+                                                                  releaseCommit: fixture.releaseCommit,
+                                                                  generatedNotes: fixture.generatedNotes,
                                                                   repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
                                                                   token: "secret")
 
         XCTAssertTrue(isPrepared)
-        XCTAssertEqual(stub.requests.count, 9)
+        XCTAssertEqual(stub.requests.count, 11)
         XCTAssertTrue(try XCTUnwrap(stub.requests.first?.url?.absoluteString).contains("heads/release/ios"))
-        let xcodeProjectPaths = stub.requests.suffix(2).compactMap { request in
-            request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.percentEncodedPath }
+        XCTAssertTrue(stub.requests.suffix(2).allSatisfy { $0.url?.path.contains("/git/blobs/") == true })
+    }
+
+    func testVerifiesAnXcodeProjectLargerThanOneMiBThroughCommitBoundGitBlobs() async throws {
+        let largeReleaseXcodeProject = releaseXcodeProject + String(repeating: "// release padding\n", count: 70000)
+        XCTAssertGreaterThan(Data(largeReleaseXcodeProject.utf8).count, 1_048_576)
+        let fixture = try RemotePreparationBlobFixture(releaseXcodeProject: largeReleaseXcodeProject)
+        let stub = CacheAwareGitHubHTTPStub(responsesByRoute: fixture.responses())
+        let api = GitHubReleaseAPI(urlSession: stub)
+
+        let isPrepared = try await api.isPreparationAlreadyPushed(branch: "release/ios",
+                                                                  releaseVersion: fixture.preparation.releaseVersion,
+                                                                  releaseCommit: fixture.releaseCommit,
+                                                                  generatedNotes: fixture.generatedNotes,
+                                                                  repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
+                                                                  token: "secret")
+
+        XCTAssertTrue(isPrepared)
+        XCTAssertFalse(stub.requests.contains { $0.url?.path.contains("/contents/") == true })
+        XCTAssertEqual(stub.requests.filter { $0.url?.path.contains("/git/blobs/") == true }.count, 6)
+        XCTAssertTrue(stub.requests.allSatisfy {
+            $0.cachePolicy == .reloadIgnoringLocalAndRemoteCacheData &&
+                $0.value(forHTTPHeaderField: "Cache-Control") == "no-store"
+        })
+    }
+
+    func testRejectsGitBlobIdentitySizeEncodingAndResponseMismatches() async throws {
+        for defect in RemotePreparationBlobFixture.BlobDefect.allCases {
+            let fixture = try RemotePreparationBlobFixture(blobDefect: defect)
+            let stub = CacheAwareGitHubHTTPStub(responsesByRoute: fixture.responses())
+            let api = GitHubReleaseAPI(urlSession: stub)
+
+            do {
+                _ = try await api.isPreparationAlreadyPushed(branch: "release/ios",
+                                                             releaseVersion: fixture.preparation.releaseVersion,
+                                                             releaseCommit: fixture.releaseCommit,
+                                                             generatedNotes: fixture.generatedNotes,
+                                                             repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
+                                                             token: "secret")
+                XCTFail("Expected the Git Blob defect \(defect) to fail closed")
+            } catch { }
+
+            XCTAssertEqual(stub.requests.last?.url?.path, fixture.defectiveBlobPath)
         }
-        XCTAssertEqual(xcodeProjectPaths, [
-            "/repos/acme/junchat-ios/contents/ElementX.xcodeproj/project.pbxproj",
-            "/repos/acme/junchat-ios/contents/ElementX.xcodeproj/project.pbxproj"
-        ])
     }
 
     func testRejectsPreparationWithUnexpectedGitTreeMode() async throws {
@@ -630,21 +645,17 @@ final class GitHubReleaseAPITests: XCTestCase {
                                                                        generatedNotes: "- Fixed retry",
                                                                        releaseDate: preparation.releaseDate)
         let invalidContents = [
-            (project: releaseProjectYAML, changelog: preparedChanges, expectedRequests: 5),
-            (project: preparedProject, changelog: preparedChanges + "Tampered\n", expectedRequests: 7)
+            (project: releaseProjectYAML, changelog: preparedChanges, expectedRequests: 7),
+            (project: preparedProject, changelog: preparedChanges + "Tampered\n", expectedRequests: 9)
         ]
 
         for invalidContent in invalidContents {
-            let stub = GitHubHTTPStub(responses: [
-                .json(200, referenceRecord(commit: preparationCommit)),
-                .json(200, preparationCommitRecord(commit: preparationCommit,
-                                                   preparation: preparation)),
-                .json(200, preparationTreeRecord()),
-                .json(200, contentRecord(releaseProjectYAML)),
-                .json(200, contentRecord(invalidContent.project)),
-                .json(200, contentRecord(releaseChangelog)),
-                .json(200, contentRecord(invalidContent.changelog))
-            ])
+            let stub = GitHubHTTPStub(responses: preparationVerificationResponses(releaseCommit: releaseCommit,
+                                                                                  preparationCommit: preparationCommit,
+                                                                                  preparation: preparation,
+                                                                                  preparedProject: invalidContent.project,
+                                                                                  preparedChangelog: invalidContent.changelog,
+                                                                                  preparedXcodeProject: preparedXcodeProject))
             let api = GitHubReleaseAPI(urlSession: stub)
 
             do {
@@ -675,18 +686,12 @@ final class GitHubReleaseAPITests: XCTestCase {
                                                                        version: releaseVersion.name,
                                                                        generatedNotes: "- Fixed retry",
                                                                        releaseDate: preparation.releaseDate)
-        let stub = GitHubHTTPStub(responses: [
-            .json(200, referenceRecord(commit: preparationCommit)),
-            .json(200, preparationCommitRecord(commit: preparationCommit,
-                                               preparation: preparation)),
-            .json(200, preparationTreeRecord()),
-            .json(200, contentRecord(releaseProjectYAML)),
-            .json(200, contentRecord(preparedProject)),
-            .json(200, contentRecord(releaseChangelog)),
-            .json(200, contentRecord(preparedChanges)),
-            .json(200, contentRecord(releaseXcodeProject)),
-            .json(200, contentRecord(preparedXcodeProject + "Unrelated mutation\n"))
-        ])
+        let stub = GitHubHTTPStub(responses: preparationVerificationResponses(releaseCommit: releaseCommit,
+                                                                              preparationCommit: preparationCommit,
+                                                                              preparation: preparation,
+                                                                              preparedProject: preparedProject,
+                                                                              preparedChangelog: preparedChanges,
+                                                                              preparedXcodeProject: preparedXcodeProject + "Unrelated mutation\n"))
         let api = GitHubReleaseAPI(urlSession: stub)
 
         do {
@@ -698,7 +703,7 @@ final class GitHubReleaseAPITests: XCTestCase {
                                                          token: "secret")
             XCTFail("Expected modified Xcode project content to fail closed")
         } catch {
-            XCTAssertEqual(stub.requests.count, 9)
+            XCTAssertEqual(stub.requests.count, 11)
         }
     }
 }
@@ -728,6 +733,154 @@ buildSettings = {
     MARKETING_VERSION = 1.8.3;
 };
 """
+
+private struct RemotePreparationBlobFixture {
+    enum BlobDefect: CaseIterable {
+        case sha
+        case size
+        case encoding
+        case bytes
+        case responseType
+        case httpError
+    }
+
+    let releaseCommit = String(repeating: "a", count: 40)
+    let preparationCommit = String(repeating: "b", count: 40)
+    let generatedNotes = "## Highlights\n- Fixed retry"
+    let preparation: JunchatReleasePreparation
+    let releaseContents: [String: String]
+    let preparedContents: [String: String]
+    let blobDefect: BlobDefect?
+
+    init(releaseXcodeProject: String = releaseXcodeProject,
+         blobDefect: BlobDefect? = nil) throws {
+        preparation = try JunchatReleasePreparation(releaseVersion: .init(name: "1.8.2", build: 37),
+                                                    releaseCommit: releaseCommit,
+                                                    releaseDate: "2026-07-14")
+        releaseContents = [
+            JunchatReleasePreparation.projectYAMLPath: releaseProjectYAML,
+            JunchatReleasePreparation.changelogPath: releaseChangelog,
+            JunchatReleasePreparation.xcodeProjectPath: releaseXcodeProject
+        ]
+        preparedContents = try [
+            JunchatReleasePreparation.projectYAMLPath: preparation.expectedProjectYAML(releaseProjectYAML),
+            JunchatReleasePreparation.changelogPath: preparation.expectedChangelog(releaseChangelog,
+                                                                                   generatedNotes: generatedNotes),
+            JunchatReleasePreparation.xcodeProjectPath: preparation.expectedXcodeProject(releaseXcodeProject)
+        ]
+        self.blobDefect = blobDefect
+    }
+
+    var defectiveBlobPath: String {
+        guard let content = preparedContents[JunchatReleasePreparation.xcodeProjectPath] else {
+            preconditionFailure("The preparation fixture must include the Xcode project.")
+        }
+        return "/repos/acme/junchat-ios/git/blobs/\(gitBlobSHA(Data(content.utf8)))"
+    }
+
+    func responses() -> [CacheAwareGitHubHTTPStub.Route: [GitHubHTTPStub.Response]] {
+        let releaseTree = String(repeating: "7", count: 40)
+        var responses: [CacheAwareGitHubHTTPStub.Route: [GitHubHTTPStub.Response]] = [
+            .get("/repos/acme/junchat-ios/git/ref/heads/release/ios"): [
+                .json(200, referenceRecord(commit: preparationCommit))
+            ],
+            .get("/repos/acme/junchat-ios/commits/\(preparationCommit)"): [
+                .json(200, preparationCommitRecord(commit: preparationCommit,
+                                                   preparation: preparation))
+            ],
+            .get("/repos/acme/junchat-ios/git/trees/\(preparationTree)", query: "recursive=1"): [
+                .json(200, gitTreeRecord(sha: preparationTree, contents: preparedContents))
+            ],
+            .get("/repos/acme/junchat-ios/git/commits/\(releaseCommit)"): [
+                .json(200, gitCommitRecord(sha: releaseCommit, tree: releaseTree))
+            ],
+            .get("/repos/acme/junchat-ios/git/trees/\(releaseTree)", query: "recursive=1"): [
+                .json(200, gitTreeRecord(sha: releaseTree, contents: releaseContents))
+            ]
+        ]
+
+        for contents in [releaseContents, preparedContents] {
+            for path in JunchatReleasePreparation.expectedChangedPaths.sorted() {
+                guard let content = contents[path] else {
+                    preconditionFailure("The preparation fixture must include every expected path.")
+                }
+                let sha = gitBlobSHA(Data(content.utf8))
+                var response = GitHubHTTPStub.Response.json(200, gitBlobRecord(content))
+                if path == JunchatReleasePreparation.xcodeProjectPath,
+                   contents == preparedContents,
+                   let blobDefect {
+                    response = defectiveResponse(blobDefect, content: content, sha: sha)
+                }
+                responses[.get("/repos/acme/junchat-ios/git/blobs/\(sha)")] = [response]
+            }
+        }
+        return responses
+    }
+
+    private func defectiveResponse(_ defect: BlobDefect,
+                                   content: String,
+                                   sha: String) -> GitHubHTTPStub.Response {
+        switch defect {
+        case .sha:
+            .json(200, gitBlobRecord(content, sha: String(repeating: "f", count: 40)))
+        case .size:
+            .json(200, gitBlobRecord(content, size: Data(content.utf8).count + 1))
+        case .encoding:
+            .json(200, gitBlobRecord(content, encoding: "none"))
+        case .bytes:
+            .json(200, gitBlobRecord("X" + content.dropFirst(),
+                                     sha: sha,
+                                     size: Data(content.utf8).count))
+        case .responseType:
+            .data(200, Data(content.utf8))
+        case .httpError:
+            .json(502, ["message": "Bad Gateway", "sha": sha])
+        }
+    }
+}
+
+private func gitCommitRecord(sha: String, tree: String) -> [String: Any] {
+    ["sha": sha, "tree": ["sha": tree]]
+}
+
+private func gitTreeRecord(sha: String, contents: [String: String]) -> [String: Any] {
+    [
+        "sha": sha,
+        "truncated": false,
+        "tree": contents.keys.sorted().map { path in
+            guard let content = contents[path] else {
+                preconditionFailure("The tree fixture path must have content.")
+            }
+            let data = Data(content.utf8)
+            return [
+                "path": path,
+                "mode": "100644",
+                "type": "blob",
+                "sha": gitBlobSHA(data),
+                "size": data.count
+            ] as [String: Any]
+        }
+    ]
+}
+
+private func gitBlobRecord(_ content: String,
+                           sha: String? = nil,
+                           size: Int? = nil,
+                           encoding: String = "base64") -> [String: Any] {
+    let data = Data(content.utf8)
+    return [
+        "sha": sha ?? gitBlobSHA(data),
+        "size": size ?? data.count,
+        "encoding": encoding,
+        "content": data.base64EncodedString()
+    ]
+}
+
+private func gitBlobSHA(_ data: Data) -> String {
+    var object = Data("blob \(data.count)\0".utf8)
+    object.append(data)
+    return Insecure.SHA1.hash(data: object).map { String(format: "%02x", $0) }.joined()
+}
 
 private let preparationTree = String(repeating: "8", count: 40)
 
@@ -766,13 +919,15 @@ private func preparationTreeRecord(modeOverrides: [String: String] = [:]) -> [St
         "project.yml"
     ]
     return [
+        "sha": preparationTree,
         "truncated": false,
         "tree": paths.map { path in
             [
                 "path": path,
                 "mode": modeOverrides[path] ?? "100644",
                 "type": "blob",
-                "sha": String(repeating: "9", count: 40)
+                "sha": String(repeating: "9", count: 40),
+                "size": 1
             ]
         }
     ]
@@ -796,11 +951,44 @@ private func preparationCommitRecord(commit: String,
     ]
 }
 
-private func contentRecord(_ content: String) -> [String: Any] {
-    [
-        "encoding": "base64",
-        "content": Data(content.utf8).base64EncodedString()
+private func preparationVerificationResponses(releaseCommit: String,
+                                              preparationCommit: String,
+                                              preparation: JunchatReleasePreparation,
+                                              preparedProject: String,
+                                              preparedChangelog: String,
+                                              preparedXcodeProject: String) -> [GitHubHTTPStub.Response] {
+    let releaseTree = String(repeating: "7", count: 40)
+    let releaseContents = [
+        JunchatReleasePreparation.projectYAMLPath: releaseProjectYAML,
+        JunchatReleasePreparation.changelogPath: releaseChangelog,
+        JunchatReleasePreparation.xcodeProjectPath: releaseXcodeProject
     ]
+    let preparedContents = [
+        JunchatReleasePreparation.projectYAMLPath: preparedProject,
+        JunchatReleasePreparation.changelogPath: preparedChangelog,
+        JunchatReleasePreparation.xcodeProjectPath: preparedXcodeProject
+    ]
+    var responses: [GitHubHTTPStub.Response] = [
+        .json(200, referenceRecord(commit: preparationCommit)),
+        .json(200, preparationCommitRecord(commit: preparationCommit,
+                                           preparation: preparation)),
+        .json(200, gitTreeRecord(sha: preparationTree, contents: preparedContents)),
+        .json(200, gitCommitRecord(sha: releaseCommit, tree: releaseTree)),
+        .json(200, gitTreeRecord(sha: releaseTree, contents: releaseContents))
+    ]
+    for path in [
+        JunchatReleasePreparation.projectYAMLPath,
+        JunchatReleasePreparation.changelogPath,
+        JunchatReleasePreparation.xcodeProjectPath
+    ] {
+        guard let releaseContent = releaseContents[path],
+              let preparedContent = preparedContents[path] else {
+            preconditionFailure("The verification fixture must include every expected path.")
+        }
+        responses.append(.json(200, gitBlobRecord(releaseContent)))
+        responses.append(.json(200, gitBlobRecord(preparedContent)))
+    }
+    return responses
 }
 
 private final class GitHubHTTPStub: URLSessionProtocol, @unchecked Sendable {
@@ -814,6 +1002,10 @@ private final class GitHubHTTPStub: URLSessionProtocol, @unchecked Sendable {
             }
             return Response(statusCode: statusCode,
                             data: data)
+        }
+
+        static func data(_ statusCode: Int, _ data: Data) -> Response {
+            Response(statusCode: statusCode, data: data)
         }
     }
 

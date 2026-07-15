@@ -20,6 +20,12 @@ struct ReleaseToGitHub: AsyncParsableCommand {
     }
 
     func run() async throws {
+        try await XcodeCloudReleaseEnvironment.perform(environment: ProcessInfo.processInfo.environment) {
+            try await runInValidatedEnvironment()
+        }
+    }
+
+    private func runInValidatedEnvironment() async throws {
         try await JunchatReleasePreparation.validateCleanRepositoryStatus(CI.gitRepositoryStatus())
 
         let currentContents = try localReleaseContents()
@@ -30,44 +36,13 @@ struct ReleaseToGitHub: AsyncParsableCommand {
         let apiToken = try githubToken()
         let releaseAPI = GitHubReleaseAPI()
         if let preparation = try JunchatReleasePreparation.parseIfPresent(currentCommitMessage) {
-            try await preparation.validateResume(parentCommits: CI.gitCurrentCommitParents(),
-                                                 currentVersion: currentVersion,
-                                                 changedFiles: CI.gitCurrentCommitChangedFiles())
-            let archivedContents = try await archivedReleaseContents(commit: preparation.releaseCommit)
-            try preparation.validatePreparedMetadata(archivedProjectYAML: archivedContents.projectYAML,
-                                                     preparedProjectYAML: currentContents.projectYAML,
-                                                     archivedXcodeProject: archivedContents.xcodeProject,
-                                                     preparedXcodeProject: currentContents.xcodeProject)
-            let releaseBody = try await createOrReuseGitHubDraft(version: preparation.releaseVersion.name,
-                                                                 releaseCommit: preparation.releaseCommit,
-                                                                 repository: repository,
-                                                                 releaseAPI: releaseAPI,
-                                                                 apiToken: apiToken,
-                                                                 allowCreation: false)
-            try preparation.validatePreparedContents(archivedProjectYAML: archivedContents.projectYAML,
-                                                     preparedProjectYAML: currentContents.projectYAML,
-                                                     archivedChangelog: archivedContents.changelog,
-                                                     preparedChangelog: currentContents.changelog,
-                                                     archivedXcodeProject: archivedContents.xcodeProject,
-                                                     preparedXcodeProject: currentContents.xcodeProject,
-                                                     generatedNotes: releaseBody)
-
-            if try await releaseAPI.isPreparationAlreadyPushed(branch: branch,
-                                                               releaseVersion: preparation.releaseVersion,
-                                                               releaseCommit: preparation.releaseCommit,
-                                                               generatedNotes: releaseBody,
-                                                               repository: repository,
-                                                               token: apiToken) {
-                logger.info("The exact release preparation for \(preparation.releaseVersion.name) is already present on the remote branch.")
-                return
-            }
-            try await pushOrAcceptRemotePreparation(branch: branch,
-                                                    preparation: preparation,
-                                                    generatedNotes: releaseBody,
-                                                    repository: repository,
-                                                    releaseAPI: releaseAPI,
-                                                    apiToken: apiToken)
-            logger.info("Resumed release preparation for \(preparation.releaseVersion.name) without creating a new release.")
+            try await resumePreparation(preparation,
+                                        currentContents: currentContents,
+                                        currentVersion: currentVersion,
+                                        repository: repository,
+                                        branch: branch,
+                                        apiToken: apiToken,
+                                        releaseAPI: releaseAPI)
             return
         }
 
@@ -77,20 +52,19 @@ struct ReleaseToGitHub: AsyncParsableCommand {
                                                                                                             changelog: currentContents.changelog,
                                                                                                             xcodeProject: currentContents.xcodeProject,
                                                                                                             releaseDate: releaseDate,
-                                                                                                            generateXcodeProject: generateXcodeProjectForPreflight,
-                                                                                                            remoteMutation: { localPreparation in
-                                                                                                                try await JunchatReleasePreparation.validateCleanRepositoryStatus(CI.gitRepositoryStatus())
-                                                                                                                logger.info("Ensuring GitHub draft release for version \(localPreparation.currentVersion.name)…")
-                                                                                                                let remoteCommit = try await releaseAPI.remoteBranchCommit(branch: branch,
-                                                                                                                                                                           repository: repository,
-                                                                                                                                                                           token: apiToken)
-                                                                                                                return try await createOrReuseGitHubDraft(version: localPreparation.currentVersion.name,
-                                                                                                                                                          releaseCommit: releaseCommit,
-                                                                                                                                                          repository: repository,
-                                                                                                                                                          releaseAPI: releaseAPI,
-                                                                                                                                                          apiToken: apiToken,
-                                                                                                                                                          allowCreation: remoteCommit == releaseCommit)
-                                                                                                            })
+                                                                                                            generateXcodeProject: generateXcodeProjectForPreflight) { localPreparation in
+            try await JunchatReleasePreparation.validateCleanRepositoryStatus(CI.gitRepositoryStatus())
+            logger.info("Ensuring GitHub draft release for version \(localPreparation.currentVersion.name)…")
+            let remoteCommit = try await releaseAPI.remoteBranchCommit(branch: branch,
+                                                                       repository: repository,
+                                                                       token: apiToken)
+            return try await createOrReuseGitHubDraft(version: localPreparation.currentVersion.name,
+                                                      releaseCommit: releaseCommit,
+                                                      repository: repository,
+                                                      releaseAPI: releaseAPI,
+                                                      apiToken: apiToken,
+                                                      allowCreation: remoteCommit == releaseCommit)
+        }
         let preparation = try JunchatReleasePreparation(releaseVersion: localPreparation.currentVersion,
                                                         releaseCommit: releaseCommit,
                                                         releaseDate: releaseDate)
@@ -129,15 +103,13 @@ struct ReleaseToGitHub: AsyncParsableCommand {
         logger.info("Successfully prepared GitHub draft release \(localPreparation.currentVersion.name) and updated JUNCHAT_CHANGES.md.")
         logger.info("Version updated from \(localPreparation.currentVersion.name) (\(localPreparation.currentVersion.build)) to \(localPreparation.nextVersion.name) (\(localPreparation.nextVersion.build))")
 
-        try await CI.gitConfigureGlobals()
-
         try await CI.run(.name("git"), [
             "add",
             JunchatReleasePreparation.changelogPath,
             JunchatReleasePreparation.projectYAMLPath,
             JunchatReleasePreparation.xcodeProjectPath
         ])
-        try await CI.run(.name("git"), ["commit", "-m", preparation.commitMessage])
+        try await CI.gitCommit(message: preparation.commitMessage)
 
         try await JunchatReleasePreparation.validateCleanRepositoryStatus(CI.gitRepositoryStatus())
         guard let committedPreparation = try await JunchatReleasePreparation.parseIfPresent(CI.gitCurrentCommitMessage()),
@@ -171,6 +143,53 @@ struct ReleaseToGitHub: AsyncParsableCommand {
         let projectYAML: String
         let changelog: String
         let xcodeProject: String
+    }
+
+    private func resumePreparation(_ preparation: JunchatReleasePreparation,
+                                   currentContents: ReleaseContents,
+                                   currentVersion: JunchatReleaseVersion,
+                                   repository: GitHubRepository,
+                                   branch: String,
+                                   apiToken: String,
+                                   releaseAPI: GitHubReleaseAPI) async throws {
+        try await preparation.validateResume(parentCommits: CI.gitCurrentCommitParents(),
+                                             currentVersion: currentVersion,
+                                             changedFiles: CI.gitCurrentCommitChangedFiles())
+        let archivedContents = try await archivedReleaseContents(commit: preparation.releaseCommit)
+        try preparation.validatePreparedMetadata(archivedProjectYAML: archivedContents.projectYAML,
+                                                 preparedProjectYAML: currentContents.projectYAML,
+                                                 archivedXcodeProject: archivedContents.xcodeProject,
+                                                 preparedXcodeProject: currentContents.xcodeProject)
+        let releaseBody = try await createOrReuseGitHubDraft(version: preparation.releaseVersion.name,
+                                                             releaseCommit: preparation.releaseCommit,
+                                                             repository: repository,
+                                                             releaseAPI: releaseAPI,
+                                                             apiToken: apiToken,
+                                                             allowCreation: false)
+        try preparation.validatePreparedContents(archivedProjectYAML: archivedContents.projectYAML,
+                                                 preparedProjectYAML: currentContents.projectYAML,
+                                                 archivedChangelog: archivedContents.changelog,
+                                                 preparedChangelog: currentContents.changelog,
+                                                 archivedXcodeProject: archivedContents.xcodeProject,
+                                                 preparedXcodeProject: currentContents.xcodeProject,
+                                                 generatedNotes: releaseBody)
+
+        if try await releaseAPI.isPreparationAlreadyPushed(branch: branch,
+                                                           releaseVersion: preparation.releaseVersion,
+                                                           releaseCommit: preparation.releaseCommit,
+                                                           generatedNotes: releaseBody,
+                                                           repository: repository,
+                                                           token: apiToken) {
+            logger.info("The exact release preparation for \(preparation.releaseVersion.name) is already present on the remote branch.")
+            return
+        }
+        try await pushOrAcceptRemotePreparation(branch: branch,
+                                                preparation: preparation,
+                                                generatedNotes: releaseBody,
+                                                repository: repository,
+                                                releaseAPI: releaseAPI,
+                                                apiToken: apiToken)
+        logger.info("Resumed release preparation for \(preparation.releaseVersion.name) without creating a new release.")
     }
 
     private func createOrReuseGitHubDraft(version: String,

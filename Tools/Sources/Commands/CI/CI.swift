@@ -2,6 +2,7 @@ import ArgumentParser
 import Foundation
 import Subprocess
 
+// swiftlint:disable:next type_name
 struct CI: ParsableCommand {
     static let configuration = CommandConfiguration(abstract: "CI workflow commands that can be run both locally and in CI environments.",
                                                     subcommands: [
@@ -127,11 +128,26 @@ struct CI: ParsableCommand {
     
     // MARK: - Git
     
-    static func gitConfigureGlobals() async throws {
-        try await CI.run(.name("git"), ["config", "--global", "user.name", "Element CI"])
-        try await CI.run(.name("git"), ["config", "--global", "user.email", "ci@element.io"])
+    static func gitCommit(message: String) async throws {
+        try await CI.run(.name("git"), Arguments(gitCommitArguments(message: message)))
     }
-    
+
+    static func gitCommitForTesting(message: String,
+                                    repositoryPath: String,
+                                    globalConfigurationPath: String) async throws {
+        try await CI.run(.path("/usr/bin/git"),
+                         Arguments(["-C", repositoryPath] + gitCommitArguments(message: message)),
+                         environment: .inherit.updating(["GIT_CONFIG_GLOBAL": globalConfigurationPath]))
+    }
+
+    private static func gitCommitArguments(message: String) -> [String] {
+        [
+            "-c", "user.name=Element CI",
+            "-c", "user.email=ci@element.io",
+            "commit", "-m", message
+        ]
+    }
+
     static func gitRepository() async throws -> GitHubRepository {
         guard let rawURL = try await CI.run(.name("git"), ["ls-remote", "--get-url", "origin"],
                                             output: .string(limit: 4096)).standardOutput else {
@@ -230,16 +246,22 @@ struct CI: ParsableCommand {
                                      expectedCommit: String,
                                      remoteURL: String,
                                      repositoryPath: String,
-                                     gitExecutablePath: String? = nil) async throws {
+                                     gitExecutablePath: String? = nil,
+                                     globalConfigurationPath: String? = nil) async throws {
         let executable: Executable = if let gitExecutablePath {
             .name(gitExecutablePath)
         } else {
             .path("/usr/bin/git")
         }
+        let environment = if let globalConfigurationPath {
+            Environment.inherit.updating(["GIT_CONFIG_GLOBAL": globalConfigurationPath])
+        } else {
+            Environment.inherit
+        }
         try await gitPushTag(tagName: tagName,
                              expectedCommit: expectedCommit,
                              remoteURL: remoteURL,
-                             environment: .inherit,
+                             environment: environment,
                              gitExecutable: executable,
                              argumentPrefix: ["-C", repositoryPath])
     }
@@ -320,20 +342,13 @@ struct CI: ParsableCommand {
             throw ValidationError("The remote nightly tag already points to another commit.")
         }
 
-        if localCommit == nil {
-            do {
-                try await runGit(gitExecutable,
-                                 arguments: argumentPrefix + ["tag", tagName, expectedCommit],
+        try await ensureLocalTag(tagName: tagName,
+                                 tagReference: tagReference,
+                                 expectedCommit: expectedCommit,
+                                 existingCommit: localCommit,
+                                 gitExecutable: gitExecutable,
+                                 argumentPrefix: argumentPrefix,
                                  environment: environment)
-            } catch {
-                guard try await localTagCommit(tagReference,
-                                               gitExecutable: gitExecutable,
-                                               argumentPrefix: argumentPrefix,
-                                               environment: environment) == expectedCommit else {
-                    throw error
-                }
-            }
-        }
 
         guard try await localTagCommit(tagReference,
                                        gitExecutable: gitExecutable,
@@ -365,6 +380,28 @@ struct CI: ParsableCommand {
                                         argumentPrefix: argumentPrefix,
                                         environment: environment) == expectedCommit else {
             throw ValidationError("The pushed nightly tag could not be verified on the remote.")
+        }
+    }
+
+    private static func ensureLocalTag(tagName: String,
+                                       tagReference: String,
+                                       expectedCommit: String,
+                                       existingCommit: String?,
+                                       gitExecutable: Executable,
+                                       argumentPrefix: [String],
+                                       environment: Environment) async throws {
+        guard existingCommit == nil else { return }
+        do {
+            try await runGit(gitExecutable,
+                             arguments: argumentPrefix + ["tag", tagName, expectedCommit],
+                             environment: environment)
+        } catch {
+            guard try await localTagCommit(tagReference,
+                                           gitExecutable: gitExecutable,
+                                           argumentPrefix: argumentPrefix,
+                                           environment: environment) == expectedCommit else {
+                throw error
+            }
         }
     }
 

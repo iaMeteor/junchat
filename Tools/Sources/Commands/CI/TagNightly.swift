@@ -12,9 +12,6 @@ struct TagNightly: AsyncParsableCommand {
         guard !buildNumber.isEmpty else {
             throw ValidationError("Invalid build number.")
         }
-        
-        try await CI.gitConfigureGlobals()
-
         let currentVersion = try CI.readMarketingVersion()
         let tagName = "nightly/\(currentVersion).\(buildNumber)"
         

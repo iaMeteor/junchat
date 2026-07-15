@@ -59,7 +59,11 @@ case "${1:-}" in
     log)
         printf '%s\n' "$@" > "$GIT_LOG_ARGUMENTS"
         printf '%s\n' captured > "$NOTES_RANGE_MARKER"
-        printf '%s\n' '- CI: focused release test'
+        if [[ "${OVERSIZED_NOTES:-0}" = 1 ]]; then
+            printf '%*s' 4001 '' | tr ' ' a
+        else
+            printf '%s\n' '- CI: focused release test'
+        fi
         ;;
     *)
         printf 'Unexpected git command: %s\n' "$*" >&2
@@ -104,9 +108,13 @@ chmod +x "$FAKE_BIN/git" "$FAKE_BIN/swift"
     cd "$FIXTURE_ROOT/ci_scripts"
     export ARCHIVED_SHA ARCHIVED_SHA_MARKER BASELINE_SHA_MARKER COMMAND_LOG FIXTURE_ROOT GIT_LOG_ARGUMENTS NOTES_RANGE_MARKER PREVIOUS_SHA PUBLISHED_RELEASE_SNAPSHOT_MARKER REPOSITORY_URL VERSION_COMMAND_MARKER
     PATH="$FAKE_BIN:$PATH" \
+        CI=TRUE \
         CI_ARCHIVE_PATH="$TEST_ROOT/archive" \
         CI_APP_STORE_SIGNED_APP_PATH="$FIXTURE_ROOT/signed-app" \
+        CI_WORKFLOW_ID=release-workflow-id \
         CI_WORKFLOW=Release \
+        CI_XCODEBUILD_ACTION=archive \
+        CI_XCODE_CLOUD=TRUE \
         bash ci_post_xcodebuild.sh
 )
 
@@ -118,3 +126,24 @@ test -f "$NOTES_RANGE_MARKER"
 test "$(sed -n '1p' "$COMMAND_LOG")" = "run -q tools ci upload-dsyms --dsym-path $TEST_ROOT/archive/dSYMs"
 test "$(sed -n '2p' "$COMMAND_LOG")" = 'run -q tools ci release-to-github'
 test "$(sed -n '3p' "$GIT_LOG_ARGUMENTS")" = "$PREVIOUS_SHA..$ARCHIVED_SHA"
+
+rm -f "$COMMAND_LOG" "$FIXTURE_ROOT/TestFlight/WhatToTest.en-US.txt"
+if (
+    cd "$FIXTURE_ROOT/ci_scripts"
+    export ARCHIVED_SHA ARCHIVED_SHA_MARKER BASELINE_SHA_MARKER COMMAND_LOG FIXTURE_ROOT GIT_LOG_ARGUMENTS NOTES_RANGE_MARKER PREVIOUS_SHA PUBLISHED_RELEASE_SNAPSHOT_MARKER REPOSITORY_URL VERSION_COMMAND_MARKER
+    PATH="$FAKE_BIN:$PATH" \
+        CI=TRUE \
+        CI_ARCHIVE_PATH="$TEST_ROOT/archive" \
+        CI_APP_STORE_SIGNED_APP_PATH="$FIXTURE_ROOT/signed-app" \
+        CI_WORKFLOW_ID=release-workflow-id \
+        CI_WORKFLOW=Release \
+        CI_XCODEBUILD_ACTION=archive \
+        CI_XCODE_CLOUD=TRUE \
+        OVERSIZED_NOTES=1 \
+        bash ci_post_xcodebuild.sh
+); then
+    printf '%s\n' 'A Release workflow with 4,001-scalar WhatToTest notes succeeded.' >&2
+    exit 94
+fi
+test ! -s "$COMMAND_LOG"
+test ! -e "$FIXTURE_ROOT/TestFlight/WhatToTest.en-US.txt"

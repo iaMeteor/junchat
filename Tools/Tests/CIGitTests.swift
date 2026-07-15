@@ -34,6 +34,43 @@ final class CIGitTests: XCTestCase {
         ])
     }
 
+    func testReleaseCommitUsesCommandScopedIdentityWithoutChangingTheCallerGlobalIdentity() async throws {
+        let fixture = try await LocalGitFixture.make()
+        defer { fixture.remove() }
+        let globalConfiguration = fixture.root.appending(path: "caller.gitconfig")
+        try await fixture.git(["config", "--file", globalConfiguration.path, "user.name", "Caller Name"])
+        try await fixture.git(["config", "--file", globalConfiguration.path, "user.email", "caller@example.com"])
+        let identityBefore = try await fixture.gitOutput(["config", "--file", globalConfiguration.path, "--get-regexp", "^user\\."])
+        let trackedFile = fixture.repository.appending(path: "history.txt")
+        try "prepared\n".write(to: trackedFile, atomically: true, encoding: .utf8)
+        try await fixture.git(["add", "history.txt"])
+
+        try await CI.gitCommitForTesting(message: "Prepare release",
+                                         repositoryPath: fixture.repository.path,
+                                         globalConfigurationPath: globalConfiguration.path)
+
+        let identityAfter = try await fixture.gitOutput(["config", "--file", globalConfiguration.path, "--get-regexp", "^user\\."])
+        let commitIdentity = try await fixture.gitOutput(["show", "-s", "--format=%an <%ae>", "HEAD"])
+        XCTAssertEqual(identityAfter, identityBefore)
+        XCTAssertEqual(commitIdentity, "Element CI <ci@element.io>")
+    }
+
+    func testNightlyTagPublicationDoesNotChangeTheCallerGlobalIdentity() async throws {
+        let fixture = try await LocalGitFixture.make()
+        defer { fixture.remove() }
+        let globalConfiguration = fixture.root.appending(path: "caller.gitconfig")
+        try await fixture.git(["config", "--file", globalConfiguration.path, "user.name", "Caller Name"])
+        try await fixture.git(["config", "--file", globalConfiguration.path, "user.email", "caller@example.com"])
+        let identityBefore = try await fixture.gitOutput(["config", "--file", globalConfiguration.path, "--get-regexp", "^user\\."])
+
+        try await publish("nightly/1.8.2.36",
+                          fixture: fixture,
+                          globalConfigurationPath: globalConfiguration.path)
+
+        let identityAfter = try await fixture.gitOutput(["config", "--file", globalConfiguration.path, "--get-regexp", "^user\\."])
+        XCTAssertEqual(identityAfter, identityBefore)
+    }
+
     func testNightlyTagPublicationIsIdempotentForMatchingLocalAndRemoteTags() async throws {
         let fixture = try await LocalGitFixture.make()
         defer { fixture.remove() }
@@ -143,12 +180,14 @@ final class CIGitTests: XCTestCase {
 
     private func publish(_ tagName: String,
                          fixture: LocalGitFixture,
-                         gitExecutablePath: String? = nil) async throws {
+                         gitExecutablePath: String? = nil,
+                         globalConfigurationPath: String? = nil) async throws {
         try await CI.gitPushTagForTesting(tagName: tagName,
                                           expectedCommit: fixture.headCommit,
                                           remoteURL: fixture.remote.path,
                                           repositoryPath: fixture.repository.path,
-                                          gitExecutablePath: gitExecutablePath)
+                                          gitExecutablePath: gitExecutablePath,
+                                          globalConfigurationPath: globalConfigurationPath)
     }
 }
 

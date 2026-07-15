@@ -9,6 +9,12 @@ on:
       - "Tools/**"
       - "ci_scripts/**"
       - "docs/JUNCHAT_RELEASE.md"
+      - "project.yml"
+      - "ElementX.xcodeproj/project.pbxproj"
+      - "JUNCHAT_CHANGES.md"
+      - "ElementX/SupportingFiles/Info.plist"
+      - "NSE/SupportingFiles/Info.plist"
+      - "ShareExtension/SupportingFiles/Info.plist"
 
 permissions: {}
 
@@ -32,3 +38,9 @@ jobs:
           for test_script in ci_scripts/tests/*_test.sh; do
             bash "$test_script"
           done
+
+      - name: Verify generated Xcode project is current
+        run: |
+          set -euo pipefail
+          xcodegen
+          git diff --exit-code --

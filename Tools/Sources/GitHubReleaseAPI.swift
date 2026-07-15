@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 protocol URLSessionProtocol: AnyObject {
@@ -152,21 +153,31 @@ struct GitHubReleaseAPI {
             throw APIError.incompatibleExistingPreparation
         }
 
-        let changedFiles = try await repositoryChangedFiles(tree: commit.commit.tree.sha,
-                                                            repository: repository,
-                                                            token: token)
+        let preparedFiles = try await repositoryFiles(tree: commit.commit.tree.sha,
+                                                      repository: repository,
+                                                      token: token)
+        let changedFiles = preparedFiles.values.map {
+            JunchatReleasePreparation.ChangedFile(path: $0.path, mode: $0.mode)
+        }
         guard changedFiles.count == JunchatReleasePreparation.expectedChangedFiles.count,
               Set(changedFiles) == JunchatReleasePreparation.expectedChangedFiles else {
             throw APIError.incompatibleExistingPreparation
         }
 
+        let releaseTree = try await repositoryCommitTree(commit: releaseCommit,
+                                                         repository: repository,
+                                                         token: token)
+        let releaseFiles = try await repositoryFiles(tree: releaseTree,
+                                                     repository: repository,
+                                                     token: token)
+
         // Rebuild every allowlisted file from the archived parent so a matching marker cannot bless unrelated edits.
         let releaseProject = try await repositoryContent(path: JunchatReleasePreparation.projectYAMLPath,
-                                                         commit: releaseCommit,
+                                                         files: releaseFiles,
                                                          repository: repository,
                                                          token: token)
         let preparedProject = try await repositoryContent(path: JunchatReleasePreparation.projectYAMLPath,
-                                                          commit: commit.sha,
+                                                          files: preparedFiles,
                                                           repository: repository,
                                                           token: token)
         let expectedProject = try preparation.expectedProjectYAML(releaseProject)
@@ -179,11 +190,11 @@ struct GitHubReleaseAPI {
                                        changedFiles: changedFiles)
 
         let releaseChangelog = try await repositoryContent(path: JunchatReleasePreparation.changelogPath,
-                                                           commit: releaseCommit,
+                                                           files: releaseFiles,
                                                            repository: repository,
                                                            token: token)
         let preparedChangelog = try await repositoryContent(path: JunchatReleasePreparation.changelogPath,
-                                                            commit: commit.sha,
+                                                            files: preparedFiles,
                                                             repository: repository,
                                                             token: token)
         let expectedChangelog = try preparation.expectedChangelog(releaseChangelog,
@@ -193,11 +204,11 @@ struct GitHubReleaseAPI {
         }
 
         let releaseXcodeProject = try await repositoryContent(path: JunchatReleasePreparation.xcodeProjectPath,
-                                                              commit: releaseCommit,
+                                                              files: releaseFiles,
                                                               repository: repository,
                                                               token: token)
         let preparedXcodeProject = try await repositoryContent(path: JunchatReleasePreparation.xcodeProjectPath,
-                                                               commit: commit.sha,
+                                                               files: preparedFiles,
                                                                repository: repository,
                                                                token: token)
         let expectedXcodeProject = try preparation.expectedXcodeProject(releaseXcodeProject)
@@ -350,40 +361,63 @@ struct GitHubReleaseAPI {
         throw APIError.incompatibleExistingRelease
     }
 
-    private func repositoryChangedFiles(tree: String,
-                                        repository: GitHubRepository,
-                                        token: String) async throws -> [JunchatReleasePreparation.ChangedFile] {
+    private func repositoryCommitTree(commit: String,
+                                      repository: GitHubRepository,
+                                      token: String) async throws -> String {
+        let commitURL = try repositoryAPIURL(repository: repository,
+                                             pathComponents: ["git", "commits", commit])
+        let data = try await successfulData(for: authenticatedRequest(url: commitURL, token: token))
+        let record = try JSONDecoder().decode(GitHubGitCommitRecord.self, from: data)
+        guard record.sha == commit, Self.isGitObjectSHA(record.tree.sha) else {
+            throw APIError.incompatibleExistingPreparation
+        }
+        return record.tree.sha
+    }
+
+    private func repositoryFiles(tree: String,
+                                 repository: GitHubRepository,
+                                 token: String) async throws -> [String: GitHubTreeRecord.Entry] {
+        guard Self.isGitObjectSHA(tree) else {
+            throw APIError.incompatibleExistingPreparation
+        }
         let treeURL = try repositoryAPIURL(repository: repository,
                                            pathComponents: ["git", "trees", tree],
                                            queryItems: [URLQueryItem(name: "recursive", value: "1")])
         let data = try await successfulData(for: authenticatedRequest(url: treeURL, token: token))
         let record = try JSONDecoder().decode(GitHubTreeRecord.self, from: data)
-        guard !record.truncated else {
+        guard record.sha == tree, !record.truncated else {
             throw APIError.incompatibleExistingPreparation
         }
 
-        return try record.tree.compactMap { entry in
-            guard JunchatReleasePreparation.expectedChangedPaths.contains(entry.path) else { return nil }
-            guard entry.type == "blob" else {
+        var files = [String: GitHubTreeRecord.Entry]()
+        for entry in record.tree where JunchatReleasePreparation.expectedChangedPaths.contains(entry.path) {
+            guard entry.type == "blob",
+                  entry.mode == "100644",
+                  Self.isGitObjectSHA(entry.sha),
+                  let size = entry.size,
+                  size >= 0,
+                  files.updateValue(entry, forKey: entry.path) == nil else {
                 throw APIError.incompatibleExistingPreparation
             }
-            return JunchatReleasePreparation.ChangedFile(path: entry.path, mode: entry.mode)
         }
+        guard files.count == JunchatReleasePreparation.expectedChangedPaths.count else {
+            throw APIError.incompatibleExistingPreparation
+        }
+        return files
     }
 
     private func repositoryContent(path: String,
-                                   commit: String,
+                                   files: [String: GitHubTreeRecord.Entry],
                                    repository: GitHubRepository,
                                    token: String) async throws -> String {
-        let contentPath = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
-        guard !contentPath.isEmpty, contentPath.allSatisfy({ !$0.isEmpty }) else {
-            throw APIError.invalidResponse
+        guard let file = files[path], let expectedSize = file.size else {
+            throw APIError.incompatibleExistingPreparation
         }
         let url = try repositoryAPIURL(repository: repository,
-                                       pathComponents: ["contents"] + contentPath,
-                                       queryItems: [URLQueryItem(name: "ref", value: commit)])
+                                       pathComponents: ["git", "blobs", file.sha])
         let data = try await successfulData(for: authenticatedRequest(url: url, token: token))
-        return try JSONDecoder().decode(GitHubContentRecord.self, from: data).decodedContent()
+        return try JSONDecoder().decode(GitHubBlobRecord.self, from: data)
+            .decodedContent(expectedSHA: file.sha, expectedSize: expectedSize)
     }
 
     private func repositoryAPIURL(repository: GitHubRepository,
@@ -432,6 +466,12 @@ struct GitHubReleaseAPI {
                                          message: message)
         }
         return data
+    }
+
+    private static func isGitObjectSHA(_ value: String) -> Bool {
+        value.count == 40 && value.allSatisfy { character in
+            character.isASCII && (character.isNumber || ("a"..."f").contains(character))
+        }
     }
 }
 
@@ -506,27 +546,48 @@ private struct GitHubCommitRecord: Decodable {
     let files: [File]
 }
 
+private struct GitHubGitCommitRecord: Decodable {
+    let sha: String
+    let tree: GitHubCommitPointer
+}
+
 private struct GitHubTreeRecord: Decodable {
     struct Entry: Decodable {
         let path: String
         let mode: String
         let type: String
+        let sha: String
+        let size: Int?
     }
 
+    let sha: String
     let tree: [Entry]
     let truncated: Bool
 }
 
-private struct GitHubContentRecord: Decodable {
+private struct GitHubBlobRecord: Decodable {
+    let sha: String
+    let size: Int
     let encoding: String
     let content: String
 
-    func decodedContent() throws -> String {
+    func decodedContent(expectedSHA: String, expectedSize: Int) throws -> String {
+        let normalizedContent = content.components(separatedBy: .whitespacesAndNewlines).joined()
         guard encoding == "base64",
-              let data = Data(base64Encoded: content, options: .ignoreUnknownCharacters),
+              sha == expectedSHA,
+              size == expectedSize,
+              let data = Data(base64Encoded: normalizedContent),
+              data.count == expectedSize,
+              gitBlobSHA(data) == expectedSHA,
               let value = String(data: data, encoding: .utf8) else {
             throw GitHubReleaseAPI.APIError.invalidResponse
         }
         return value
     }
+}
+
+private func gitBlobSHA(_ data: Data) -> String {
+    var object = Data("blob \(data.count)\0".utf8)
+    object.append(data)
+    return Insecure.SHA1.hash(data: object).map { String(format: "%02x", $0) }.joined()
 }
