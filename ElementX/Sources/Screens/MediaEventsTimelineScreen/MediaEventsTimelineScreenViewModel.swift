@@ -11,6 +11,23 @@ import SwiftUI
 
 typealias MediaEventsTimelineScreenViewModelType = StateStoreViewModelV2<MediaEventsTimelineScreenViewState, MediaEventsTimelineScreenViewAction>
 
+private enum MediaEventsTimelineActionSource {
+    case media
+    case files
+
+    init(screenMode: MediaEventsTimelineScreenMode) {
+        self = switch screenMode {
+        case .media: .media
+        case .files: .files
+        }
+    }
+}
+
+private struct MediaEventsTimelineTapRequest {
+    let source: MediaEventsTimelineActionSource
+    let modeGeneration: UInt
+}
+
 class MediaEventsTimelineScreenViewModel: MediaEventsTimelineScreenViewModelType, MediaEventsTimelineScreenViewModelProtocol {
     private let mediaTimelineViewModel: TimelineViewModelProtocol
     private let filesTimelineViewModel: TimelineViewModelProtocol
@@ -20,6 +37,9 @@ class MediaEventsTimelineScreenViewModel: MediaEventsTimelineScreenViewModelType
     private let mediaPreviewForwardingHandoff: TimelineMediaPreviewForwardingHandoff
     
     private var isOldestItemVisible = false
+    private var modeGeneration: UInt = 0
+    private var activeTimelineActionSource: MediaEventsTimelineActionSource
+    private var mediaTapRequest: MediaEventsTimelineTapRequest?
     
     private var activeTimelineViewModel: TimelineViewModelProtocol {
         switch state.bindings.screenMode {
@@ -49,6 +69,7 @@ class MediaEventsTimelineScreenViewModel: MediaEventsTimelineScreenViewModelType
         self.mediaProvider = mediaProvider
         self.userIndicatorController = userIndicatorController
         self.appMediator = appMediator
+        activeTimelineActionSource = .init(screenMode: initialScreenMode)
         mediaPreviewForwardingHandoff = .init(clock: mediaPreviewForwardingClock)
         
         let activeTimelineContext = switch initialScreenMode {
@@ -68,18 +89,7 @@ class MediaEventsTimelineScreenViewModel: MediaEventsTimelineScreenViewModelType
         .store(in: &cancellables)
         
         mediaTimelineViewModel.actions.sink { [weak self] action in
-            guard let self else { return }
-            switch action {
-            case .displayMediaPreview(let mediaPreviewViewModel):
-                displayMediaPreview(mediaPreviewViewModel)
-            case .displayMediaDetails(item: let item):
-                displayMediaPreviewSheet(for: item)
-            case .displayEmojiPicker, .displayReportContent, .displayCameraPicker, .displayMediaPicker,
-                 .displayDocumentPicker, .displayLocationPicker, .displayLiveLocation, .displayPollForm, .displayMediaUploadPreviewScreen,
-                 .displaySenderDetails, .displayMessageForwarding, .displayLocation, .displayResolveSendFailure,
-                 .displayThread, .composer, .hasScrolled, .viewInRoomTimeline, .displayRoom:
-                break
-            }
+            self?.handleTimelineAction(action, source: .media)
         }
         .store(in: &cancellables)
         
@@ -93,18 +103,7 @@ class MediaEventsTimelineScreenViewModel: MediaEventsTimelineScreenViewModelType
         .store(in: &cancellables)
         
         filesTimelineViewModel.actions.sink { [weak self] action in
-            guard let self else { return }
-            switch action {
-            case .displayMediaPreview(let mediaPreviewViewModel):
-                displayMediaPreview(mediaPreviewViewModel)
-            case .displayMediaDetails(item: let item):
-                displayMediaPreviewSheet(for: item)
-            case .displayEmojiPicker, .displayReportContent, .displayCameraPicker, .displayMediaPicker,
-                 .displayDocumentPicker, .displayLocationPicker, .displayLiveLocation, .displayPollForm, .displayMediaUploadPreviewScreen,
-                 .displaySenderDetails, .displayMessageForwarding, .displayLocation, .displayResolveSendFailure,
-                 .displayThread, .composer, .hasScrolled, .viewInRoomTimeline, .displayRoom:
-                break
-            }
+            self?.handleTimelineAction(action, source: .files)
         }
         .store(in: &cancellables)
         
@@ -118,18 +117,14 @@ class MediaEventsTimelineScreenViewModel: MediaEventsTimelineScreenViewModelType
         
         switch viewAction {
         case .changedScreenMode:
-            switch state.bindings.screenMode {
-            case .media: state.activeTimelineContext = mediaTimelineViewModel.context
-            case .files: state.activeTimelineContext = filesTimelineViewModel.context
-            }
-            
-            updateWithTimelineViewState(activeTimelineViewModel.context.viewState)
+            handleScreenModeChange()
         case .oldestItemDidAppear:
             isOldestItemVisible = true
             backPaginateIfNecessary(backPaginationState: activeTimelineViewModel.context.viewState.timelineState.paginationState.backward)
         case .oldestItemDidDisappear:
             isOldestItemVisible = false
         case .tappedItem(let item):
+            mediaTapRequest = .init(source: currentTimelineActionSource, modeGeneration: modeGeneration)
             activeTimelineViewModel.context.send(viewAction: .mediaTapped(itemID: item.identifier))
         case .longPressedItem(let item):
             activeTimelineViewModel.context.send(viewAction: .displayTimelineItemMenu(itemID: item.identifier))
@@ -137,6 +132,7 @@ class MediaEventsTimelineScreenViewModel: MediaEventsTimelineScreenViewModelType
     }
     
     func stop() {
+        invalidateMediaTapRequest()
         mediaTimelineViewModel.stop()
         filesTimelineViewModel.stop()
         cancelMediaPreviewForwardingHandoff()
@@ -146,7 +142,63 @@ class MediaEventsTimelineScreenViewModel: MediaEventsTimelineScreenViewModelType
     }
     
     // MARK: - Private
-    
+
+    private var currentTimelineActionSource: MediaEventsTimelineActionSource {
+        .init(screenMode: state.bindings.screenMode)
+    }
+
+    private func timelineViewModel(for source: MediaEventsTimelineActionSource) -> TimelineViewModelProtocol {
+        switch source {
+        case .media: mediaTimelineViewModel
+        case .files: filesTimelineViewModel
+        }
+    }
+
+    private func handleScreenModeChange() {
+        let newSource = currentTimelineActionSource
+        if newSource != activeTimelineActionSource {
+            invalidateMediaTapRequest()
+            timelineViewModel(for: activeTimelineActionSource).stop()
+            activeTimelineActionSource = newSource
+        }
+
+        state.activeTimelineContext = timelineViewModel(for: newSource).context
+        updateWithTimelineViewState(activeTimelineViewModel.context.viewState)
+    }
+
+    private func handleTimelineAction(_ action: TimelineViewModelAction, source: MediaEventsTimelineActionSource) {
+        switch action {
+        case .displayMediaPreview(let mediaPreviewViewModel):
+            guard consumeMediaTapRequest(from: source) else { return }
+            displayMediaPreview(mediaPreviewViewModel)
+        case .displayMediaDetails(item: let item):
+            guard consumeMediaTapRequest(from: source) else { return }
+            displayMediaPreviewSheet(for: item)
+        case .displayEmojiPicker, .displayReportContent, .displayCameraPicker, .displayMediaPicker,
+             .displayDocumentPicker, .displayLocationPicker, .displayLiveLocation, .displayPollForm, .displayMediaUploadPreviewScreen,
+             .displaySenderDetails, .displayMessageForwarding, .displayLocation, .displayResolveSendFailure,
+             .displayThread, .composer, .hasScrolled, .viewInRoomTimeline, .displayRoom:
+            break
+        }
+    }
+
+    private func consumeMediaTapRequest(from source: MediaEventsTimelineActionSource) -> Bool {
+        guard source == currentTimelineActionSource,
+              source == activeTimelineActionSource,
+              let mediaTapRequest,
+              mediaTapRequest.source == source,
+              mediaTapRequest.modeGeneration == modeGeneration else {
+            return false
+        }
+        self.mediaTapRequest = nil
+        return true
+    }
+
+    private func invalidateMediaTapRequest() {
+        modeGeneration &+= 1
+        mediaTapRequest = nil
+    }
+
     private func displayMediaPreviewSheet(for item: EventBasedMessageTimelineItemProtocol) {
         cancelMediaPreviewForwardingHandoff()
         let sheetModel = TimelineMediaPreviewViewModel(initialItem: item,

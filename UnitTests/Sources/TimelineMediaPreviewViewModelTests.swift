@@ -516,6 +516,26 @@ struct TimelineMediaPreviewViewModelTests {
 
 extension TimelineMediaPreviewViewModelTests {
     @Test
+    func mediaToFilesRejectsLatePreviewAndAcceptsActivePreview() {
+        verifyModeSwitch(from: .media, action: .preview)
+    }
+
+    @Test
+    func mediaToFilesRejectsLateDetailsAndAcceptsActiveDetails() {
+        verifyModeSwitch(from: .media, action: .details)
+    }
+
+    @Test
+    func filesToMediaRejectsLatePreviewAndAcceptsActivePreview() {
+        verifyModeSwitch(from: .files, action: .preview)
+    }
+
+    @Test
+    func filesToMediaRejectsLateDetailsAndAcceptsActiveDetails() {
+        verifyModeSwitch(from: .files, action: .details)
+    }
+
+    @Test
     func roomStopsAndReleasesReplacedMediaForwardingHandoffs() async {
         let clock = TestClock<Duration>()
         let firstPreview = TimelineMediaPreviewViewModelActionEmitter()
@@ -630,6 +650,8 @@ extension TimelineMediaPreviewViewModelTests {
             forwardingActionCount += 1
         }
 
+        let item = Self.makeImageItem()
+        viewModel?.context.send(viewAction: .tappedItem(item: .init(item: item, groupStyle: .single)))
         mediaTimeline.send(.displayMediaPreview(preview))
         preview.send(.displayMessageForwarding(makeForwardingBatch()))
         viewModel?.stop()
@@ -668,6 +690,80 @@ extension TimelineMediaPreviewViewModelTests {
     private func yieldForMediaHandoffCancellation() async {
         for _ in 0..<10 {
             await Task.yield()
+        }
+    }
+
+    private func verifyModeSwitch(from initialMode: MediaEventsTimelineScreenMode,
+                                  action: MediaEventsTimelineTestAction) {
+        let mediaTimeline = TimelineViewModelActionEmitter(timelineKind: .media(.mediaFilesScreen))
+        let filesTimeline = TimelineViewModelActionEmitter(timelineKind: .media(.mediaFilesScreen))
+        let viewModel = MediaEventsTimelineScreenViewModel(mediaTimelineViewModel: mediaTimeline,
+                                                           filesTimelineViewModel: filesTimeline,
+                                                           initialScreenMode: initialMode,
+                                                           mediaProvider: MediaProviderMock(configuration: .init()),
+                                                           userIndicatorController: UserIndicatorControllerMock(),
+                                                           appMediator: AppMediatorMock())
+        let item = Self.makeImageItem()
+        let itemViewState = RoomTimelineItemViewState(item: item, groupStyle: .single)
+        let inactiveTimeline: TimelineViewModelActionEmitter
+        let activeTimeline: TimelineViewModelActionEmitter
+        let activeMode: MediaEventsTimelineScreenMode
+        switch initialMode {
+        case .media:
+            inactiveTimeline = mediaTimeline
+            activeTimeline = filesTimeline
+            activeMode = .files
+        case .files:
+            inactiveTimeline = filesTimeline
+            activeTimeline = mediaTimeline
+            activeMode = .media
+        }
+
+        viewModel.context.send(viewAction: .tappedItem(item: itemViewState))
+        viewModel.context.screenMode = activeMode
+        viewModel.context.send(viewAction: .changedScreenMode)
+
+        #expect(inactiveTimeline.stopCallCount == 1)
+        #expect(activeTimeline.stopCallCount == 0)
+
+        inactiveTimeline.send(action.timelineAction(item: item))
+        #expect(viewModel.context.viewState.bindings.mediaPreviewViewModel == nil)
+        #expect(viewModel.context.viewState.bindings.mediaPreviewSheetViewModel == nil)
+
+        viewModel.context.send(viewAction: .tappedItem(item: itemViewState))
+        activeTimeline.send(action.timelineAction(item: item))
+        switch action {
+        case .preview:
+            #expect(viewModel.context.viewState.bindings.mediaPreviewViewModel != nil)
+            #expect(viewModel.context.viewState.bindings.mediaPreviewSheetViewModel == nil)
+        case .details:
+            #expect(viewModel.context.viewState.bindings.mediaPreviewViewModel == nil)
+            #expect(viewModel.context.viewState.bindings.mediaPreviewSheetViewModel != nil)
+        }
+
+        viewModel.state.bindings.mediaPreviewViewModel = nil
+        viewModel.state.bindings.mediaPreviewSheetViewModel = nil
+        viewModel.context.screenMode = initialMode
+        viewModel.context.send(viewAction: .changedScreenMode)
+
+        #expect(activeTimeline.stopCallCount == 1)
+        inactiveTimeline.send(action.timelineAction(item: item))
+        #expect(viewModel.context.viewState.bindings.mediaPreviewViewModel == nil)
+        #expect(viewModel.context.viewState.bindings.mediaPreviewSheetViewModel == nil)
+    }
+}
+
+private enum MediaEventsTimelineTestAction {
+    case preview
+    case details
+
+    @MainActor
+    func timelineAction(item: EventBasedMessageTimelineItemProtocol) -> TimelineViewModelAction {
+        switch self {
+        case .preview:
+            .displayMediaPreview(TimelineMediaPreviewViewModelActionEmitter())
+        case .details:
+            .displayMediaDetails(item: item)
         }
     }
 }
@@ -738,6 +834,8 @@ private final class TimelineViewModelActionEmitter: TimelineViewModelProtocol {
         viewModel.context
     }
 
+    private(set) var stopCallCount = 0
+
     init(timelineKind: TimelineKind) {
         viewModel = .mock(timelineKind: timelineKind)
     }
@@ -747,6 +845,7 @@ private final class TimelineViewModelActionEmitter: TimelineViewModelProtocol {
     }
 
     func stop() {
+        stopCallCount += 1
         viewModel.stop()
     }
 
