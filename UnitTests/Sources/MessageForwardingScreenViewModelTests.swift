@@ -480,6 +480,41 @@ struct MessageForwardingScreenViewModelTests {
     }
 
     @Test
+    func productionLedgerPersistsALargeBatchWithoutPerItemSynchronization() async throws {
+        let suiteName = "MessageForwardingScreenViewModelTests.\(UUID().uuidString)"
+        let userDefaults = try #require(SynchronizationCountingUserDefaults(suiteName: suiteName))
+        userDefaults.removePersistentDomain(forName: suiteName)
+        defer { userDefaults.removePersistentDomain(forName: suiteName) }
+        let forwardingBatch = makeForwardingBatch(count: 150)
+        let ledgerStore = MessageForwardingLedgerStore(userDefaults: userDefaults)
+        let targetTimeline = TimelineProxyMock(.init())
+        let viewModel = makeViewModel(forwardingBatch: forwardingBatch,
+                                      targetTimeline: targetTimeline,
+                                      ledgerStore: ledgerStore)
+        let context = viewModel.context
+        context.send(viewAction: .selectRoom(roomID: "2"))
+        let queued = deferFulfillment(viewModel.actions) { action in
+            guard case .queued(roomID: "2") = action else { return false }
+            return true
+        }
+
+        context.send(viewAction: .send)
+        try await queued.fulfill()
+
+        #expect(targetTimeline.queueMessageEventContentCallsCount == 150)
+        #expect(userDefaults.writeCallCount == 2)
+        #expect(userDefaults.synchronizeCallCount == 0)
+        let firstItem = try #require(forwardingBatch.items.first)
+        let lastItem = try #require(forwardingBatch.items.last)
+        #expect(ledgerStore.state(accountID: RoomMemberProxyMock.mockMe.userID,
+                                  destinationRoomID: "2",
+                                  item: firstItem) == .admitted)
+        #expect(ledgerStore.state(accountID: RoomMemberProxyMock.mockMe.userID,
+                                  destinationRoomID: "2",
+                                  item: lastItem) == .admitted)
+    }
+
+    @Test
     func rejects151MessagesAtTheBatchConstructionBoundary() {
         let items = (1...151).map { index in
             MessageForwardingItem(id: .event(uniqueID: .init("oversized-\(index)"),
@@ -648,6 +683,46 @@ struct MessageForwardingScreenViewModelTests {
         try await queued.fulfill()
 
         #expect(targetTimeline.queueMessageEventContentCallsCount == 0)
+    }
+
+    @Test
+    func corruptProductionLedgerCanBeExplicitlyDiscardedWithoutResending() async throws {
+        let suiteName = "MessageForwardingScreenViewModelTests.\(UUID().uuidString)"
+        let userDefaults = try #require(UserDefaults(suiteName: suiteName))
+        userDefaults.removePersistentDomain(forName: suiteName)
+        defer { userDefaults.removePersistentDomain(forName: suiteName) }
+        let owner = MessageForwardingLedgerOwner(launchID: "previous-launch", reservationID: "reservation")
+        var ledgerStore = MessageForwardingLedgerStore(userDefaults: userDefaults)
+        #expect(ledgerStore.reserveAdmissions(owner: owner,
+                                              accountID: RoomMemberProxyMock.mockMe.userID,
+                                              destinationRoomID: "2",
+                                              items: [forwardingItem]) == .stored)
+        let ledgerKey = try #require(userDefaults.persistentDomain(forName: suiteName)?.keys.first)
+        userDefaults.set(Data("corrupt-forwarding-ledger".utf8), forKey: ledgerKey)
+        #expect(userDefaults.synchronize())
+        ledgerStore = MessageForwardingLedgerStore(userDefaults: userDefaults)
+        let targetTimeline = TimelineProxyMock(.init())
+        let viewModel = makeViewModel(forwardingBatch: .init(firstItem: forwardingItem),
+                                      targetTimeline: targetTimeline,
+                                      ledgerStore: ledgerStore)
+        let context = viewModel.context
+        context.send(viewAction: .selectRoom(roomID: "2"))
+        #expect(context.viewState.forwardingProgress?.unknownCount == 1)
+
+        context.send(viewAction: .send)
+        #expect(context.viewState.bindings.isUnknownOutcomeResolutionPresented)
+        #expect(targetTimeline.queueMessageEventContentCallsCount == 0)
+        #expect(userDefaults.object(forKey: ledgerKey) != nil)
+        let queued = deferFulfillment(viewModel.actions, timeout: .milliseconds(250)) { action in
+            guard case .queued(roomID: "2") = action else { return false }
+            return true
+        }
+
+        context.send(viewAction: .continueWithoutResending)
+        try await queued.fulfill()
+
+        #expect(targetTimeline.queueMessageEventContentCallsCount == 0)
+        #expect(userDefaults.object(forKey: ledgerKey) == nil)
     }
 
     @Test
@@ -1148,6 +1223,21 @@ private final class PartialCapacityMessageForwardingLedgerStore: MessageForwardi
                       items: [MessageForwardingItem],
                       includingPreviousLaunches: Bool) -> Bool {
         true
+    }
+}
+
+private final class SynchronizationCountingUserDefaults: UserDefaults {
+    private(set) var writeCallCount = 0
+    private(set) var synchronizeCallCount = 0
+
+    override func set(_ value: Any?, forKey defaultName: String) {
+        writeCallCount += 1
+        super.set(value, forKey: defaultName)
+    }
+
+    override func synchronize() -> Bool {
+        synchronizeCallCount += 1
+        return super.synchronize()
     }
 }
 

@@ -274,7 +274,42 @@ struct TimelineMediaPreviewViewModelTests {
         #expect(forwardingActionCount == 1)
         withExtendedLifetime(cancellable) { }
     }
-    
+
+    @Test
+    mutating func deinitializingMediaPreviewCancelsForwardingPreparation() async throws {
+        setupViewModel()
+        guard case let .media(mediaItem) = context.viewState.currentItem else {
+            Issue.record("There should be a current item")
+            return
+        }
+        let contentGate = MediaPreviewForwardingContentGate()
+        timelineController.messageEventContentClosure = { itemID in
+            await contentGate.content(for: itemID)
+        }
+        var forwardingActionCount = 0
+        let cancellable = viewModel.actions.sink { action in
+            guard case .displayMessageForwarding = action else { return }
+            forwardingActionCount += 1
+        }
+        weak let weakViewModel = viewModel
+        let contentRequested = deferFulfillment(contentGate.requests) { $0 == mediaItem.timelineItem.id }
+        context.send(viewAction: .menuAction(.forward(itemID: mediaItem.timelineItem.id), item: mediaItem))
+        try await contentRequested.fulfill()
+
+        viewModel = nil
+        await Task.yield()
+        let providerMutationToken = timelineController.providerMutationToken()
+        contentGate.resume()
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+
+        #expect(weakViewModel == nil)
+        #expect(providerMutationToken != nil)
+        #expect(forwardingActionCount == 0)
+        withExtendedLifetime(cancellable) { }
+    }
+
     @Test
     mutating func saveImage() async throws {
         // Given a view model with a loaded image.
@@ -426,7 +461,8 @@ struct TimelineMediaPreviewViewModelTests {
         timelineController.timelineItems = [replacementItem]
         timelineController.callbacks.send(.updatedTimelineItems(timelineItems: [replacementItem],
                                                                 isSwitchingTimelines: false,
-                                                                providerGeneration: timelineController.timelineItemsProviderGeneration))
+                                                                providerGeneration: timelineController.timelineItemsProviderGeneration,
+                                                                timelineItemsGeneration: timelineController.timelineItemsGeneration))
         try await replacementPublished.fulfill()
 
         contentGate.resume()

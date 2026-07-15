@@ -21,5 +21,8 @@ protocol TimelineViewModelProtocol {
     /// Stops the current live location sharing
     func stopLiveLocationSharing() async
     /// Handles getting the content to forward an item given its item ID.
-    func makeForwardingItem(for itemID: TimelineItemIdentifier) async -> MessageForwardingItem?
+    func makeForwardingItem(for itemID: TimelineItemIdentifier,
+                            requestID: UUID,
+                            preparationOwnerID: UUID) async -> MessageForwardingItem?
+    func cancelForwardingItemPreparation(preparationOwnerID: UUID)
 }

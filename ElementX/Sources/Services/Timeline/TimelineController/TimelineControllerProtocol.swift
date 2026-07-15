@@ -13,7 +13,8 @@ import SwiftUI
 enum TimelineControllerCallback {
     case updatedTimelineItems(timelineItems: [RoomTimelineItemProtocol],
                               isSwitchingTimelines: Bool,
-                              providerGeneration: UInt)
+                              providerGeneration: UInt,
+                              timelineItemsGeneration: UInt)
     case paginationState(TimelinePaginationState)
     case isLive(Bool)
 }
@@ -46,6 +47,7 @@ struct TimelineProviderMutationToken: Equatable {
 struct TimelineProviderLease: Equatable {
     let mutationGeneration: UInt
     let providerGeneration: UInt
+    let timelineItemsGeneration: UInt
 }
 
 /// This protocol is a high level abstraction on top of the ``TimelineProxyProtocol``
@@ -61,6 +63,8 @@ protocol TimelineControllerProtocol {
     /// The currently known items, use only for setting up the intial state.
     var timelineItems: [RoomTimelineItemProtocol] { get }
     var timelineItemsProviderGeneration: UInt { get }
+    var timelineItemsGeneration: UInt { get }
+    var isTimelineItemsBuildInProgress: Bool { get }
     var activeProviderGeneration: UInt { get }
     
     /// The current pagination state, use only for setting up the intial state
@@ -68,10 +72,11 @@ protocol TimelineControllerProtocol {
     
     var callbacks: PassthroughSubject<TimelineControllerCallback, Never> { get }
 
-    func providerMutationToken() -> TimelineProviderMutationToken?
+    func providerMutationToken(ensuringProviderIsConfigured: Bool) -> TimelineProviderMutationToken?
     func isProviderMutationTokenValid(_ token: TimelineProviderMutationToken) -> Bool
     func setProviderMutationLocked(_ isLocked: Bool)
     func acquireProviderLease() -> TimelineProviderLease?
+    func isProviderLeaseValid(_ lease: TimelineProviderLease) -> Bool
     func releaseProviderLease(_ lease: TimelineProviderLease)
     
     func processItemAppearance(_ itemID: TimelineItemIdentifier) async
@@ -171,4 +176,10 @@ protocol TimelineControllerProtocol {
     func sendPollResponse(pollStartID: String, answers: [String]) async -> Result<Void, TimelineControllerError>
     
     func endPoll(pollStartID: String, text: String) async -> Result<Void, TimelineControllerError>
+}
+
+extension TimelineControllerProtocol {
+    func providerMutationToken() -> TimelineProviderMutationToken? {
+        providerMutationToken(ensuringProviderIsConfigured: false)
+    }
 }

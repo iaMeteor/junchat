@@ -14,6 +14,93 @@ import Testing
 @MainActor
 extension TimelineViewModelTests {
     @Test
+    func sameProviderBuildStartingDuringExtractionInvalidatesForwardingLease() async throws {
+        let itemProxy = makeTimelineItemProxy(eventID: "same-provider-edit", uniqueID: "same-provider-edit")
+        let paginationState = TimelinePaginationState(backward: .idle, forward: .endReached)
+        let updates = CurrentValueSubject<([TimelineItemProxy], TimelinePaginationState), Never>(([itemProxy], paginationState))
+        let timeline = try makeTimelineProxy(kind: .live, updates: updates.eraseToAnyPublisher())
+        let contentGate = ProviderForwardingContentGate()
+        timeline.messageEventContentForClosure = { itemID in
+            await contentGate.content(for: itemID)
+        }
+        let roomProxy = JoinedRoomProxyMock(.init(name: ""))
+        roomProxy.timeline = timeline
+        let buildGate = TimelineItemBuildGate(blockedEventID: "same-provider-edit", occurrence: 2)
+        let timelineController = TimelineController(roomProxy: roomProxy,
+                                                    timelineProxy: timeline,
+                                                    initialFocussedEventID: nil,
+                                                    timelineItemFactory: ProviderBuildRoomTimelineItemFactory(gate: buildGate),
+                                                    mediaProvider: MediaProviderMock(),
+                                                    appSettings: ServiceLocator.shared.settings)
+        defer {
+            contentGate.resume()
+            buildGate.resume()
+        }
+
+        for _ in 0..<100 where timelineController.timelineItems.first?.id.eventID != "same-provider-edit" {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        let item = try #require(timelineController.timelineItems.first)
+        let viewModel = makeProviderLockViewModel(timelineController: timelineController)
+        viewModel.process(viewAction: .handleTimelineItemMenuAction(itemID: item.id, action: .selectMessages))
+        let contentRequested = deferFulfillment(contentGate.requests) { $0 == item.id }
+        viewModel.process(viewAction: .forwardMessageSelection)
+        try await contentRequested.fulfill()
+
+        updates.send(([itemProxy], paginationState))
+        await buildGate.waitUntilStarted()
+        let noForward = deferFailure(viewModel.actions, timeout: .milliseconds(150)) { action in
+            guard case .displayMessageForwarding = action else { return false }
+            return true
+        }
+        contentGate.resume()
+
+        try await noForward.fulfill()
+        #expect(viewModel.state.messageSelectionState.isActive)
+    }
+
+    @Test
+    func sendingWhileInitialFocusLoadsRestoresLiveProviderOwnership() async throws {
+        let liveTimeline = try makeTimelineProxy(kind: .live)
+        liveTimeline.sendMessageHtmlInReplyToEventIDIntentionalMentionsReturnValue = .success(())
+        let focussedTimeline = try makeTimelineProxy(kind: .detached)
+        let roomProxy = JoinedRoomProxyMock(.init(name: ""))
+        roomProxy.timeline = liveTimeline
+        let focusGate = TimelineOperationGate()
+        roomProxy.timelineFocusedOnEventEventIDNumberOfEventsClosure = { _, _ in
+            await focusGate.wait()
+            return .success(focussedTimeline)
+        }
+        let timelineController = TimelineController(roomProxy: roomProxy,
+                                                    timelineProxy: liveTimeline,
+                                                    initialFocussedEventID: "initial-focus",
+                                                    timelineItemFactory: ProviderLockRoomTimelineItemFactoryStub(),
+                                                    mediaProvider: MediaProviderMock(),
+                                                    appSettings: ServiceLocator.shared.settings)
+        defer { focusGate.resume() }
+        let focusStarted = deferFulfillment(focusGate.started) { _ in true }
+        try await focusStarted.fulfill()
+        let viewModel = makeProviderLockViewModel(timelineController: timelineController,
+                                                  focussedEventID: "initial-focus")
+        let liveProviderConfigured = deferFulfillment(timelineController.callbacks, timeout: .milliseconds(250)) { callback in
+            guard case .isLive(true) = callback else { return false }
+            return true
+        }
+
+        viewModel.process(composerAction: .sendMessage(plain: "message",
+                                                       html: nil,
+                                                       mode: .default,
+                                                       intentionalMentions: .init(userIDs: [], atRoom: false)))
+
+        try await liveProviderConfigured.fulfill()
+        for _ in 0..<100 where viewModel.state.timelineState.focussedEvent != nil {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(timelineController.activeProviderGeneration > 0)
+        #expect(viewModel.state.timelineState.focussedEvent == nil)
+    }
+
+    @Test
     func queuedSameIDEditAfterExtractionCannotForwardStaleMultiSelection() async throws {
         let item = makeProviderLockItem(eventID: "queued-edit")
         let editedItem = makeProviderLockItem(id: item.id, body: "Edited")
@@ -25,7 +112,8 @@ extension TimelineViewModelTests {
                 timelineController.timelineItems = [editedItem]
                 timelineController.callbacks.send(.updatedTimelineItems(timelineItems: [editedItem],
                                                                         isSwitchingTimelines: false,
-                                                                        providerGeneration: timelineController.timelineItemsProviderGeneration))
+                                                                        providerGeneration: timelineController.timelineItemsProviderGeneration,
+                                                                        timelineItemsGeneration: timelineController.timelineItemsGeneration))
             }
             return content
         }
@@ -285,6 +373,69 @@ extension TimelineViewModelTests {
     }
 
     @Test
+    func deinitializingTimelineViewModelCancelsDirectForwardingPreparation() async throws {
+        let item = makeProviderLockItem(eventID: "direct-forward-deinit")
+        let contentGate = ProviderForwardingContentGate()
+        let timelineController = MockTimelineController(timelineItems: [item])
+        timelineController.messageEventContentClosure = { itemID in
+            await contentGate.content(for: itemID)
+        }
+        var viewModel: TimelineViewModel? = makeProviderLockViewModel(timelineController: timelineController)
+        weak let weakViewModel = viewModel
+        var forwardingActionCount = 0
+        let cancellable = viewModel?.actions.sink { action in
+            guard case .displayMessageForwarding = action else { return }
+            forwardingActionCount += 1
+        }
+        let contentRequested = deferFulfillment(contentGate.requests) { $0 == item.id }
+        viewModel?.process(viewAction: .handleTimelineItemMenuAction(itemID: item.id, action: .forward(itemID: item.id)))
+        try await contentRequested.fulfill()
+
+        viewModel = nil
+        await Task.yield()
+        let providerMutationToken = timelineController.providerMutationToken()
+        contentGate.resume()
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+
+        #expect(weakViewModel == nil)
+        #expect(providerMutationToken != nil)
+        #expect(forwardingActionCount == 0)
+        withExtendedLifetime(cancellable) { }
+    }
+
+    @Test
+    func messageSelectionSupersedesSuspendedDirectForwarding() async throws {
+        let item = makeProviderLockItem(eventID: "selection-supersedes-direct")
+        let contentGate = ProviderForwardingContentGate()
+        let timelineController = MockTimelineController(timelineItems: [item])
+        timelineController.messageEventContentClosure = { itemID in
+            await contentGate.content(for: itemID)
+        }
+        let viewModel = makeProviderLockViewModel(timelineController: timelineController)
+        var forwardingActionCount = 0
+        let cancellable = viewModel.actions.sink { action in
+            guard case .displayMessageForwarding = action else { return }
+            forwardingActionCount += 1
+        }
+        let contentRequested = deferFulfillment(contentGate.requests) { $0 == item.id }
+        viewModel.process(viewAction: .handleTimelineItemMenuAction(itemID: item.id, action: .forward(itemID: item.id)))
+        try await contentRequested.fulfill()
+
+        viewModel.process(viewAction: .handleTimelineItemMenuAction(itemID: item.id, action: .selectMessages))
+        #expect(viewModel.state.messageSelectionState.isActive)
+        #expect(viewModel.state.messageSelectionState.isSelected(.eventID("selection-supersedes-direct")))
+
+        contentGate.resume()
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+        #expect(forwardingActionCount == 0)
+        withExtendedLifetime(cancellable) { }
+    }
+
+    @Test
     func coordinatorDirectFocusIsIgnoredDuringMessageSelection() async {
         let item = makeProviderLockItem(eventID: "direct-focus-lock")
         let timelineController = MockTimelineController(timelineItems: [item])
@@ -482,7 +633,7 @@ extension TimelineViewModelTests {
         await buildGate.waitUntilStarted()
         defer { buildGate.resume() }
         let activePublished = deferFulfillment(timelineController.callbacks) { callback in
-            guard case .updatedTimelineItems(let items, _, _) = callback else { return false }
+            guard case .updatedTimelineItems(let items, _, _, _) = callback else { return false }
             return items.first?.id.eventID == "active-event"
         }
         let focusToken = try #require(timelineController.providerMutationToken())
@@ -493,7 +644,7 @@ extension TimelineViewModelTests {
         try await activePublished.fulfill()
 
         let stalePublished = deferFailure(timelineController.callbacks, timeout: .milliseconds(150)) { callback in
-            guard case .updatedTimelineItems(let items, _, _) = callback else { return false }
+            guard case .updatedTimelineItems(let items, _, _, _) = callback else { return false }
             return items.first?.id.eventID == "stale-event"
         }
         buildGate.resume()
@@ -564,7 +715,8 @@ extension TimelineViewModelTests {
         forwardingController.timelineItems = [replacementItem]
         forwardingController.callbacks.send(.updatedTimelineItems(timelineItems: [replacementItem],
                                                                   isSwitchingTimelines: true,
-                                                                  providerGeneration: 1))
+                                                                  providerGeneration: 1,
+                                                                  timelineItemsGeneration: forwardingController.timelineItemsGeneration))
         for _ in 0..<100 where forwardingViewModel.state.timelineState.itemViewStates.first?.identifier != replacementItem.id {
             try await Task.sleep(for: .milliseconds(5))
         }
@@ -586,7 +738,8 @@ extension TimelineViewModelTests {
         redactionController.timelineItems = [replacementItem]
         redactionController.callbacks.send(.updatedTimelineItems(timelineItems: [replacementItem],
                                                                  isSwitchingTimelines: true,
-                                                                 providerGeneration: 1))
+                                                                 providerGeneration: 1,
+                                                                 timelineItemsGeneration: redactionController.timelineItemsGeneration))
         for _ in 0..<100 where redactionViewModel.state.timelineState.itemViewStates.first?.identifier != replacementItem.id {
             try await Task.sleep(for: .milliseconds(5))
         }
@@ -615,7 +768,8 @@ extension TimelineViewModelTests {
         timelineController.timelineItems = [replacementItem]
         timelineController.callbacks.send(.updatedTimelineItems(timelineItems: [replacementItem],
                                                                 isSwitchingTimelines: true,
-                                                                providerGeneration: 1))
+                                                                providerGeneration: 1,
+                                                                timelineItemsGeneration: timelineController.timelineItemsGeneration))
         try await replacementPublished.fulfill()
 
         viewModel.process(viewAction: .handleTimelineItemMenuAction(itemID: retiredItem.id, action: .selectMessages))
@@ -641,7 +795,8 @@ extension TimelineViewModelTests {
         timelineController.timelineItems = [replacementItem]
         timelineController.callbacks.send(.updatedTimelineItems(timelineItems: [replacementItem],
                                                                 isSwitchingTimelines: true,
-                                                                providerGeneration: 1))
+                                                                providerGeneration: 1,
+                                                                timelineItemsGeneration: timelineController.timelineItemsGeneration))
         try await replacementPublished.fulfill()
 
         let noForward = deferFailure(viewModel.actions, timeout: .milliseconds(150)) { action in
@@ -691,7 +846,8 @@ extension TimelineViewModelTests {
 
         timelineController.callbacks.send(.updatedTimelineItems(timelineItems: [staleItem],
                                                                 isSwitchingTimelines: false,
-                                                                providerGeneration: 0))
+                                                                providerGeneration: 0,
+                                                                timelineItemsGeneration: timelineController.timelineItemsGeneration))
         for _ in 0..<100 where viewModel.state.timelineState.itemViewStates.first?.identifier == activeItem.id {
             try await Task.sleep(for: .milliseconds(5))
         }
@@ -723,7 +879,8 @@ extension TimelineViewModelTests {
         timelineController.timelineItems = [remoteItem]
         timelineController.callbacks.send(.updatedTimelineItems(timelineItems: [remoteItem],
                                                                 isSwitchingTimelines: false,
-                                                                providerGeneration: timelineController.timelineItemsProviderGeneration))
+                                                                providerGeneration: timelineController.timelineItemsProviderGeneration,
+                                                                timelineItemsGeneration: timelineController.timelineItemsGeneration))
         for _ in 0..<100 where viewModel.state.timelineState.itemViewStates.first?.identifier != remoteItem.id {
             try await Task.sleep(for: .milliseconds(5))
         }
@@ -745,7 +902,8 @@ extension TimelineViewModelTests {
         redactionController.timelineItems = [remoteItem]
         redactionController.callbacks.send(.updatedTimelineItems(timelineItems: [remoteItem],
                                                                  isSwitchingTimelines: false,
-                                                                 providerGeneration: redactionController.timelineItemsProviderGeneration))
+                                                                 providerGeneration: redactionController.timelineItemsProviderGeneration,
+                                                                 timelineItemsGeneration: redactionController.timelineItemsGeneration))
         for _ in 0..<100 where redactionViewModel.state.timelineState.itemViewStates.first?.identifier != remoteItem.id {
             try await Task.sleep(for: .milliseconds(5))
         }
@@ -779,7 +937,8 @@ extension TimelineViewModelTests {
         viewModel.state.canCurrentUserRedactOthers = false
         timelineController.callbacks.send(.updatedTimelineItems(timelineItems: [item],
                                                                 isSwitchingTimelines: false,
-                                                                providerGeneration: timelineController.timelineItemsProviderGeneration))
+                                                                providerGeneration: timelineController.timelineItemsProviderGeneration,
+                                                                timelineItemsGeneration: timelineController.timelineItemsGeneration))
         for _ in 0..<100 where viewModel.state.messageSelectionState.canRedactSelectedMessages {
             try await Task.sleep(for: .milliseconds(5))
         }
@@ -791,7 +950,8 @@ extension TimelineViewModelTests {
         timelineController.timelineItems = [pollItem]
         timelineController.callbacks.send(.updatedTimelineItems(timelineItems: [pollItem],
                                                                 isSwitchingTimelines: false,
-                                                                providerGeneration: timelineController.timelineItemsProviderGeneration))
+                                                                providerGeneration: timelineController.timelineItemsProviderGeneration,
+                                                                timelineItemsGeneration: timelineController.timelineItemsGeneration))
         for _ in 0..<100 where viewModel.state.messageSelectionState.isActive {
             try await Task.sleep(for: .milliseconds(5))
         }
@@ -839,7 +999,8 @@ extension TimelineViewModelTests {
         timelineController.timelineItems = items
         timelineController.callbacks.send(.updatedTimelineItems(timelineItems: items,
                                                                 isSwitchingTimelines: false,
-                                                                providerGeneration: timelineController.timelineItemsProviderGeneration))
+                                                                providerGeneration: timelineController.timelineItemsProviderGeneration,
+                                                                timelineItemsGeneration: timelineController.timelineItemsGeneration))
         try await paginationPublished.fulfill()
 
         for item in items[75...] {
@@ -872,8 +1033,10 @@ extension TimelineViewModelTests {
         #expect(!actions.secondaryActions.contains(.selectMessages))
     }
 
-    private func makeProviderLockViewModel(timelineController: TimelineControllerProtocol) -> TimelineViewModel {
+    private func makeProviderLockViewModel(timelineController: TimelineControllerProtocol,
+                                           focussedEventID: String? = nil) -> TimelineViewModel {
         TimelineViewModel(roomProxy: JoinedRoomProxyMock(.init(name: "")),
+                          focussedEventID: focussedEventID,
                           timelineController: timelineController,
                           userSession: UserSessionMock(.init()),
                           mediaPlayerProvider: MediaPlayerProviderMock(),
@@ -936,7 +1099,8 @@ extension TimelineViewModelTests {
         timelineController.timelineItems = [replacementItem]
         timelineController.callbacks.send(.updatedTimelineItems(timelineItems: [replacementItem],
                                                                 isSwitchingTimelines: false,
-                                                                providerGeneration: timelineController.timelineItemsProviderGeneration))
+                                                                providerGeneration: timelineController.timelineItemsProviderGeneration,
+                                                                timelineItemsGeneration: timelineController.timelineItemsGeneration))
         try await replacementPublished.fulfill()
 
         contentGate.resume()
@@ -1003,15 +1167,24 @@ private struct ProviderBuildRoomTimelineItemFactory: RoomTimelineItemFactoryProt
 
 private final class TimelineItemBuildGate: @unchecked Sendable {
     private let blockedEventID: String
+    private let occurrence: Int
+    private let lock = NSLock()
+    private var matchingBuildCount = 0
     private let started = DispatchSemaphore(value: 0)
     private let resumed = DispatchSemaphore(value: 0)
 
-    init(blockedEventID: String) {
+    init(blockedEventID: String, occurrence: Int = 1) {
         self.blockedEventID = blockedEventID
+        self.occurrence = occurrence
     }
 
     func blockIfNeeded(eventID: String?) {
         guard eventID == blockedEventID else { return }
+        let shouldBlock = lock.withLock {
+            matchingBuildCount += 1
+            return matchingBuildCount == occurrence
+        }
+        guard shouldBlock else { return }
         started.signal()
         resumed.wait()
     }

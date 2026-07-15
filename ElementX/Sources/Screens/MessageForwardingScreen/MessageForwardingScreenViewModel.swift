@@ -252,22 +252,8 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
             switch result {
             case .success(let sendHandle):
                 forwardingOperations[index].status = .queued(sendHandle)
-                if ledgerStore.setState(.admitted,
-                                        owner: ledgerOwner,
-                                        accountID: clientProxy.userID,
-                                        destinationRoomID: roomID,
-                                        item: forwardingOperations[index].item) != .stored {
-                    MXLog.error("Failed updating the message forwarding admission ledger.")
-                }
             case .failure(let error):
                 forwardingOperations[index].status = .queueingFailed
-                if !ledgerStore.removeStates(owner: ledgerOwner,
-                                             accountID: clientProxy.userID,
-                                             destinationRoomID: roomID,
-                                             items: [forwardingOperations[index].item],
-                                             includingPreviousLaunches: false) {
-                    MXLog.error("Failed clearing a rejected message forwarding admission.")
-                }
                 MXLog.error("Failed adding a forwarded message to the send queue: \(type(of: error))")
             }
 
@@ -279,6 +265,7 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
             updateProgress(isQueueing: true, isCancelling: false)
         }
 
+        persistQueueingResults(roomID: roomID)
         return finishForwardingAttempt(roomID: roomID)
     }
 
@@ -320,12 +307,12 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
     }
 
     private func restorePersistedOperations(for roomID: String) {
-        for index in forwardingOperations.indices where forwardingOperations[index].status.shouldQueue {
-            guard ledgerStore.state(accountID: clientProxy.userID,
-                                    destinationRoomID: roomID,
-                                    item: forwardingOperations[index].item) != nil else {
-                continue
-            }
+        let restorableIndices = forwardingOperations.indices.filter { forwardingOperations[$0].status.shouldQueue }
+        let restorableItems = restorableIndices.map { forwardingOperations[$0].item }
+        let persistedStates = ledgerStore.states(accountID: clientProxy.userID,
+                                                 destinationRoomID: roomID,
+                                                 items: restorableItems)
+        for (index, persistedState) in zip(restorableIndices, persistedStates) where persistedState != nil {
             forwardingOperations[index].status = .restoredUnknown
         }
 
@@ -334,19 +321,48 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
         }
     }
 
+    private func persistQueueingResults(roomID: String) {
+        let updates = forwardingOperations.compactMap { operation -> MessageForwardingLedgerUpdate? in
+            switch operation.status {
+            case .queued:
+                .set(.admitted, item: operation.item)
+            case .queueingFailed:
+                .remove(item: operation.item)
+            default:
+                nil
+            }
+        }
+        guard ledgerStore.apply(updates,
+                                owner: ledgerOwner,
+                                accountID: clientProxy.userID,
+                                destinationRoomID: roomID) == .stored else {
+            MXLog.error("Failed atomically updating the message forwarding admission ledger.")
+            return
+        }
+    }
+
+    private func resolveUnknownAdmissions(_ items: [MessageForwardingItem], roomID: String) -> Bool {
+        if ledgerStore.removeStates(owner: ledgerOwner,
+                                    accountID: clientProxy.userID,
+                                    destinationRoomID: roomID,
+                                    items: items,
+                                    includingPreviousLaunches: true) {
+            return true
+        }
+        guard ledgerStore.discardCorruptLedger(accountID: clientProxy.userID) else {
+            MXLog.error("Failed resolving message forwarding admissions owned by another active scene.")
+            return false
+        }
+        MXLog.error("Discarded a corrupt message forwarding admission ledger after explicit user confirmation.")
+        return true
+    }
+
     private func continueWithoutResendingUnknownOperations() {
         guard let roomID = state.selectedRoomID else { return }
         let unknownItems = forwardingOperations.compactMap { operation in
             operation.status.isUnknownOutcome ? operation.item : nil
         }
-        guard ledgerStore.removeStates(owner: ledgerOwner,
-                                       accountID: clientProxy.userID,
-                                       destinationRoomID: roomID,
-                                       items: unknownItems,
-                                       includingPreviousLaunches: true) else {
-            MXLog.error("Failed resolving message forwarding admissions owned by another active scene.")
-            return
-        }
+        guard resolveUnknownAdmissions(unknownItems, roomID: roomID) else { return }
         state.bindings.isUnknownOutcomeResolutionPresented = false
         for index in forwardingOperations.indices where forwardingOperations[index].status.isUnknownOutcome {
             forwardingOperations[index].status = .acceptedByQueue
@@ -359,14 +375,7 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
         let unknownItems = forwardingOperations.compactMap { operation in
             operation.status.isUnknownOutcome ? operation.item : nil
         }
-        guard ledgerStore.removeStates(owner: ledgerOwner,
-                                       accountID: clientProxy.userID,
-                                       destinationRoomID: roomID,
-                                       items: unknownItems,
-                                       includingPreviousLaunches: true) else {
-            MXLog.error("Failed resolving message forwarding admissions owned by another active scene.")
-            return
-        }
+        guard resolveUnknownAdmissions(unknownItems, roomID: roomID) else { return }
         for index in forwardingOperations.indices where forwardingOperations[index].status.isUnknownOutcome {
             forwardingOperations[index].status = .pending
         }
@@ -408,22 +417,8 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
         var unretractableCount = 0
 
         let reservedIndices = forwardingOperations.indices.filter { forwardingOperations[$0].status.isReserved }
-        if !reservedIndices.isEmpty, let roomID = state.selectedRoomID {
-            let reservedItems = reservedIndices.map { forwardingOperations[$0].item }
-            if ledgerStore.removeStates(owner: ledgerOwner,
-                                        accountID: clientProxy.userID,
-                                        destinationRoomID: roomID,
-                                        items: reservedItems,
-                                        includingPreviousLaunches: false) {
-                for index in reservedIndices {
-                    forwardingOperations[index].status = .cancelled
-                }
-            } else {
-                for index in reservedIndices {
-                    forwardingOperations[index].status = .queueingFailed
-                }
-                MXLog.error("Failed clearing reserved message forwarding admissions.")
-            }
+        for index in reservedIndices {
+            forwardingOperations[index].status = .cancelled
         }
 
         for index in forwardingOperations.indices {
@@ -432,30 +427,42 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
             do {
                 if try await sendHandle.abort() {
                     forwardingOperations[index].status = .cancelled
-                    if let roomID = state.selectedRoomID,
-                       !ledgerStore.removeStates(owner: ledgerOwner,
-                                                 accountID: clientProxy.userID,
-                                                 destinationRoomID: roomID,
-                                                 items: [forwardingOperations[index].item],
-                                                 includingPreviousLaunches: false) {
-                        MXLog.error("Failed clearing an aborted message forwarding admission.")
-                    }
                 } else {
                     forwardingOperations[index].status = .cancellationUnknown
-                    persistUnknownState(for: forwardingOperations[index].item)
                     unretractableCount += 1
                 }
             } catch {
                 forwardingOperations[index].status = .cancellationUnknown
-                persistUnknownState(for: forwardingOperations[index].item)
                 unretractableCount += 1
                 MXLog.error("Failed cancelling a queued forwarded message: \(type(of: error))")
             }
         }
 
+        persistCancellationResults()
         updateProgress(isQueueing: false, isCancelling: false)
         return .cancelled(unretractableCount: unretractableCount,
                           shouldDismiss: shouldDismissAfterCancellation)
+    }
+
+    private func persistCancellationResults() {
+        guard let roomID = state.selectedRoomID else { return }
+        let updates = forwardingOperations.compactMap { operation -> MessageForwardingLedgerUpdate? in
+            switch operation.status {
+            case .cancelled, .queueingFailed:
+                .remove(item: operation.item)
+            case .cancellationUnknown:
+                .set(.unknown, item: operation.item)
+            default:
+                nil
+            }
+        }
+        guard ledgerStore.apply(updates,
+                                owner: ledgerOwner,
+                                accountID: clientProxy.userID,
+                                destinationRoomID: roomID) == .stored else {
+            MXLog.error("Failed atomically updating cancelled message forwarding admissions.")
+            return
+        }
     }
 
     private func handleForwardingOutcome(_ outcome: MessageForwardingOutcome) {
@@ -500,17 +507,6 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
         }
         for index in ownedUnknownIndices {
             forwardingOperations[index].status = .restoredUnknown
-        }
-    }
-
-    private func persistUnknownState(for item: MessageForwardingItem) {
-        guard let roomID = state.selectedRoomID else { return }
-        if ledgerStore.setState(.unknown,
-                                owner: ledgerOwner,
-                                accountID: clientProxy.userID,
-                                destinationRoomID: roomID,
-                                item: item) != .stored {
-            MXLog.error("Failed updating an uncertain message forwarding admission.")
         }
     }
 

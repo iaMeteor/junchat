@@ -32,9 +32,16 @@ class TimelineController: TimelineControllerProtocol {
     private(set) var activeProviderGeneration: UInt = 0
     private var isProviderMutationLocked = false
     private var activeProviderLease: TimelineProviderLease?
+    private var hasConfiguredActiveTimelineItemProvider = false
     
     private(set) var timelineItems = [RoomTimelineItemProtocol]()
     private(set) var timelineItemsProviderGeneration: UInt = 0
+    private(set) var timelineItemsGeneration: UInt = 0
+    private var settledTimelineItemsGeneration: UInt = 0
+
+    var isTimelineItemsBuildInProgress: Bool {
+        timelineItemsGeneration != settledTimelineItemsGeneration
+    }
     
     private(set) var paginationState: TimelinePaginationState = .initial {
         didSet {
@@ -87,8 +94,11 @@ class TimelineController: TimelineControllerProtocol {
         }
     }
     
-    func providerMutationToken() -> TimelineProviderMutationToken? {
+    func providerMutationToken(ensuringProviderIsConfigured: Bool) -> TimelineProviderMutationToken? {
         guard !isProviderMutationLocked else { return nil }
+        if ensuringProviderIsConfigured, !hasConfiguredActiveTimelineItemProvider {
+            configureActiveTimelineItemProvider()
+        }
         providerMutationGeneration &+= 1
         return .init(generation: providerMutationGeneration)
     }
@@ -108,13 +118,23 @@ class TimelineController: TimelineControllerProtocol {
 
     func acquireProviderLease() -> TimelineProviderLease? {
         guard !isProviderMutationLocked,
+              !isTimelineItemsBuildInProgress,
               timelineItemsProviderGeneration == activeProviderGeneration else { return nil }
         providerMutationGeneration &+= 1
         isProviderMutationLocked = true
         let lease = TimelineProviderLease(mutationGeneration: providerMutationGeneration,
-                                          providerGeneration: activeProviderGeneration)
+                                          providerGeneration: activeProviderGeneration,
+                                          timelineItemsGeneration: timelineItemsGeneration)
         activeProviderLease = lease
         return lease
+    }
+
+    func isProviderLeaseValid(_ lease: TimelineProviderLease) -> Bool {
+        isProviderMutationLocked &&
+            activeProviderLease == lease &&
+            lease.providerGeneration == activeProviderGeneration &&
+            lease.timelineItemsGeneration == timelineItemsGeneration &&
+            !isTimelineItemsBuildInProgress
     }
 
     func releaseProviderLease(_ lease: TimelineProviderLease) {
@@ -458,10 +478,6 @@ class TimelineController: TimelineControllerProtocol {
         !isProviderMutationLocked && token.generation == providerMutationGeneration
     }
 
-    private func isProviderLeaseValid(_ lease: TimelineProviderLease) -> Bool {
-        isProviderMutationLocked && activeProviderLease == lease && lease.providerGeneration == activeProviderGeneration
-    }
-    
     /// The cancellable used to update the timeline items.
     private var updateTimelineItemsCancellable: AnyCancellable?
     /// The controller is switching the `activeTimelineItemProvider`.
@@ -471,6 +487,7 @@ class TimelineController: TimelineControllerProtocol {
     /// - Parameter clearExistingItems: Whether or not to clear any existing items before loading the timeline's contents.
     private func configureActiveTimelineItemProvider() {
         updateTimelineItemsCancellable = nil
+        hasConfiguredActiveTimelineItemProvider = true
         activeProviderGeneration &+= 1
         let providerGeneration = activeProviderGeneration
         let timeline = activeTimeline
@@ -502,6 +519,8 @@ class TimelineController: TimelineControllerProtocol {
                                      timeline: TimelineProxyProtocol,
                                      providerGeneration: UInt) async {
         guard providerGeneration == activeProviderGeneration else { return }
+        timelineItemsGeneration &+= 1
+        let timelineItemsBuildGeneration = timelineItemsGeneration
         let isNewTimeline = isSwitchingTimelines
         isSwitchingTimelines = false
         
@@ -546,7 +565,8 @@ class TimelineController: TimelineControllerProtocol {
             return newTimelineItems
         }.value
 
-        guard providerGeneration == activeProviderGeneration else { return }
+        guard providerGeneration == activeProviderGeneration,
+              timelineItemsBuildGeneration == timelineItemsGeneration else { return }
         
         // Check if we need to add anything to the top of the timeline.
         switch paginationState.backward {
@@ -565,10 +585,12 @@ class TimelineController: TimelineControllerProtocol {
         
         timelineItems = newTimelineItems
         timelineItemsProviderGeneration = providerGeneration
+        settledTimelineItemsGeneration = timelineItemsBuildGeneration
         
         callbacks.send(.updatedTimelineItems(timelineItems: newTimelineItems,
                                              isSwitchingTimelines: isNewTimeline,
-                                             providerGeneration: providerGeneration))
+                                             providerGeneration: providerGeneration,
+                                             timelineItemsGeneration: timelineItemsBuildGeneration))
         guard providerGeneration == activeProviderGeneration else { return }
         self.paginationState = paginationState
     }

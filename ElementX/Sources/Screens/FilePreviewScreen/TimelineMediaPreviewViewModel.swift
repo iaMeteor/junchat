@@ -28,6 +28,7 @@ class TimelineMediaPreviewViewModel: TimelineMediaPreviewViewModelType {
     }
 
     private var prepareMessageForwardingTask: Task<Void, Never>?
+    private var messageForwardingPreparationRequestID: UUID?
     
     init(initialItem: EventBasedMessageTimelineItemProtocol,
          timelineViewModel: TimelineViewModelProtocol,
@@ -62,7 +63,7 @@ class TimelineMediaPreviewViewModel: TimelineMediaPreviewViewModelType {
         timelineViewModel.context.$viewState.map(\.timelineState.itemViewStates)
             .removeDuplicates()
             .sink { [weak self] itemViewStates in
-                self?.cancelMessageForwardingPreparation()
+                self?.cancelMessageForwardingPreparation(releasingProviderLease: true)
                 self?.state.dataSource.updatePreviewItems(itemViewStates: itemViewStates)
             }
             .store(in: &cancellables)
@@ -106,25 +107,37 @@ class TimelineMediaPreviewViewModel: TimelineMediaPreviewViewModelType {
 
     isolated deinit {
         prepareMessageForwardingTask?.cancel()
+        timelineViewModel.cancelForwardingItemPreparation(preparationOwnerID: instanceID)
     }
     
     private func forwardItem(itemID: TimelineItemIdentifier) {
-        cancelMessageForwardingPreparation()
+        cancelMessageForwardingPreparation(releasingProviderLease: false)
+        let requestID = UUID()
+        messageForwardingPreparationRequestID = requestID
+        let preparationOwnerID = instanceID
+        let timelineViewModel = timelineViewModel
         prepareMessageForwardingTask = Task { [weak self] in
-            guard let self,
-                  let forwardingItem = await timelineViewModel.makeForwardingItem(for: itemID),
-                  !Task.isCancelled else {
+            let forwardingItem = await timelineViewModel.makeForwardingItem(for: itemID,
+                                                                            requestID: requestID,
+                                                                            preparationOwnerID: preparationOwnerID)
+            guard let self, let forwardingItem, !Task.isCancelled,
+                  messageForwardingPreparationRequestID == requestID else {
                 return
             }
             prepareMessageForwardingTask = nil
+            messageForwardingPreparationRequestID = nil
             state.previewControllerDriver.send(.dismissDetailsSheet)
             actionsSubject.send(.displayMessageForwarding(.init(firstItem: forwardingItem)))
         }
     }
 
-    private func cancelMessageForwardingPreparation() {
+    private func cancelMessageForwardingPreparation(releasingProviderLease: Bool) {
         prepareMessageForwardingTask?.cancel()
         prepareMessageForwardingTask = nil
+        messageForwardingPreparationRequestID = nil
+        if releasingProviderLease {
+            timelineViewModel.cancelForwardingItemPreparation(preparationOwnerID: instanceID)
+        }
     }
     
     private func updateCurrentItem(_ previewItem: TimelineMediaPreviewItem) async {

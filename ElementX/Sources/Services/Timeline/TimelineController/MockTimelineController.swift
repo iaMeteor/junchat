@@ -37,6 +37,8 @@ class MockTimelineController: TimelineControllerProtocol {
 
     var timelineItems: [RoomTimelineItemProtocol] = RoomTimelineItemFixtures.default
     var timelineItemsProviderGeneration: UInt = 0
+    var timelineItemsGeneration: UInt = 0
+    var isTimelineItemsBuildInProgress = false
     var activeProviderGeneration: UInt = 0
     var timelineItemsTimestamp: [TimelineItemIdentifier: Date] = [:]
 
@@ -78,7 +80,7 @@ class MockTimelineController: TimelineControllerProtocol {
         }
     }
 
-    func providerMutationToken() -> TimelineProviderMutationToken? {
+    func providerMutationToken(ensuringProviderIsConfigured: Bool) -> TimelineProviderMutationToken? {
         guard !isProviderMutationLocked else { return nil }
         providerMutationGeneration &+= 1
         return .init(generation: providerMutationGeneration)
@@ -99,11 +101,13 @@ class MockTimelineController: TimelineControllerProtocol {
 
     func acquireProviderLease() -> TimelineProviderLease? {
         guard !isProviderMutationLocked,
+              !isTimelineItemsBuildInProgress,
               timelineItemsProviderGeneration == activeProviderGeneration else { return nil }
         providerMutationGeneration &+= 1
         isProviderMutationLocked = true
         let lease = TimelineProviderLease(mutationGeneration: providerMutationGeneration,
-                                          providerGeneration: activeProviderGeneration)
+                                          providerGeneration: activeProviderGeneration,
+                                          timelineItemsGeneration: timelineItemsGeneration)
         activeProviderLease = lease
         return lease
     }
@@ -166,8 +170,12 @@ class MockTimelineController: TimelineControllerProtocol {
         !isProviderMutationLocked && token.generation == providerMutationGeneration
     }
 
-    private func isProviderLeaseValid(_ lease: TimelineProviderLease) -> Bool {
-        isProviderMutationLocked && activeProviderLease == lease && lease.providerGeneration == activeProviderGeneration
+    func isProviderLeaseValid(_ lease: TimelineProviderLease) -> Bool {
+        isProviderMutationLocked &&
+            activeProviderLease == lease &&
+            lease.providerGeneration == activeProviderGeneration &&
+            lease.timelineItemsGeneration == timelineItemsGeneration &&
+            !isTimelineItemsBuildInProgress
     }
 
     func toggleReaction(_ reaction: String, to eventID: TimelineItemIdentifier.EventOrTransactionID) async {
@@ -248,9 +256,11 @@ class MockTimelineController: TimelineControllerProtocol {
                                         sender: .init(id: roomProxy?.ownUserID ?? "@mock:server.com", displayName: "Me"),
                                         content: .init(body: message))
         timelineItems.append(item)
+        timelineItemsGeneration &+= 1
         callbacks.send(.updatedTimelineItems(timelineItems: timelineItems,
                                              isSwitchingTimelines: false,
-                                             providerGeneration: timelineItemsProviderGeneration))
+                                             providerGeneration: timelineItemsProviderGeneration,
+                                             timelineItemsGeneration: timelineItemsGeneration))
     }
 
     func sendAudio(url: URL,
@@ -413,9 +423,11 @@ class MockTimelineController: TimelineControllerProtocol {
 
         let incomingItem = incomingItems.removeFirst()
         timelineItems.append(incomingItem)
+        timelineItemsGeneration &+= 1
         callbacks.send(.updatedTimelineItems(timelineItems: timelineItems,
                                              isSwitchingTimelines: false,
-                                             providerGeneration: timelineItemsProviderGeneration))
+                                             providerGeneration: timelineItemsProviderGeneration,
+                                             timelineItemsGeneration: timelineItemsGeneration))
 
         try client?.send(.success)
     }
@@ -431,9 +443,11 @@ class MockTimelineController: TimelineControllerProtocol {
 
         let newItems = backPaginationResponses.removeFirst()
         timelineItems.insert(contentsOf: newItems, at: 0)
+        timelineItemsGeneration &+= 1
         callbacks.send(.updatedTimelineItems(timelineItems: timelineItems,
                                              isSwitchingTimelines: false,
-                                             providerGeneration: timelineItemsProviderGeneration))
+                                             providerGeneration: timelineItemsProviderGeneration,
+                                             timelineItemsGeneration: timelineItemsGeneration))
 
         try client?.send(.success)
     }

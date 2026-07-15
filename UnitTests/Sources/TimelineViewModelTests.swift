@@ -1628,7 +1628,8 @@ extension TimelineViewModelTests {
         timelineController.timelineItems = [replacement]
         timelineController.callbacks.send(.updatedTimelineItems(timelineItems: [replacement],
                                                                 isSwitchingTimelines: false,
-                                                                providerGeneration: timelineController.timelineItemsProviderGeneration))
+                                                                providerGeneration: timelineController.timelineItemsProviderGeneration,
+                                                                timelineItemsGeneration: timelineController.timelineItemsGeneration))
 
         contentGate.resume(itemID: item.id)
         try await contentCompleted.fulfill()

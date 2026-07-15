@@ -39,10 +39,26 @@ enum MessageForwardingLedgerMutationResult: Equatable {
     case persistenceFailed
 }
 
+enum MessageForwardingLedgerUpdate {
+    case set(MessageForwardingLedgerState, item: MessageForwardingItem)
+    case remove(item: MessageForwardingItem)
+
+    var item: MessageForwardingItem {
+        switch self {
+        case .set(_, let item), .remove(let item):
+            item
+        }
+    }
+}
+
 protocol MessageForwardingLedgerStoreProtocol {
     func state(accountID: String,
                destinationRoomID: String,
                item: MessageForwardingItem) -> MessageForwardingLedgerState?
+
+    func states(accountID: String,
+                destinationRoomID: String,
+                items: [MessageForwardingItem]) -> [MessageForwardingLedgerState?]
 
     @discardableResult
     func reserveAdmissions(owner: MessageForwardingLedgerOwner,
@@ -58,6 +74,12 @@ protocol MessageForwardingLedgerStoreProtocol {
                   item: MessageForwardingItem) -> MessageForwardingLedgerMutationResult
 
     @discardableResult
+    func apply(_ updates: [MessageForwardingLedgerUpdate],
+               owner: MessageForwardingLedgerOwner,
+               accountID: String,
+               destinationRoomID: String) -> MessageForwardingLedgerMutationResult
+
+    @discardableResult
     func releaseUnknownAdmissions(owner: MessageForwardingLedgerOwner,
                                   accountID: String,
                                   destinationRoomID: String,
@@ -69,6 +91,46 @@ protocol MessageForwardingLedgerStoreProtocol {
                       destinationRoomID: String,
                       items: [MessageForwardingItem],
                       includingPreviousLaunches: Bool) -> Bool
+
+    func discardCorruptLedger(accountID: String) -> Bool
+}
+
+extension MessageForwardingLedgerStoreProtocol {
+    func states(accountID: String,
+                destinationRoomID: String,
+                items: [MessageForwardingItem]) -> [MessageForwardingLedgerState?] {
+        items.map { state(accountID: accountID, destinationRoomID: destinationRoomID, item: $0) }
+    }
+
+    func apply(_ updates: [MessageForwardingLedgerUpdate],
+               owner: MessageForwardingLedgerOwner,
+               accountID: String,
+               destinationRoomID: String) -> MessageForwardingLedgerMutationResult {
+        for update in updates {
+            switch update {
+            case .set(let state, let item):
+                let result = setState(state,
+                                      owner: owner,
+                                      accountID: accountID,
+                                      destinationRoomID: destinationRoomID,
+                                      item: item)
+                guard result == .stored else { return result }
+            case .remove(let item):
+                guard removeStates(owner: owner,
+                                   accountID: accountID,
+                                   destinationRoomID: destinationRoomID,
+                                   items: [item],
+                                   includingPreviousLaunches: false) else {
+                    return .notOwner
+                }
+            }
+        }
+        return .stored
+    }
+
+    func discardCorruptLedger(accountID: String) -> Bool {
+        false
+    }
 }
 
 struct MessageForwardingLedgerStore: MessageForwardingLedgerStoreProtocol {
@@ -90,14 +152,21 @@ struct MessageForwardingLedgerStore: MessageForwardingLedgerStoreProtocol {
     func state(accountID: String,
                destinationRoomID: String,
                item: MessageForwardingItem) -> MessageForwardingLedgerState? {
+        states(accountID: accountID, destinationRoomID: destinationRoomID, items: [item]).first ?? nil
+    }
+
+    func states(accountID: String,
+                destinationRoomID: String,
+                items: [MessageForwardingItem]) -> [MessageForwardingLedgerState?] {
         Self.mutationLock.withLock {
             switch loadLedger(forKey: storageKey(accountID: accountID)) {
             case .missing:
-                return nil
+                return Array(repeating: nil, count: items.count)
             case .loaded(let ledger):
-                return ledger.destinations[fingerprint([destinationRoomID])]?[itemFingerprint(item)]?.state
+                let destination = ledger.destinations[fingerprint([destinationRoomID])]
+                return items.map { destination?[itemFingerprint($0)]?.state }
             case .corrupt:
-                return .unknown
+                return Array(repeating: .unknown, count: items.count)
             }
         }
     }
@@ -164,6 +233,55 @@ struct MessageForwardingLedgerStore: MessageForwardingLedgerStoreProtocol {
             entry.state = state
             ledger.destinations[destinationKey]?[itemKey] = entry
             return persist(ledger, forKey: key) ? .stored : .persistenceFailed
+        }
+    }
+
+    func apply(_ updates: [MessageForwardingLedgerUpdate],
+               owner: MessageForwardingLedgerOwner,
+               accountID: String,
+               destinationRoomID: String) -> MessageForwardingLedgerMutationResult {
+        guard !updates.isEmpty else { return .stored }
+
+        return Self.mutationLock.withLock {
+            let key = storageKey(accountID: accountID)
+            let destinationKey = fingerprint([destinationRoomID])
+            var ledger: Ledger
+            switch loadLedger(forKey: key) {
+            case .missing:
+                return updates.allSatisfy { update in
+                    if case .remove = update { true } else { false }
+                } ? .stored : .notOwner
+            case .loaded(let storedLedger):
+                ledger = storedLedger
+            case .corrupt:
+                return .persistenceFailed
+            }
+
+            for update in updates {
+                let itemKey = itemFingerprint(update.item)
+                switch update {
+                case .set:
+                    guard ledger.destinations[destinationKey]?[itemKey]?.owner == owner else { return .notOwner }
+                case .remove:
+                    guard let entry = ledger.destinations[destinationKey]?[itemKey] else { continue }
+                    guard entry.owner == owner else { return .notOwner }
+                }
+            }
+
+            for update in updates {
+                let itemKey = itemFingerprint(update.item)
+                switch update {
+                case .set(let state, _):
+                    ledger.destinations[destinationKey]?[itemKey]?.state = state
+                case .remove:
+                    ledger.destinations[destinationKey]?.removeValue(forKey: itemKey)
+                }
+            }
+
+            if ledger.destinations[destinationKey]?.isEmpty == true {
+                ledger.destinations.removeValue(forKey: destinationKey)
+            }
+            return persist(ledger.destinations.isEmpty ? nil : ledger, forKey: key) ? .stored : .persistenceFailed
         }
     }
 
@@ -246,9 +364,24 @@ struct MessageForwardingLedgerStore: MessageForwardingLedgerStoreProtocol {
         }
     }
 
+    func discardCorruptLedger(accountID: String) -> Bool {
+        Self.mutationLock.withLock {
+            let key = storageKey(accountID: accountID)
+            switch loadLedger(forKey: key) {
+            case .missing:
+                return true
+            case .loaded:
+                return false
+            case .corrupt:
+                userDefaults.removeObject(forKey: key)
+                return userDefaults.object(forKey: key) == nil
+            }
+        }
+    }
+
     private func persist(_ ledger: Ledger?, forKey key: String) -> Bool {
         storage[key] = ledger
-        return userDefaults.synchronize() && storage[key] == ledger
+        return storage[key] == ledger
     }
 
     private func loadLedger(forKey key: String) -> LedgerLoadResult {
