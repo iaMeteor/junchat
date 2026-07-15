@@ -230,8 +230,15 @@ struct GitHubReleaseAPI {
         request.httpBody = try JSONEncoder().encode(releaseRequest)
         let data = try await successfulData(for: request)
         let release = try JSONDecoder().decode(GitHubReleaseRecord.self, from: data)
-        return try release.validatedDraftBody(for: releaseRequest,
-                                              validateTargetCommitish: true)
+        let body = try release.validatedDraftBody(for: releaseRequest,
+                                                  validateTargetCommitish: true)
+        let tagCommit = try await releaseTagCommit(tagName: releaseRequest.tagName,
+                                                   repository: repository,
+                                                   token: token)
+        guard tagCommit == releaseRequest.targetCommit else {
+            throw APIError.incompatibleExistingRelease
+        }
+        return body
     }
 
     private func releaseTagCommit(tagName: String,

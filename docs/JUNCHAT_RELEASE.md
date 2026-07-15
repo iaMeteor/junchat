@@ -56,7 +56,9 @@ build, archived commit, and date in validated commit trailers.
 If a run fails after draft creation, a clean CI retry lists authenticated
 releases and reuses only the same draft, non-prerelease tag and name after
 peeling that tag to the archived commit; a published, prerelease, or mismatched
-release fails closed. Xcode Cloud Rebuild starts from
+release fails closed. A newly created draft is accepted only after its actual
+lightweight or annotated `release/<version>` tag also peels to the archived
+commit; the response's `target_commitish` is not sufficient. Xcode Cloud Rebuild starts from
 the same archived commit, so the command also checks the current remote branch
 before making local changes. It accepts an already-pushed preparation only when
 it is the archived commit's sole child, carries the exact validated marker,
@@ -75,9 +77,18 @@ never rewrites, rebases, or force-pushes an unrelated branch. The GitHub release
 remains a draft until a separate explicit publication approval; review its tag
 target, notes, and artifacts before publishing it.
 
-TestFlight notes use the archived commit as the end of their Git log range, so
-the later `Prepare next release` metadata commit is not included in tester
-notes.
+Before upload or GitHub orchestration, the Release workflow reads the current
+marketing version and freezes the highest earlier stable `release/*` tag and
+its peeled commit. The current release tag and tags for later versions are
+excluded, and the selected commit must be a strict ancestor of the archived
+commit. A first formal JunChat release with no earlier tag must set
+`JUNCHAT_FIRST_RELEASE_BASELINE_COMMIT` to an exact lowercase 40-character
+commit SHA that is a strict ancestor. Missing or unrelated baselines and empty
+note ranges stop the workflow before remote-capable commands run.
+
+TestFlight notes use that frozen commit as the start and the archived commit as
+the end of their Git log range, so a fetched current release tag cannot collapse
+the range and the later `Prepare next release` metadata commit is not included.
 
 Release credentials, Apple signing certificates, provisioning profiles, and
 entitlements remain managed by the existing secure Xcode Cloud/signing setup.

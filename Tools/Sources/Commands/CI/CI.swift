@@ -13,6 +13,7 @@ struct CI: ParsableCommand {
                                                         RunTests.self,
                                                         ConfigureNightly.self,
                                                         ConfigureProduction.self,
+                                                        CurrentReleaseVersion.self,
                                                         TagNightly.self,
                                                         UploadDSYMs.self,
                                                         ReleaseToGitHub.self
