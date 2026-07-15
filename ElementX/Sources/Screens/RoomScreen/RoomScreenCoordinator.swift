@@ -23,7 +23,7 @@ struct RoomScreenCoordinatorParameters {
     let linkMetadataProvider: LinkMetadataProviderProtocol
     let completionSuggestionService: CompletionSuggestionServiceProtocol
     let ongoingCallRoomIDPublisher: CurrentValuePublisher<String?, Never>
-    var elementCallService: ElementCallServiceProtocol? = nil
+    var elementCallService: ElementCallServiceProtocol?
     let appMediator: AppMediatorProtocol
     let appSettings: AppSettings
     let appHooks: AppHooks
@@ -44,7 +44,7 @@ enum RoomScreenCoordinatorAction {
     case presentLiveLocationViewer(sender: TimelineItemSender?, initialLiveLocationShare: LiveLocationShare?)
     case presentEmojiPicker(itemID: TimelineItemIdentifier, selectedEmojis: Set<String>)
     case presentRoomMemberDetails(userID: String)
-    case presentMessageForwarding(forwardingItem: MessageForwardingItem)
+    case presentMessageForwarding(forwardingBatch: MessageForwardingBatch)
     case presentCallScreen(isVoiceCall: Bool)
     case presentPinnedEventsTimeline
     case presentResolveSendFailure(failure: TimelineItemSendFailure.VerifiedUser, sendHandle: SendHandleProxy)
@@ -139,8 +139,8 @@ final class RoomScreenCoordinator: CoordinatorProtocol {
                     actionsSubject.send(.presentMediaUploadPreviewScreen(mediaURLs: mediaURLs))
                 case .displaySenderDetails(userID: let userID):
                     actionsSubject.send(.presentRoomMemberDetails(userID: userID))
-                case .displayMessageForwarding(let forwardingItem):
-                    actionsSubject.send(.presentMessageForwarding(forwardingItem: forwardingItem))
+                case .displayMessageForwarding(let forwardingBatch):
+                    actionsSubject.send(.presentMessageForwarding(forwardingBatch: forwardingBatch))
                 case .displayLocation(let location):
                     actionsSubject.send(.presentLocationViewer(location))
                 case .displayLiveLocation(let sender, let initialLiveLocationShare):
@@ -191,8 +191,8 @@ final class RoomScreenCoordinator: CoordinatorProtocol {
                     actionsSubject.send(.presentKnockRequestsList)
                 case .displayRoom(let roomID, let via):
                     actionsSubject.send(.presentRoom(roomID: roomID, via: via))
-                case .displayMessageForwarding(let forwardingItem):
-                    actionsSubject.send(.presentMessageForwarding(forwardingItem: forwardingItem))
+                case .displayMessageForwarding(let forwardingBatch):
+                    actionsSubject.send(.presentMessageForwarding(forwardingBatch: forwardingBatch))
                 case .displayThreadList:
                     actionsSubject.send(.presentThreadList)
                 case .displayThread(let threadRootEventID, let focussedEventID):

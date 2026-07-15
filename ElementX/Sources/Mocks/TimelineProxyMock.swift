@@ -8,6 +8,7 @@
 
 import Combine
 import Foundation
+import MatrixRustSDK
 
 extension TimelineProxyMock {
     struct Configuration {
@@ -19,7 +20,7 @@ extension TimelineProxyMock {
     convenience init(_ configuration: Configuration) {
         self.init()
         
-        sendMessageEventContentReturnValue = .success(())
+        queueMessageEventContentReturnValue = .success(SendHandle(noHandle: .init()))
         paginateBackwardsRequestSizeReturnValue = .success(())
         paginateForwardsRequestSizeReturnValue = .success(())
         sendReadReceiptForTypeReturnValue = .success(())

@@ -8,8 +8,15 @@
 
 import SwiftUI
 
+enum TimelineItemAccessibilityPolicy {
+    static func showsMessageActions(isMessageSelectionActive: Bool) -> Bool {
+        !isMessageSelectionActive
+    }
+}
+
 private struct TimelineItemAccessibilityModifier: ViewModifier {
     let timelineItem: RoomTimelineItemProtocol
+    let showsMessageActions: Bool
     let action: () -> Void
     
     func body(content: Content) -> some View {
@@ -17,8 +24,10 @@ private struct TimelineItemAccessibilityModifier: ViewModifier {
         case is PollRoomTimelineItem:
             content
                 .accessibilityActions {
-                    Button(L10n.commonMessageActions) {
-                        action()
+                    if showsMessageActions {
+                        Button(L10n.commonMessageActions) {
+                            action()
+                        }
                     }
                 }
         case let timelineItem as EventBasedTimelineItemProtocol:
@@ -31,8 +40,10 @@ private struct TimelineItemAccessibilityModifier: ViewModifier {
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityActions {
-                    Button(L10n.commonMessageActions) {
-                        action()
+                    if showsMessageActions {
+                        Button(L10n.commonMessageActions) {
+                            action()
+                        }
                     }
                 }
         default:
@@ -43,7 +54,11 @@ private struct TimelineItemAccessibilityModifier: ViewModifier {
 }
 
 extension View {
-    func timelineItemAccessibility(_ timelineItem: RoomTimelineItemProtocol, action: @escaping () -> Void) -> some View {
-        modifier(TimelineItemAccessibilityModifier(timelineItem: timelineItem, action: action))
+    func timelineItemAccessibility(_ timelineItem: RoomTimelineItemProtocol,
+                                   showsMessageActions: Bool,
+                                   action: @escaping () -> Void) -> some View {
+        modifier(TimelineItemAccessibilityModifier(timelineItem: timelineItem,
+                                                   showsMessageActions: showsMessageActions,
+                                                   action: action))
     }
 }

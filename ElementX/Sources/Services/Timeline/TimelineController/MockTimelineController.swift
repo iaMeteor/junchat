@@ -36,7 +36,13 @@ class MockTimelineController: TimelineControllerProtocol {
     }
 
     var timelineItems: [RoomTimelineItemProtocol] = RoomTimelineItemFixtures.default
+    var timelineItemsProviderGeneration: UInt = 0
+    var activeProviderGeneration: UInt = 0
     var timelineItemsTimestamp: [TimelineItemIdentifier: Date] = [:]
+
+    private var providerMutationGeneration: UInt = 0
+    private var isProviderMutationLocked = false
+    private var activeProviderLease: TimelineProviderLease?
 
     private var client: UITestsSignalling.Client?
 
@@ -72,17 +78,60 @@ class MockTimelineController: TimelineControllerProtocol {
         }
     }
 
+    func providerMutationToken() -> TimelineProviderMutationToken? {
+        guard !isProviderMutationLocked else { return nil }
+        providerMutationGeneration &+= 1
+        return .init(generation: providerMutationGeneration)
+    }
+
+    func isProviderMutationTokenValid(_ token: TimelineProviderMutationToken) -> Bool {
+        canMutateProvider(using: token)
+    }
+
+    func setProviderMutationLocked(_ isLocked: Bool) {
+        guard activeProviderLease == nil else { return }
+        guard isProviderMutationLocked != isLocked else { return }
+        isProviderMutationLocked = isLocked
+        if isLocked {
+            providerMutationGeneration &+= 1
+        }
+    }
+
+    func acquireProviderLease() -> TimelineProviderLease? {
+        guard !isProviderMutationLocked,
+              timelineItemsProviderGeneration == activeProviderGeneration else { return nil }
+        providerMutationGeneration &+= 1
+        isProviderMutationLocked = true
+        let lease = TimelineProviderLease(mutationGeneration: providerMutationGeneration,
+                                          providerGeneration: activeProviderGeneration)
+        activeProviderLease = lease
+        return lease
+    }
+
+    func releaseProviderLease(_ lease: TimelineProviderLease) {
+        guard activeProviderLease == lease else { return }
+        activeProviderLease = nil
+        isProviderMutationLocked = false
+    }
+
     private(set) var focusOnEventCallCount = 0
-    func focusOnEvent(_ eventID: String, timelineSize: UInt16) async -> Result<Void, TimelineControllerError> {
+    func focusOnEvent(_ eventID: String,
+                      timelineSize: UInt16,
+                      using providerMutationToken: TimelineProviderMutationToken) async -> Result<Void, TimelineControllerError> {
         focusOnEventCallCount += 1
+        guard canMutateProvider(using: providerMutationToken) else {
+            return .failure(.providerMutationInvalidated)
+        }
         callbacks.send(.isLive(false))
         return .success(())
     }
 
     private(set) var focusLiveCallCount = 0
-    func focusLive() {
+    func focusLive(using providerMutationToken: TimelineProviderMutationToken) -> Bool {
         focusLiveCallCount += 1
+        guard canMutateProvider(using: providerMutationToken) else { return false }
         callbacks.send(.isLive(true))
+        return true
     }
 
     private(set) var paginateBackwardsCallCount = 0
@@ -112,6 +161,14 @@ class MockTimelineController: TimelineControllerProtocol {
     func processItemAppearance(_ itemID: TimelineItemIdentifier) async { }
 
     func processItemDisappearance(_ itemID: TimelineItemIdentifier) async { }
+
+    private func canMutateProvider(using token: TimelineProviderMutationToken) -> Bool {
+        !isProviderMutationLocked && token.generation == providerMutationGeneration
+    }
+
+    private func isProviderLeaseValid(_ lease: TimelineProviderLease) -> Bool {
+        isProviderMutationLocked && activeProviderLease == lease && lease.providerGeneration == activeProviderGeneration
+    }
 
     func toggleReaction(_ reaction: String, to eventID: TimelineItemIdentifier.EventOrTransactionID) async {
         if let timelineProxy {
@@ -147,8 +204,21 @@ class MockTimelineController: TimelineControllerProtocol {
 
     func unpin(eventID: String) async { }
 
-    func messageEventContent(for itemID: TimelineItemIdentifier) -> RoomMessageEventContentWithoutRelation? {
-        .init(noHandle: .init())
+    var messageEventContentClosure: ((TimelineItemIdentifier) async -> RoomMessageEventContentWithoutRelation?)?
+    func messageEventContent(for itemID: TimelineItemIdentifier) async -> RoomMessageEventContentWithoutRelation? {
+        if let messageEventContentClosure {
+            return await messageEventContentClosure(itemID)
+        }
+
+        return .init(noHandle: .init())
+    }
+
+    func messageEventContent(for itemID: TimelineItemIdentifier,
+                             using providerLease: TimelineProviderLease) async -> RoomMessageEventContentWithoutRelation? {
+        guard isProviderLeaseValid(providerLease) else { return nil }
+        let content = await messageEventContent(for: itemID)
+        guard isProviderLeaseValid(providerLease) else { return nil }
+        return content
     }
 
     func debugInfo(for itemID: TimelineItemIdentifier) -> TimelineItemDebugInfo {
@@ -178,7 +248,9 @@ class MockTimelineController: TimelineControllerProtocol {
                                         sender: .init(id: roomProxy?.ownUserID ?? "@mock:server.com", displayName: "Me"),
                                         content: .init(body: message))
         timelineItems.append(item)
-        callbacks.send(.updatedTimelineItems(timelineItems: timelineItems, isSwitchingTimelines: false))
+        callbacks.send(.updatedTimelineItems(timelineItems: timelineItems,
+                                             isSwitchingTimelines: false,
+                                             providerGeneration: timelineItemsProviderGeneration))
     }
 
     func sendAudio(url: URL,
@@ -341,7 +413,9 @@ class MockTimelineController: TimelineControllerProtocol {
 
         let incomingItem = incomingItems.removeFirst()
         timelineItems.append(incomingItem)
-        callbacks.send(.updatedTimelineItems(timelineItems: timelineItems, isSwitchingTimelines: false))
+        callbacks.send(.updatedTimelineItems(timelineItems: timelineItems,
+                                             isSwitchingTimelines: false,
+                                             providerGeneration: timelineItemsProviderGeneration))
 
         try client?.send(.success)
     }
@@ -357,7 +431,9 @@ class MockTimelineController: TimelineControllerProtocol {
 
         let newItems = backPaginationResponses.removeFirst()
         timelineItems.insert(contentsOf: newItems, at: 0)
-        callbacks.send(.updatedTimelineItems(timelineItems: timelineItems, isSwitchingTimelines: false))
+        callbacks.send(.updatedTimelineItems(timelineItems: timelineItems,
+                                             isSwitchingTimelines: false,
+                                             providerGeneration: timelineItemsProviderGeneration))
 
         try client?.send(.success)
     }

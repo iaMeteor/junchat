@@ -28,7 +28,7 @@ enum PinnedEventsTimelineScreenCoordinatorAction {
     case displayUser(userID: String)
     case presentLocationViewer(StaticLocationData)
     case presentLiveLocationViewer(sender: TimelineItemSender, initialLiveLocationShare: LiveLocationShare)
-    case displayMessageForwarding(forwardingItem: MessageForwardingItem)
+    case displayMessageForwarding(forwardingBatch: MessageForwardingBatch)
     case displayRoomScreenWithFocussedPin(eventID: String, threadRootEventID: String?)
 }
 
@@ -67,8 +67,8 @@ final class PinnedEventsTimelineScreenCoordinator: CoordinatorProtocol {
             
             guard let self else { return }
             switch action {
-            case .displayMessageForwarding(let forwardingItem):
-                actionsSubject.send(.displayMessageForwarding(forwardingItem: forwardingItem))
+            case .displayMessageForwarding(let forwardingBatch):
+                actionsSubject.send(.displayMessageForwarding(forwardingBatch: forwardingBatch))
             case .viewInRoomTimeline(let eventID, let threadRootEventID):
                 actionsSubject.send(.displayRoomScreenWithFocussedPin(eventID: eventID, threadRootEventID: threadRootEventID))
             case .dismiss:
@@ -84,8 +84,8 @@ final class PinnedEventsTimelineScreenCoordinator: CoordinatorProtocol {
             switch action {
             case .displaySenderDetails(let userID):
                 actionsSubject.send(.displayUser(userID: userID))
-            case .displayMessageForwarding(let forwardingItem):
-                actionsSubject.send(.displayMessageForwarding(forwardingItem: forwardingItem))
+            case .displayMessageForwarding(let forwardingBatch):
+                actionsSubject.send(.displayMessageForwarding(forwardingBatch: forwardingBatch))
             case .displayMediaPreview(let mediaPreviewViewModel):
                 viewModel.displayMediaPreview(mediaPreviewViewModel)
             case .displayLocation(let location):

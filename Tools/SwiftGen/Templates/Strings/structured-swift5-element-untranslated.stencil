@@ -77,9 +77,37 @@ extension {{enumName}} {
   static func tr(_ table: String, _ key: String, _ args: CVarArg...) -> String {
     let language = Bundle.junchatPreferredLocalizations.first ?? Bundle.junchatSimplifiedChineseLocalization
     guard let bundle = Bundle.lprojBundle(for: language) ?? Bundle.lprojBundle(for: Bundle.junchatSimplifiedChineseLocalization) else { return key }
+#if DEBUG
+    if UserDefaults.standard.bool(forKey: "NSDoubleLocalizedStrings"),
+       let translation = doubleLocalizedPlural(table: table, key: key, arguments: args, language: language, bundle: bundle) {
+      return "\(translation) \(translation)"
+    }
+#endif
     let format = NSLocalizedString(key, tableName: table, bundle: bundle, comment: "")
     return String(format: format, locale: Locale(identifier: language), arguments: args)
   }
+
+#if DEBUG
+  private static func doubleLocalizedPlural(table: String,
+                                            key: String,
+                                            arguments: [CVarArg],
+                                            language: String,
+                                            bundle: Bundle) -> String? {
+    guard arguments.count == 1,
+          let count = arguments.first as? Int,
+          let url = bundle.url(forResource: table, withExtension: "stringsdict"),
+          let data = try? Data(contentsOf: url),
+          let strings = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+          let entry = strings[key] as? [String: Any],
+          let plural = entry.values
+            .compactMap({ $0 as? [String: String] })
+            .first(where: { $0["NSStringFormatSpecTypeKey"] == "NSStringPluralRuleType" }),
+          let format = count == 1 ? plural["one"] ?? plural["other"] : plural["other"] else {
+      return nil
+    }
+    return String(format: format, locale: Locale(identifier: language), arguments: arguments)
+  }
+#endif
 }
 
 {% else %}

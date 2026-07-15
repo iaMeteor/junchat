@@ -38,7 +38,7 @@ enum ThreadTimelineScreenCoordinatorAction {
     case presentPollForm(mode: PollFormMode)
     case presentEmojiPicker(itemID: TimelineItemIdentifier, selectedEmojis: Set<String>)
     case presentRoomMemberDetails(userID: String)
-    case presentMessageForwarding(forwardingItem: MessageForwardingItem)
+    case presentMessageForwarding(forwardingBatch: MessageForwardingBatch)
     case presentResolveSendFailure(failure: TimelineItemSendFailure.VerifiedUser, sendHandle: SendHandleProxy)
 }
 
@@ -94,8 +94,8 @@ final class ThreadTimelineScreenCoordinator: CoordinatorProtocol {
             .sink { [weak self] action in
                 guard let self else { return }
                 switch action {
-                case .displayMessageForwarding(let forwardingItem):
-                    actionsSubject.send(.presentMessageForwarding(forwardingItem: forwardingItem))
+                case .displayMessageForwarding(let forwardingBatch):
+                    actionsSubject.send(.presentMessageForwarding(forwardingBatch: forwardingBatch))
                 }
             }
             .store(in: &cancellables)
@@ -129,8 +129,8 @@ final class ThreadTimelineScreenCoordinator: CoordinatorProtocol {
                     actionsSubject.send(.presentMediaUploadPreviewScreen(mediaURLs: mediaURLs))
                 case .displaySenderDetails(userID: let userID):
                     actionsSubject.send(.presentRoomMemberDetails(userID: userID))
-                case .displayMessageForwarding(let forwardingItem):
-                    actionsSubject.send(.presentMessageForwarding(forwardingItem: forwardingItem))
+                case .displayMessageForwarding(let forwardingBatch):
+                    actionsSubject.send(.presentMessageForwarding(forwardingBatch: forwardingBatch))
                 case .displayResolveSendFailure(let failure, let sendHandle):
                     actionsSubject.send(.presentResolveSendFailure(failure: failure,
                                                                    sendHandle: sendHandle))

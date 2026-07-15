@@ -1148,6 +1148,14 @@ extension PreviewTests {
     }
 
     @Test
+    func roomMessageSelectionScreen() async throws {
+        AppSettings.resetAllSettings() // Ensure this test's previews start with fresh settings.
+        for (index, preview) in RoomMessageSelectionScreen_Previews._allPreviews.enumerated() {
+            try await assertSnapshots(matching: preview, step: index)
+        }
+    }
+
+    @Test
     func roomNotificationSettingsCustomSectionView() async throws {
         AppSettings.resetAllSettings() // Ensure this test's previews start with fresh settings.
         for (index, preview) in RoomNotificationSettingsCustomSectionView_Previews._allPreviews.enumerated() {

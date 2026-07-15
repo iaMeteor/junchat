@@ -24,6 +24,7 @@ struct TimelineMediaPreviewViewModelTests {
     var mediaProvider: MediaProviderMock!
     var photoLibraryManager: PhotoLibraryManagerMock!
     var timelineController: MockTimelineController!
+    var timelineViewModel: TimelineViewModel!
     
     @Test
     mutating func loadingItem() async throws {
@@ -189,6 +190,90 @@ struct TimelineMediaPreviewViewModelTests {
         try await deferred.fulfill()
         #expect(timelineController.redactCalled)
     }
+
+    @Test
+    mutating func forwardingHoldsTheSourceProviderUntilPreparationCompletes() async throws {
+        setupViewModel()
+        guard case let .media(mediaItem) = context.viewState.currentItem else {
+            Issue.record("There should be a current item.")
+            return
+        }
+        let contentGate = MediaPreviewForwardingContentGate()
+        timelineController.messageEventContentClosure = { itemID in
+            await contentGate.content(for: itemID)
+        }
+        let contentRequested = deferFulfillment(contentGate.requests) { $0 == mediaItem.timelineItem.id }
+        let forwarded = deferFulfillment(viewModel.actions) { action in
+            guard case .displayMessageForwarding(let forwardingBatch) = action else { return false }
+            return forwardingBatch.items.map(\.id) == [mediaItem.timelineItem.id]
+        }
+
+        context.send(viewAction: .menuAction(.forward(itemID: mediaItem.timelineItem.id), item: mediaItem))
+        try await contentRequested.fulfill()
+        await timelineViewModel.focusOnEvent(eventID: "newer-focus")
+        let focusOnEventCallCount = timelineController.focusOnEventCallCount
+        contentGate.resume()
+        try await forwarded.fulfill()
+
+        #expect(focusOnEventCallCount == 0)
+    }
+
+    @Test
+    mutating func forwardingRejectsContentExtractedBeforeAnEdit() async throws {
+        try await assertForwardingIsInvalidated { item in
+            Self.makeImageItem(id: item.id, caption: "Edited after forwarding started")
+        }
+    }
+
+    @Test
+    mutating func forwardingRejectsContentExtractedBeforeRedaction() async throws {
+        try await assertForwardingIsInvalidated { item in
+            RedactedRoomTimelineItem(id: item.id,
+                                     body: "Message deleted",
+                                     timestamp: item.timestamp,
+                                     isOutgoing: item.isOutgoing,
+                                     isEditable: false,
+                                     canBeRepliedTo: false,
+                                     sender: item.sender)
+        }
+    }
+
+    @Test
+    mutating func newerForwardingRequestWaitsForCancelledExtractionToReleaseItsLease() async throws {
+        setupViewModel()
+        guard case let .media(mediaItem) = context.viewState.currentItem else {
+            Issue.record("There should be a current item.")
+            return
+        }
+        let contentGate = MediaPreviewForwardingContentGate()
+        timelineController.messageEventContentClosure = { itemID in
+            await contentGate.content(for: itemID)
+        }
+        var forwardingActionCount = 0
+        let cancellable = viewModel.actions.sink { action in
+            guard case .displayMessageForwarding = action else { return }
+            forwardingActionCount += 1
+        }
+
+        let firstContentRequested = deferFulfillment(contentGate.requests) { $0 == mediaItem.timelineItem.id }
+        context.send(viewAction: .menuAction(.forward(itemID: mediaItem.timelineItem.id), item: mediaItem))
+        try await firstContentRequested.fulfill()
+
+        let secondContentRequested = deferFulfillment(contentGate.requests, timeout: .milliseconds(250)) { $0 == mediaItem.timelineItem.id }
+        let forwarded = deferFulfillment(viewModel.actions) { action in
+            guard case .displayMessageForwarding(let forwardingBatch) = action else { return false }
+            return forwardingBatch.items.map(\.id) == [mediaItem.timelineItem.id]
+        }
+        context.send(viewAction: .menuAction(.forward(itemID: mediaItem.timelineItem.id), item: mediaItem))
+        contentGate.resume()
+        try await secondContentRequested.fulfill()
+
+        contentGate.resume()
+        try await forwarded.fulfill()
+
+        #expect(forwardingActionCount == 1)
+        withExtendedLifetime(cancellable) { }
+    }
     
     @Test
     mutating func saveImage() async throws {
@@ -299,28 +384,59 @@ struct TimelineMediaPreviewViewModelTests {
         mediaProvider = MediaProviderMock(configuration: .init())
         photoLibraryManager = PhotoLibraryManagerMock(.init(authorizationDenied: photoLibraryAuthorizationDenied))
         
+        timelineViewModel = TimelineViewModel.mock(timelineKind: .media(.mediaFilesScreen),
+                                                   timelineController: timelineController)
         viewModel = TimelineMediaPreviewViewModel(initialItem: initialItems[initialItemIndex],
-                                                  timelineViewModel: TimelineViewModel.mock(timelineKind: .media(.mediaFilesScreen),
-                                                                                            timelineController: timelineController),
+                                                  timelineViewModel: timelineViewModel,
                                                   mediaProvider: mediaProvider,
                                                   photoLibraryManager: photoLibraryManager,
                                                   userIndicatorController: UserIndicatorControllerMock(),
                                                   appMediator: AppMediatorMock())
     }
+
+    private mutating func assertForwardingIsInvalidated(replacement: (EventBasedMessageTimelineItemProtocol) -> RoomTimelineItemProtocol) async throws {
+        setupViewModel()
+        guard case let .media(mediaItem) = context.viewState.currentItem else {
+            Issue.record("There should be a current item.")
+            return
+        }
+        let contentGate = MediaPreviewForwardingContentGate()
+        defer { contentGate.resume() }
+        timelineController.messageEventContentClosure = { itemID in
+            await contentGate.content(for: itemID)
+        }
+        let contentRequested = deferFulfillment(contentGate.requests) { $0 == mediaItem.timelineItem.id }
+        let noForward = deferFailure(viewModel.actions, timeout: .milliseconds(150)) { action in
+            guard case .displayMessageForwarding = action else { return false }
+            return true
+        }
+        let noDismiss = deferFailure(viewModel.state.previewControllerDriver, timeout: .milliseconds(150)) { action in
+            guard case .dismissDetailsSheet = action else { return false }
+            return true
+        }
+
+        context.send(viewAction: .menuAction(.forward(itemID: mediaItem.timelineItem.id), item: mediaItem))
+        try await contentRequested.fulfill()
+
+        let replacementItem = replacement(mediaItem.timelineItem)
+        let replacementType = RoomTimelineItemType(item: replacementItem)
+        let replacementPublished = deferFulfillment(timelineViewModel.context.$viewState) { state in
+            state.timelineState.itemViewStates.first?.type == replacementType
+        }
+        timelineController.timelineItems = [replacementItem]
+        timelineController.callbacks.send(.updatedTimelineItems(timelineItems: [replacementItem],
+                                                                isSwitchingTimelines: false,
+                                                                providerGeneration: timelineController.timelineItemsProviderGeneration))
+        try await replacementPublished.fulfill()
+
+        contentGate.resume()
+        try await noForward.fulfill()
+        try await noDismiss.fulfill()
+    }
     
     private func makeItems() -> [EventBasedMessageTimelineItemProtocol] {
         [
-            ImageRoomTimelineItem(id: .randomEvent,
-                                  timestamp: .mock,
-                                  isOutgoing: false,
-                                  isEditable: false,
-                                  canBeRepliedTo: true,
-                                  sender: .init(id: "", displayName: "Sally Sanderson"),
-                                  content: .init(filename: "Amazing image.jpeg",
-                                                 caption: "A caption goes right here.",
-                                                 imageInfo: .mockImage,
-                                                 thumbnailInfo: .mockThumbnail,
-                                                 contentType: .jpeg)),
+            Self.makeImageItem(),
             VideoRoomTimelineItem(id: .randomEvent,
                                   timestamp: .mock,
                                   isOutgoing: false,
@@ -343,5 +459,39 @@ struct TimelineMediaPreviewViewModelTests {
                                                 thumbnailSource: nil,
                                                 contentType: .pdf))
         ]
+    }
+
+    private static func makeImageItem(id: TimelineItemIdentifier = .randomEvent,
+                                      caption: String = "A caption goes right here.") -> ImageRoomTimelineItem {
+        ImageRoomTimelineItem(id: id,
+                              timestamp: .mock,
+                              isOutgoing: false,
+                              isEditable: false,
+                              canBeRepliedTo: true,
+                              sender: .init(id: "", displayName: "Sally Sanderson"),
+                              content: .init(filename: "Amazing image.jpeg",
+                                             caption: caption,
+                                             imageInfo: .mockImage,
+                                             thumbnailInfo: .mockThumbnail,
+                                             contentType: .jpeg))
+    }
+}
+
+@MainActor
+private final class MediaPreviewForwardingContentGate {
+    let requests = PassthroughSubject<TimelineItemIdentifier, Never>()
+    private var continuation: CheckedContinuation<RoomMessageEventContentWithoutRelation?, Never>?
+
+    func content(for itemID: TimelineItemIdentifier) async -> RoomMessageEventContentWithoutRelation? {
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+            requests.send(itemID)
+        }
+    }
+
+    func resume() {
+        let continuation = continuation
+        self.continuation = nil
+        continuation?.resume(returning: .init(noHandle: .init()))
     }
 }

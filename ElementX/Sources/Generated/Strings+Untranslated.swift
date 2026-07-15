@@ -10,6 +10,14 @@ import Foundation
 // swiftlint:disable explicit_type_interface function_parameter_count identifier_name line_length
 // swiftlint:disable nesting type_body_length type_name vertical_whitespace_opening_braces
 internal enum UntranslatedL10n {
+  /// Select message
+  internal static var a11yMessageSelectionLabel: String { return UntranslatedL10n.tr("Untranslated", "a11y_message_selection_label") }
+  /// Not selected
+  internal static var a11yMessageSelectionNotSelected: String { return UntranslatedL10n.tr("Untranslated", "a11y_message_selection_not_selected") }
+  /// Selected
+  internal static var a11yMessageSelectionSelected: String { return UntranslatedL10n.tr("Untranslated", "a11y_message_selection_selected") }
+  /// Select messages
+  internal static var actionSelectMessages: String { return UntranslatedL10n.tr("Untranslated", "action_select_messages") }
   /// You currently don’t have any chats with these contacts. Confirm inviting them to this room before continuing.
   internal static var cryptoHistorySharingConfirmInviteDialogContent: String { return UntranslatedL10n.tr("Untranslated", "crypto_history_sharing_confirm_invite_dialog_content") }
   /// Invite new contacts to this room?
@@ -20,6 +28,50 @@ internal enum UntranslatedL10n {
   internal static var cryptoHistorySharingConfirmStartChatDialogTitle: String { return UntranslatedL10n.tr("Untranslated", "crypto_history_sharing_confirm_start_chat_dialog_title") }
   /// Don’t show again
   internal static var identityConfirmationDontShowAgain: String { return UntranslatedL10n.tr("Untranslated", "identity_confirmation_dont_show_again") }
+  /// Added to send queue
+  internal static var screenMessageForwardingAddedToSendQueue: String { return UntranslatedL10n.tr("Untranslated", "screen_message_forwarding_added_to_send_queue") }
+  /// Adding
+  internal static var screenMessageForwardingAdding: String { return UntranslatedL10n.tr("Untranslated", "screen_message_forwarding_adding") }
+  /// Adding to send queue
+  internal static var screenMessageForwardingAddingToSendQueue: String { return UntranslatedL10n.tr("Untranslated", "screen_message_forwarding_adding_to_send_queue") }
+  /// Plural format key: "%#@VARIABLE@"
+  internal static func screenMessageForwardingCancelledPartial(_ p1: Int) -> String {
+    return UntranslatedL10n.tr("Untranslated", "screen_message_forwarding_cancelled_partial", p1)
+  }
+  /// Cancelling forwarding
+  internal static var screenMessageForwardingCancelling: String { return UntranslatedL10n.tr("Untranslated", "screen_message_forwarding_cancelling") }
+  /// No more messages can be forwarded safely because too many unresolved forwards are saved. Check earlier destinations and resolve an uncertain forward before trying again.
+  internal static var screenMessageForwardingCapacityExceeded: String { return UntranslatedL10n.tr("Untranslated", "screen_message_forwarding_capacity_exceeded") }
+  /// Continue without resending
+  internal static var screenMessageForwardingContinueWithoutResending: String { return UntranslatedL10n.tr("Untranslated", "screen_message_forwarding_continue_without_resending") }
+  /// Some messages may already be in the send queue
+  internal static var screenMessageForwardingOutcomeUnknown: String { return UntranslatedL10n.tr("Untranslated", "screen_message_forwarding_outcome_unknown") }
+  /// %1$d of %2$d
+  internal static func screenMessageForwardingProgressAccessibilityValue(_ p1: Int, _ p2: Int) -> String {
+    return UntranslatedL10n.tr("Untranslated", "screen_message_forwarding_progress_accessibility_value", p1, p2)
+  }
+  /// Some messages weren't added to the send queue
+  internal static var screenMessageForwardingQueueFailed: String { return UntranslatedL10n.tr("Untranslated", "screen_message_forwarding_queue_failed") }
+  /// To avoid duplicates, Junchat won't send them again automatically. Continue without resending, or send them again only after checking the destination.
+  internal static var screenMessageForwardingResolutionMessage: String { return UntranslatedL10n.tr("Untranslated", "screen_message_forwarding_resolution_message") }
+  /// Forwarding outcome unknown
+  internal static var screenMessageForwardingResolutionTitle: String { return UntranslatedL10n.tr("Untranslated", "screen_message_forwarding_resolution_title") }
+  /// Review
+  internal static var screenMessageForwardingReview: String { return UntranslatedL10n.tr("Untranslated", "screen_message_forwarding_review") }
+  /// Send again
+  internal static var screenMessageForwardingSendAgain: String { return UntranslatedL10n.tr("Untranslated", "screen_message_forwarding_send_again") }
+  /// Some selected messages are no longer available. Select them again and try forwarding.
+  internal static var screenRoomMessageSelectionChangedError: String { return UntranslatedL10n.tr("Untranslated", "screen_room_message_selection_changed_error") }
+  /// Plural format key: "%#@VARIABLE@"
+  internal static func screenRoomMessageSelectionDeleteConfirmation(_ p1: Int) -> String {
+    return UntranslatedL10n.tr("Untranslated", "screen_room_message_selection_delete_confirmation", p1)
+  }
+  /// Delete messages?
+  internal static var screenRoomMessageSelectionDeleteConfirmationTitle: String { return UntranslatedL10n.tr("Untranslated", "screen_room_message_selection_delete_confirmation_title") }
+  /// Plural format key: "%#@VARIABLE@"
+  internal static func screenRoomMessageSelectionSelectedCount(_ p1: Int) -> String {
+    return UntranslatedL10n.tr("Untranslated", "screen_room_message_selection_selected_count", p1)
+  }
   /// Clear all data currently stored on this device?
   /// Sign in again to access your account data and messages.
   internal static var softLogoutClearDataDialogContent: String { return UntranslatedL10n.tr("Untranslated", "soft_logout_clear_data_dialog_content") }
@@ -57,9 +109,37 @@ extension UntranslatedL10n {
   static func tr(_ table: String, _ key: String, _ args: CVarArg...) -> String {
     let language = Bundle.junchatPreferredLocalizations.first ?? Bundle.junchatSimplifiedChineseLocalization
     guard let bundle = Bundle.lprojBundle(for: language) ?? Bundle.lprojBundle(for: Bundle.junchatSimplifiedChineseLocalization) else { return key }
+#if DEBUG
+    if UserDefaults.standard.bool(forKey: "NSDoubleLocalizedStrings"),
+       let translation = doubleLocalizedPlural(table: table, key: key, arguments: args, language: language, bundle: bundle) {
+      return "\(translation) \(translation)"
+    }
+#endif
     let format = NSLocalizedString(key, tableName: table, bundle: bundle, comment: "")
     return String(format: format, locale: Locale(identifier: language), arguments: args)
   }
+
+#if DEBUG
+  private static func doubleLocalizedPlural(table: String,
+                                            key: String,
+                                            arguments: [CVarArg],
+                                            language: String,
+                                            bundle: Bundle) -> String? {
+    guard arguments.count == 1,
+          let count = arguments.first as? Int,
+          let url = bundle.url(forResource: table, withExtension: "stringsdict"),
+          let data = try? Data(contentsOf: url),
+          let strings = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+          let entry = strings[key] as? [String: Any],
+          let plural = entry.values
+            .compactMap({ $0 as? [String: String] })
+            .first(where: { $0["NSStringFormatSpecTypeKey"] == "NSStringPluralRuleType" }),
+          let format = count == 1 ? plural["one"] ?? plural["other"] : plural["other"] else {
+      return nil
+    }
+    return String(format: format, locale: Locale(identifier: language), arguments: arguments)
+  }
+#endif
 }
 
 // swiftlint:enable all

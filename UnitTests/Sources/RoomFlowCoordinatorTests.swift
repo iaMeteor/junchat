@@ -9,6 +9,7 @@
 import Combine
 @testable import ElementX
 import MatrixRustSDKMocks
+import SwiftState
 import Testing
 
 @MainActor
@@ -32,6 +33,26 @@ final class RoomFlowCoordinatorTests {
         
         try await clearRoute(expectedActions: [.finished])
         #expect(navigationStackCoordinator.rootCoordinator == nil)
+    }
+
+    @Test
+    func forwardingDestinationRestoresTheOriginAfterChildDismissal() {
+        setupRoomFlowCoordinator()
+        let item = MessageForwardingItem(id: .event(uniqueID: .init("event"), eventOrTransactionID: .eventID("event")),
+                                         roomID: "source",
+                                         content: .init(noHandle: .init()))
+        let stateMachine = StateMachine<RoomFlowCoordinator.State, RoomFlowCoordinator.Event>(state: .room)
+        roomFlowCoordinator.addRouteMapping(stateMachine: stateMachine)
+
+        #expect(stateMachine.tryEvent(.presentMessageForwarding(forwardingBatch: .init(firstItem: item))))
+        #expect(stateMachine.tryEvent(.dismissMessageForwarding))
+        #expect(stateMachine.tryEvent(.startChildFlow(roomID: "destination", via: [], entryPoint: .room)))
+        #expect(stateMachine.tryEvent(.dismissChildFlow))
+
+        guard case .room = stateMachine.state else {
+            Issue.record("Expected destination dismissal to restore the originating room.")
+            return
+        }
     }
     
     @Test

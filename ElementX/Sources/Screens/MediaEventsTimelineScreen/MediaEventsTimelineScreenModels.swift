@@ -9,7 +9,7 @@
 import SwiftUI
 
 enum MediaEventsTimelineScreenViewModelAction {
-    case displayMessageForwarding(MessageForwardingItem)
+    case displayMessageForwarding(MessageForwardingBatch)
     case viewInRoomTimeline(TimelineItemIdentifier)
 }
 

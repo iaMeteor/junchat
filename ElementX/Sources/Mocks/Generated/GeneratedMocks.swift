@@ -20769,17 +20769,17 @@ class TimelineProxyMock: TimelineProxyProtocol, @unchecked Sendable {
             return markAsReadReceiptTypeReturnValue
         }
     }
-    //MARK: - sendMessageEventContent
+    //MARK: - queueMessageEventContent
 
-    var sendMessageEventContentUnderlyingCallsCount = 0
-    var sendMessageEventContentCallsCount: Int {
+    var queueMessageEventContentUnderlyingCallsCount = 0
+    var queueMessageEventContentCallsCount: Int {
         get {
             if Thread.isMainThread {
-                return sendMessageEventContentUnderlyingCallsCount
+                return queueMessageEventContentUnderlyingCallsCount
             } else {
                 var returnValue: Int? = nil
                 DispatchQueue.main.sync {
-                    returnValue = sendMessageEventContentUnderlyingCallsCount
+                    returnValue = queueMessageEventContentUnderlyingCallsCount
                 }
 
                 return returnValue!
@@ -20787,29 +20787,29 @@ class TimelineProxyMock: TimelineProxyProtocol, @unchecked Sendable {
         }
         set {
             if Thread.isMainThread {
-                sendMessageEventContentUnderlyingCallsCount = newValue
+                queueMessageEventContentUnderlyingCallsCount = newValue
             } else {
                 DispatchQueue.main.sync {
-                    sendMessageEventContentUnderlyingCallsCount = newValue
+                    queueMessageEventContentUnderlyingCallsCount = newValue
                 }
             }
         }
     }
-    var sendMessageEventContentCalled: Bool {
-        return sendMessageEventContentCallsCount > 0
+    var queueMessageEventContentCalled: Bool {
+        return queueMessageEventContentCallsCount > 0
     }
-    var sendMessageEventContentReceivedMessageContent: RoomMessageEventContentWithoutRelation?
-    var sendMessageEventContentReceivedInvocations: [RoomMessageEventContentWithoutRelation] = []
+    var queueMessageEventContentReceivedMessageContent: RoomMessageEventContentWithoutRelation?
+    var queueMessageEventContentReceivedInvocations: [RoomMessageEventContentWithoutRelation] = []
 
-    var sendMessageEventContentUnderlyingReturnValue: Result<Void, TimelineProxyError>!
-    var sendMessageEventContentReturnValue: Result<Void, TimelineProxyError>! {
+    var queueMessageEventContentUnderlyingReturnValue: Result<SendHandle, TimelineProxyError>!
+    var queueMessageEventContentReturnValue: Result<SendHandle, TimelineProxyError>! {
         get {
             if Thread.isMainThread {
-                return sendMessageEventContentUnderlyingReturnValue
+                return queueMessageEventContentUnderlyingReturnValue
             } else {
-                var returnValue: Result<Void, TimelineProxyError>? = nil
+                var returnValue: Result<SendHandle, TimelineProxyError>? = nil
                 DispatchQueue.main.sync {
-                    returnValue = sendMessageEventContentUnderlyingReturnValue
+                    returnValue = queueMessageEventContentUnderlyingReturnValue
                 }
 
                 return returnValue!
@@ -20817,26 +20817,26 @@ class TimelineProxyMock: TimelineProxyProtocol, @unchecked Sendable {
         }
         set {
             if Thread.isMainThread {
-                sendMessageEventContentUnderlyingReturnValue = newValue
+                queueMessageEventContentUnderlyingReturnValue = newValue
             } else {
                 DispatchQueue.main.sync {
-                    sendMessageEventContentUnderlyingReturnValue = newValue
+                    queueMessageEventContentUnderlyingReturnValue = newValue
                 }
             }
         }
     }
-    var sendMessageEventContentClosure: ((RoomMessageEventContentWithoutRelation) async -> Result<Void, TimelineProxyError>)?
+    var queueMessageEventContentClosure: ((RoomMessageEventContentWithoutRelation) async -> Result<SendHandle, TimelineProxyError>)?
 
-    func sendMessageEventContent(_ messageContent: RoomMessageEventContentWithoutRelation) async -> Result<Void, TimelineProxyError> {
-        sendMessageEventContentCallsCount += 1
-        sendMessageEventContentReceivedMessageContent = messageContent
+    func queueMessageEventContent(_ messageContent: RoomMessageEventContentWithoutRelation) async -> Result<SendHandle, TimelineProxyError> {
+        queueMessageEventContentCallsCount += 1
+        queueMessageEventContentReceivedMessageContent = messageContent
         DispatchQueue.main.async {
-            self.sendMessageEventContentReceivedInvocations.append(messageContent)
+            self.queueMessageEventContentReceivedInvocations.append(messageContent)
         }
-        if let sendMessageEventContentClosure = sendMessageEventContentClosure {
-            return await sendMessageEventContentClosure(messageContent)
+        if let queueMessageEventContentClosure = queueMessageEventContentClosure {
+            return await queueMessageEventContentClosure(messageContent)
         } else {
-            return sendMessageEventContentReturnValue
+            return queueMessageEventContentReturnValue
         }
     }
     //MARK: - sendMessage

@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct TimelineBulkRedactionSelectionState: Equatable {
+struct TimelineMessageSelectionState: Equatable {
     var selectedIDs = Set<TimelineItemIdentifier.EventOrTransactionID>()
     var redactionIDs = Set<TimelineItemIdentifier.EventOrTransactionID>()
     var forwardingIDs = Set<TimelineItemIdentifier.EventOrTransactionID>()
@@ -37,10 +37,12 @@ struct TimelineBulkRedactionSelectionState: Equatable {
     }
 
     var canForwardSelectedMessages: Bool {
-        isActive && selectedIDs.isSubset(of: forwardingIDs)
+        isActive && selectedCount <= MessageForwardingBatch.maximumItemCount && selectedIDs.isSubset(of: forwardingIDs)
     }
 
     mutating func insert(_ capabilities: TimelineMessageSelectionCapabilities) {
+        guard selectedIDs.contains(capabilities.id) || selectedCount < MessageForwardingBatch.maximumItemCount else { return }
+
         selectedIDs.insert(capabilities.id)
         if capabilities.canRedact {
             redactionIDs.insert(capabilities.id)
@@ -54,6 +56,14 @@ struct TimelineBulkRedactionSelectionState: Equatable {
         selectedIDs.remove(id)
         redactionIDs.remove(id)
         forwardingIDs.remove(id)
+    }
+
+    mutating func replace(_ id: TimelineItemIdentifier.EventOrTransactionID,
+                          with capabilities: TimelineMessageSelectionCapabilities) {
+        guard selectedIDs.contains(id) else { return }
+
+        remove(id)
+        insert(capabilities)
     }
 }
 
@@ -72,9 +82,9 @@ enum TimelineMessageSelectionEligibility {
             return nil
         }
 
-        let canRedact = TimelineBulkRedactionEligibility.selectableRedactionID(for: item,
-                                                                               canCurrentUserRedactSelf: canCurrentUserRedactSelf,
-                                                                               canCurrentUserRedactOthers: canCurrentUserRedactOthers) != nil
+        let canRedact = TimelineMessageRedactionEligibility.selectableRedactionID(for: item,
+                                                                                  canCurrentUserRedactSelf: canCurrentUserRedactSelf,
+                                                                                  canCurrentUserRedactOthers: canCurrentUserRedactOthers) != nil
         let canForward = item.isForwardable
 
         guard canRedact || canForward else {
@@ -85,7 +95,7 @@ enum TimelineMessageSelectionEligibility {
     }
 }
 
-enum TimelineBulkRedactionEligibility {
+enum TimelineMessageRedactionEligibility {
     static func selectableRedactionID(for item: EventBasedTimelineItemProtocol,
                                       canCurrentUserRedactSelf: Bool,
                                       canCurrentUserRedactOthers: Bool) -> TimelineItemIdentifier.EventOrTransactionID? {

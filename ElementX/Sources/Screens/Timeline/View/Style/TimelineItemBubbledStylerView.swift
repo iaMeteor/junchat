@@ -48,15 +48,15 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
         messageSelectionCapabilities?.id
     }
 
-    private var isBulkRedactionSelectionActive: Bool {
-        context.viewState.bulkRedactionSelectionState.isActive
+    private var isMessageSelectionActive: Bool {
+        context.viewState.messageSelectionState.isActive
     }
 
-    private var isBulkRedactionSelected: Bool {
+    private var isMessageSelected: Bool {
         guard let messageSelectionID else {
             return false
         }
-        return context.viewState.bulkRedactionSelectionState.isSelected(messageSelectionID)
+        return context.viewState.messageSelectionState.isSelected(messageSelectionID)
     }
 
     /// The base padding applied to bubbles on either side.
@@ -71,8 +71,8 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            if isBulkRedactionSelectionActive {
-                bulkRedactionSelectionButton
+            if isMessageSelectionActive {
+                messageSelectionButton
             }
 
             ZStack(alignment: .trailingFirstTextBaseline) {
@@ -108,10 +108,10 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
             }
             .contentShape(Rectangle())
             .onTapGesture {
-                guard isBulkRedactionSelectionActive, messageSelectionID != nil else {
+                guard isMessageSelectionActive, messageSelectionID != nil else {
                     return
                 }
-                context.send(viewAction: .toggleBulkRedactionSelection(itemID: timelineItem.id))
+                context.send(viewAction: .toggleMessageSelection(itemID: timelineItem.id))
             }
         }
         .padding(EdgeInsets(top: 1, leading: 8, bottom: 1, trailing: 8))
@@ -142,6 +142,7 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
             .onTapGesture {
                 context.send(viewAction: .tappedOnSenderDetails(sender: timelineItem.sender))
             }
+            .allowsHitTesting(!isMessageSelectionActive)
             .padding(.top, 8)
         }
     }
@@ -150,12 +151,14 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
         // Figma overlaps reactions by 3
         VStack(alignment: alignment, spacing: -3) {
             messageBubbleWithActions
-                .timelineItemAccessibility(timelineItem) {
+                .timelineItemAccessibility(timelineItem,
+                                           showsMessageActions: TimelineItemAccessibilityPolicy.showsMessageActions(isMessageSelectionActive: isMessageSelectionActive)) {
                     context.send(viewAction: .displayTimelineItemMenu(itemID: timelineItem.id))
                 }
 
             // Do not display reactions in the pinned events timeline
-            if context.viewState.timelineKind != .pinned,
+            if !isMessageSelectionActive,
+               context.viewState.timelineKind != .pinned,
                !timelineItem.properties.reactions.isEmpty {
                 TimelineReactionsView(context: context,
                                       itemID: timelineItem.id,
@@ -165,7 +168,8 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
                     .onTapGesture { }
             }
 
-            if context.viewState.areThreadsEnabled,
+            if !isMessageSelectionActive,
+               context.viewState.areThreadsEnabled,
                !context.viewState.timelineKind.isThread,
                let threadSummary = timelineItem.properties.threadSummary {
                 TimelineThreadSummaryView(threadSummary: threadSummary) {
@@ -178,8 +182,9 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
 
     @ViewBuilder
     var messageBubbleWithActions: some View {
-        if isBulkRedactionSelectionActive {
+        if isMessageSelectionActive {
             messageBubble
+                .disabled(true)
                 .pinnedIndicator(isPinned: isPinned, isOutgoing: timelineItem.isOutgoing)
                 .padding(.top, messageBubbleTopPadding)
         } else {
@@ -222,23 +227,23 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
         }
     }
 
-    private var bulkRedactionSelectionButton: some View {
+    private var messageSelectionButton: some View {
         Button {
             guard messageSelectionID != nil else {
                 return
             }
-            context.send(viewAction: .toggleBulkRedactionSelection(itemID: timelineItem.id))
+            context.send(viewAction: .toggleMessageSelection(itemID: timelineItem.id))
         } label: {
             ZStack {
                 Circle()
-                    .stroke(isBulkRedactionSelected ? Color.compound.borderAccentSubtle : Color.compound.borderInteractiveSecondary, lineWidth: 2)
+                    .stroke(isMessageSelected ? Color.compound.borderAccentSubtle : Color.compound.borderInteractiveSecondary, lineWidth: 2)
                     .background {
                         Circle()
-                            .fill(isBulkRedactionSelected ? Color.compound.bgActionPrimaryRest : Color.compound.bgCanvasDefault)
+                            .fill(isMessageSelected ? Color.compound.bgActionPrimaryRest : Color.compound.bgCanvasDefault)
                     }
                     .frame(width: 22, height: 22)
 
-                if isBulkRedactionSelected {
+                if isMessageSelected {
                     Image(systemName: "checkmark")
                         .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(.compound.iconOnSolidPrimary)
@@ -248,6 +253,9 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
             .opacity(messageSelectionID == nil ? 0.35 : 1)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(UntranslatedL10n.a11yMessageSelectionLabel)
+        .accessibilityValue(isMessageSelected ? UntranslatedL10n.a11yMessageSelectionSelected : UntranslatedL10n.a11yMessageSelectionNotSelected)
+        .accessibilityAddTraits(isMessageSelected ? .isSelected : [])
         .disabled(messageSelectionID == nil)
     }
 

@@ -16,7 +16,7 @@ struct RoomScreen: View {
     @ObservedObject private var timelineContext: TimelineViewModelType.Context
     let composerToolbar: ComposerToolbar
     @Environment(\.accessibilityVoiceOverEnabled) private var isVoiceOverEnabled
-    @State private var isBulkRedactionConfirmationPresented = false
+    @State private var isMessageRedactionConfirmationPresented = false
     @State private var showPrivacyModeBanner = false
 
     init(context: RoomScreenViewModelType.Context,
@@ -30,7 +30,8 @@ struct RoomScreen: View {
     var body: some View {
         TimelineView(timelineContext: timelineContext)
             .overlay(alignment: .bottomTrailing) {
-                TimelineScrollToBottomButton(isVisible: isAtBottomAndLive) {
+                TimelineScrollToBottomButton(isVisible: isAtBottomAndLive,
+                                             isInteractionLocked: isMessageSelectionActive) {
                     timelineContext.send(viewAction: .scrollToBottom)
                 }
                 .accessibilityIdentifier(A11yIdentifiers.roomScreen.scrollToBottom)
@@ -38,13 +39,13 @@ struct RoomScreen: View {
             .background(Color.compound.bgCanvasDefault.ignoresSafeArea())
             .topBanners([
                 TopBannerLayer(verticalBanners: [
-                    TopBannerItem(activeCallJoinBanner, isVisible: context.viewState.shouldShowActiveCallInvitation && !isVoiceOverEnabled),
+                    TopBannerItem(activeCallJoinBanner.disabled(isMessageSelectionActive), isVisible: context.viewState.shouldShowActiveCallInvitation && !isVoiceOverEnabled),
                     TopBannerItem(privacyModeBanner, isVisible: shouldShowPrivacyModeBanner && !isVoiceOverEnabled),
-                    TopBannerItem(pinnedItemsBanner, isVisible: context.viewState.shouldShowPinnedEventsBanner && !isVoiceOverEnabled),
-                    TopBannerItem(liveLocationBanner, isVisible: context.viewState.isSharingLiveLocation && !isVoiceOverEnabled)
+                    TopBannerItem(pinnedItemsBanner.disabled(isMessageSelectionActive), isVisible: context.viewState.shouldShowPinnedEventsBanner && !isVoiceOverEnabled),
+                    TopBannerItem(liveLocationBanner.disabled(isMessageSelectionActive), isVisible: context.viewState.isSharingLiveLocation && !isVoiceOverEnabled)
                 ]),
                 // This can overlay on top of the stacked banners
-                TopBannerLayer(knockRequestsBanner, isVisible: context.viewState.shouldSeeKnockRequests)
+                TopBannerLayer(knockRequestsBanner.disabled(isMessageSelectionActive), isVisible: context.viewState.shouldSeeKnockRequests)
             ], footer: dateBadge)
             .safeAreaInset(edge: .top) {
                 // When VoiceOver is enabled, the table view isn't reversed and the scroll gestures
@@ -54,16 +55,16 @@ struct RoomScreen: View {
                 if context.viewState.shouldShowActiveCallInvitation || shouldShowPrivacyModeBanner || context.viewState.shouldShowPinnedEventsBanner || context.viewState.isSharingLiveLocation, isVoiceOverEnabled {
                     VStack(spacing: 0) {
                         if context.viewState.shouldShowActiveCallInvitation {
-                            activeCallJoinBanner
+                            activeCallJoinBanner.disabled(isMessageSelectionActive)
                         }
                         if shouldShowPrivacyModeBanner {
                             privacyModeBanner
                         }
                         if context.viewState.shouldShowPinnedEventsBanner {
-                            pinnedItemsBanner
+                            pinnedItemsBanner.disabled(isMessageSelectionActive)
                         }
                         if context.viewState.isSharingLiveLocation {
-                            liveLocationBanner
+                            liveLocationBanner.disabled(isMessageSelectionActive)
                         }
                     }
                 }
@@ -74,9 +75,10 @@ struct RoomScreen: View {
                                          mediaProvider: context.mediaProvider) { action in
                         context.send(viewAction: .footerViewAction(action))
                     }
+                    .disabled(isMessageSelectionActive)
 
-                    if timelineContext.viewState.bulkRedactionSelectionState.isActive {
-                        bulkRedactionToolbar
+                    if timelineContext.viewState.messageSelectionState.isActive {
+                        messageSelectionToolbar
                             .background(Color.compound.bgCanvasDefault.ignoresSafeArea())
                     } else {
                         composer
@@ -92,16 +94,17 @@ struct RoomScreen: View {
             .toolbarRole(RoomHeaderView.toolbarRole)
             .navigationTitle(L10n.screenRoomTitle) // Hidden but used for back button text.
             .navigationBarTitleDisplayMode(.inline)
+            .navigationBarBackButtonHidden(isMessageSelectionActive)
             .toolbar { toolbar }
             .toolbarBackground(.visible, for: .navigationBar) // Fix the toolbar's background.
             .overlay { loadingIndicator }
-            .alert("删除消息？", isPresented: $isBulkRedactionConfirmationPresented) {
-                Button("取消", role: .cancel) { }
-                Button("删除", role: .destructive) {
-                    timelineContext.send(viewAction: .confirmBulkRedactionSelection)
+            .alert(UntranslatedL10n.screenRoomMessageSelectionDeleteConfirmationTitle, isPresented: $isMessageRedactionConfirmationPresented) {
+                Button(L10n.actionCancel, role: .cancel) { }
+                Button(L10n.actionDelete, role: .destructive) {
+                    timelineContext.send(viewAction: .confirmMessageRedaction)
                 }
             } message: {
-                Text("要删除选中的 \(timelineContext.viewState.bulkRedactionSelectionState.selectedCount) 条消息吗？删除后聊天室成员都将看不到原内容。")
+                Text(UntranslatedL10n.screenRoomMessageSelectionDeleteConfirmation(timelineContext.viewState.messageSelectionState.selectedCount))
             }
             .alert(item: $context.alertInfo)
             .timelineMediaPreview(viewModel: $context.mediaPreviewViewModel)
@@ -226,33 +229,37 @@ struct RoomScreen: View {
         timelineContext.isScrolledToBottom && timelineContext.viewState.timelineState.isLive
     }
 
+    private var isMessageSelectionActive: Bool {
+        timelineContext.viewState.messageSelectionState.isActive
+    }
+
     private var shouldShowPrivacyModeBanner: Bool {
         context.viewState.isPrivacyModeEnabled && showPrivacyModeBanner
     }
 
-    private var bulkRedactionToolbar: some View {
+    private var messageSelectionToolbar: some View {
         HStack(spacing: 12) {
-            Text("已选 \(timelineContext.viewState.bulkRedactionSelectionState.selectedCount) 条")
+            Text(UntranslatedL10n.screenRoomMessageSelectionSelectedCount(timelineContext.viewState.messageSelectionState.selectedCount))
                 .font(.compound.bodyMDSemibold)
                 .foregroundStyle(.compound.textPrimary)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            Button("取消") {
-                timelineContext.send(viewAction: .cancelBulkRedactionSelection)
+            Button(L10n.actionCancel) {
+                timelineContext.send(viewAction: .cancelMessageSelection)
             }
             .buttonStyle(.compound(.tertiary, size: .medium))
 
-            Button("转发") {
-                timelineContext.send(viewAction: .forwardBulkRedactionSelection)
+            Button(L10n.actionForward) {
+                timelineContext.send(viewAction: .forwardMessageSelection)
             }
             .buttonStyle(.compound(.tertiary, size: .medium))
-            .disabled(!timelineContext.viewState.bulkRedactionSelectionState.canForwardSelectedMessages)
+            .disabled(!timelineContext.viewState.messageSelectionState.canForwardSelectedMessages)
 
-            Button("删除", role: .destructive) {
-                isBulkRedactionConfirmationPresented = true
+            Button(L10n.actionDelete, role: .destructive) {
+                isMessageRedactionConfirmationPresented = true
             }
             .buttonStyle(.compound(.tertiary, size: .medium))
-            .disabled(!timelineContext.viewState.bulkRedactionSelectionState.canRedactSelectedMessages)
+            .disabled(!timelineContext.viewState.messageSelectionState.canRedactSelectedMessages)
         }
         .padding(.horizontal, 16)
         .padding(.top, 10)
@@ -315,11 +322,13 @@ struct RoomScreen: View {
                            mediaProvider: context.mediaProvider) {
                 context.send(viewAction: .displayRoomDetails)
             }
+            .disabled(isMessageSelectionActive)
         }
 
         if !ProcessInfo.processInfo.isiOSAppOnMac {
             if context.viewState.shouldShowCallButton {
-                RoomCallControlsToolbar(viewState: context.viewState) { isVoiceCall in
+                RoomCallControlsToolbar(viewState: context.viewState,
+                                        isDisabled: isMessageSelectionActive) { isVoiceCall in
                     context.send(viewAction: .displayCall(isVoiceCall: isVoiceCall))
                 }
             }
@@ -332,6 +341,7 @@ struct RoomScreen: View {
                         .foregroundColor(context.viewState.isPrivacyModeEnabled ? .compound.iconAccentPrimary : .compound.iconPrimary)
                 }
                 .accessibilityLabel(context.viewState.isPrivacyModeEnabled ? "关闭隐私模式" : "开启隐私模式")
+                .disabled(isMessageSelectionActive)
             }
         }
 
@@ -346,6 +356,7 @@ struct RoomScreen: View {
                 } label: {
                     CompoundIcon(\.threads)
                 }
+                .disabled(isMessageSelectionActive)
             }
         }
     }
@@ -384,12 +395,16 @@ struct RoomScreen_Previews: PreviewProvider, TestablePreview {
         .snapshotPreferences(expect: tombstonedViewModels.room.context.$viewState.map(\.hasSuccessor))
     }
 
-    static func makeViewModels(canSendMessage: Bool = true, hasSuccessor: Bool = false) -> ViewModels {
+    static func makeViewModels(canSendMessage: Bool = true,
+                               hasSuccessor: Bool = false,
+                               selectedMessageID: TimelineItemIdentifier.EventOrTransactionID? = nil) -> ViewModels {
         let roomProxyMock = JoinedRoomProxyMock(.init(id: "stable_id",
                                                       name: "Preview room",
                                                       hasOngoingCall: true,
-                                                      successor: hasSuccessor ? .init(roomId: UUID().uuidString, reason: nil) : nil,
+                                                      successor: hasSuccessor ? .init(roomId: "!successor:example.org", reason: nil) : nil,
                                                       powerLevelsConfiguration: .init(canUserSendMessage: canSendMessage)))
+        let appSettings: AppSettings = ServiceLocator.shared.settings
+        appSettings.linkPreviewsEnabled = false
         let roomViewModel = RoomScreenViewModel.mock(roomProxyMock: roomProxyMock)
         let timelineViewModel = TimelineViewModel(roomProxy: roomProxyMock,
                                                   timelineController: MockTimelineController(),
@@ -397,11 +412,14 @@ struct RoomScreen_Previews: PreviewProvider, TestablePreview {
                                                   mediaPlayerProvider: MediaPlayerProviderMock(),
                                                   userIndicatorController: ServiceLocator.shared.userIndicatorController,
                                                   appMediator: AppMediatorMock.default,
-                                                  appSettings: ServiceLocator.shared.settings,
+                                                  appSettings: appSettings,
                                                   analyticsService: ServiceLocator.shared.analytics,
-                                                  emojiProvider: EmojiProvider(appSettings: ServiceLocator.shared.settings),
-                                                  linkMetadataProvider: LinkMetadataProvider(),
+                                                  emojiProvider: EmojiProvider(appSettings: appSettings),
+                                                  linkMetadataProvider: RoomScreenPreviewLinkMetadataProvider(),
                                                   timelineControllerFactory: TimelineControllerFactoryMock(.init()))
+        if let selectedMessageID {
+            timelineViewModel.state.messageSelectionState = .init(selectedIDs: [selectedMessageID])
+        }
 
         return .init(room: roomViewModel, timeline: timelineViewModel)
     }
@@ -409,5 +427,35 @@ struct RoomScreen_Previews: PreviewProvider, TestablePreview {
     struct ViewModels {
         let room: RoomScreenViewModelProtocol
         let timeline: TimelineViewModelProtocol
+    }
+}
+
+struct RoomMessageSelectionScreen_Previews: PreviewProvider, TestablePreview {
+    private static let selectedEventID = "RoomTimelineItemFixtures.default.6"
+    static let viewModels = RoomScreen_Previews.makeViewModels(selectedMessageID: .eventID(selectedEventID))
+    static let composerViewModel = ComposerToolbarViewModel.mock()
+
+    static var previews: some View {
+        ElementNavigationStack {
+            RoomScreen(context: viewModels.room.context,
+                       timelineContext: viewModels.timeline.context,
+                       composerToolbar: ComposerToolbar(context: composerViewModel.context))
+        }
+        .previewDisplayName("Selecting messages")
+        .snapshotPreferences(expect: viewModels.room.context.$viewState
+            .combineLatest(viewModels.timeline.context.$viewState)
+            .map { roomState, timelineState in
+                roomState.roomTitle == "Preview room" &&
+                    timelineState.messageSelectionState.selectedCount == 1 &&
+                    timelineState.timelineState.hasLoadedItem(with: selectedEventID)
+            })
+    }
+}
+
+private final class RoomScreenPreviewLinkMetadataProvider: LinkMetadataProviderProtocol {
+    let metadataItems = [URL: LinkMetadataProviderItem]()
+
+    func fetchMetadataFor(url: URL) async -> Result<LinkMetadataProviderItem, Error> {
+        .failure(URLError(.notConnectedToInternet))
     }
 }

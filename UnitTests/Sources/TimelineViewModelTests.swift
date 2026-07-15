@@ -1080,7 +1080,7 @@ final class TimelineViewModelTests {
     }
 
     @Test
-    func bulkRedactionSelectionRedactsSelectedMessages() async throws {
+    func messageSelectionRedactsSelectedMessages() async throws {
         let items = [
             TextRoomTimelineItem(eventID: "bulk-1", sender: "bob"),
             TextRoomTimelineItem(eventID: "bulk-2", sender: "bob")
@@ -1090,21 +1090,21 @@ final class TimelineViewModelTests {
         viewModel.state.canCurrentUserRedactSelf = true
 
         viewModel.process(viewAction: .handleTimelineItemMenuAction(itemID: items[0].id, action: .selectMessages))
-        #expect(viewModel.state.bulkRedactionSelectionState.selectedIDs == [.eventID("bulk-1")])
+        #expect(viewModel.state.messageSelectionState.selectedIDs == [.eventID("bulk-1")])
 
-        viewModel.process(viewAction: .toggleBulkRedactionSelection(itemID: items[1].id))
-        #expect(viewModel.state.bulkRedactionSelectionState.selectedIDs == [.eventID("bulk-1"), .eventID("bulk-2")])
+        viewModel.process(viewAction: .toggleMessageSelection(itemID: items[1].id))
+        #expect(viewModel.state.messageSelectionState.selectedIDs == [.eventID("bulk-1"), .eventID("bulk-2")])
 
-        viewModel.process(viewAction: .confirmBulkRedactionSelection)
+        viewModel.process(viewAction: .confirmMessageRedaction)
         try await Task.sleep(for: .milliseconds(50))
 
         #expect(Set(timelineController.redactedEventOrTransactionIDs) == [.eventID("bulk-1"), .eventID("bulk-2")])
-        #expect(!viewModel.state.bulkRedactionSelectionState.isActive)
+        #expect(!viewModel.state.messageSelectionState.isActive)
         _ = viewModel
     }
 
     @Test
-    func bulkRedactionSelectionForwardsSelectedMessages() async throws {
+    func messageSelectionForwardsSelectedMessages() async throws {
         let items = [
             TextRoomTimelineItem(eventID: "forward-1", sender: "alice"),
             TextRoomTimelineItem(eventID: "forward-2", sender: "alice")
@@ -1113,27 +1113,57 @@ final class TimelineViewModelTests {
         let viewModel = makeViewModel(timelineController: timelineController)
 
         viewModel.process(viewAction: .handleTimelineItemMenuAction(itemID: items[0].id, action: .selectMessages))
-        #expect(viewModel.state.bulkRedactionSelectionState.selectedIDs == [.eventID("forward-1")])
-        #expect(viewModel.state.bulkRedactionSelectionState.canForwardSelectedMessages)
-        #expect(!viewModel.state.bulkRedactionSelectionState.canRedactSelectedMessages)
+        #expect(viewModel.state.messageSelectionState.selectedIDs == [.eventID("forward-1")])
+        #expect(viewModel.state.messageSelectionState.canForwardSelectedMessages)
+        #expect(!viewModel.state.messageSelectionState.canRedactSelectedMessages)
 
-        viewModel.process(viewAction: .toggleBulkRedactionSelection(itemID: items[1].id))
-        #expect(viewModel.state.bulkRedactionSelectionState.selectedIDs == [.eventID("forward-1"), .eventID("forward-2")])
+        viewModel.process(viewAction: .toggleMessageSelection(itemID: items[1].id))
+        #expect(viewModel.state.messageSelectionState.selectedIDs == [.eventID("forward-1"), .eventID("forward-2")])
 
         let deferred = deferFulfillment(viewModel.actions) { action in
             switch action {
-            case .displayMessageForwarding(let forwardingItem):
-                return forwardingItem.forwardingItems.map(\.id) == items.map(\.id)
+            case .displayMessageForwarding(let forwardingBatch):
+                return forwardingBatch.items.map(\.id) == items.map(\.id)
             default:
                 return false
             }
         }
 
-        viewModel.process(viewAction: .forwardBulkRedactionSelection)
+        viewModel.process(viewAction: .forwardMessageSelection)
         try await deferred.fulfill()
 
-        #expect(!viewModel.state.bulkRedactionSelectionState.isActive)
+        #expect(!viewModel.state.messageSelectionState.isActive)
         _ = viewModel
+    }
+
+    @Test
+    func mixedMessageSelectionDoesNotForwardAnIneligibleSubset() async throws {
+        let textItem = TextRoomTimelineItem(eventID: "forwardable", sender: "alice")
+        let pollItem = PollRoomTimelineItem(id: .event(uniqueID: .init("poll"), eventOrTransactionID: .eventID("poll")),
+                                            poll: .disclosed(),
+                                            body: "poll",
+                                            timestamp: .mock,
+                                            isOutgoing: true,
+                                            isEditable: false,
+                                            canBeRepliedTo: true,
+                                            sender: .init(id: "alice"),
+                                            properties: .init())
+        let timelineController = MockTimelineController(timelineItems: [textItem, pollItem])
+        let viewModel = makeViewModel(timelineController: timelineController)
+        viewModel.state.canCurrentUserRedactSelf = true
+
+        viewModel.process(viewAction: .handleTimelineItemMenuAction(itemID: textItem.id, action: .selectMessages))
+        viewModel.process(viewAction: .toggleMessageSelection(itemID: pollItem.id))
+
+        #expect(viewModel.state.messageSelectionState.selectedCount == 2)
+        #expect(!viewModel.state.messageSelectionState.canForwardSelectedMessages)
+        let noForward = deferFailure(viewModel.actions, timeout: .milliseconds(100)) { action in
+            guard case .displayMessageForwarding = action else { return false }
+            return true
+        }
+        viewModel.process(viewAction: .forwardMessageSelection)
+        try await noForward.fulfill()
+        #expect(viewModel.state.messageSelectionState.selectedCount == 2)
     }
 
     // MARK: - Helpers
@@ -1169,6 +1199,473 @@ final class TimelineViewModelTests {
                             appHooks: AppHooks(),
                             analyticsService: ServiceLocator.shared.analytics,
                             userIndicatorController: userIndicatorControllerMock)
+    }
+}
+
+extension TimelineViewModelTests {
+    @Test
+    func messageActionsAreHiddenDuringMessageSelection() {
+        #expect(TimelineItemAccessibilityPolicy.showsMessageActions(isMessageSelectionActive: false))
+        #expect(!TimelineItemAccessibilityPolicy.showsMessageActions(isMessageSelectionActive: true))
+    }
+
+    @Test
+    func scrollToBottomButtonIsHiddenAndInertDuringMessageSelection() {
+        let available = TimelineScrollToBottomButtonState(isAtBottomAndLive: false, isInteractionLocked: false)
+        #expect(!available.isVisuallyHidden)
+        #expect(available.allowsHitTesting)
+        #expect(!available.isAccessibilityHidden)
+
+        let locked = TimelineScrollToBottomButtonState(isAtBottomAndLive: false, isInteractionLocked: true)
+        #expect(locked.isVisuallyHidden)
+        #expect(!locked.allowsHitTesting)
+        #expect(locked.isAccessibilityHidden)
+    }
+
+    @Test
+    func scrollToBottomCannotLeaveFocusedTimelineDuringMessageSelection() {
+        let item = TextRoomTimelineItem(eventID: "scroll-lock", sender: "alice")
+        let timelineController = MockTimelineController(timelineItems: [item])
+        let viewModel = makeViewModel(timelineController: timelineController)
+        viewModel.state.timelineState.isLive = false
+        viewModel.process(viewAction: .handleTimelineItemMenuAction(itemID: item.id, action: .selectMessages))
+
+        viewModel.process(viewAction: .scrollToBottom)
+
+        #expect(timelineController.focusLiveCallCount == 0)
+        #expect(viewModel.state.messageSelectionState.selectedIDs == [item.id.eventOrTransactionID])
+    }
+
+    @Test
+    func automaticForwardPaginationCannotLeaveFocusedTimelineDuringMessageSelection() async throws {
+        let item = TextRoomTimelineItem(eventID: "pagination-lock", sender: "alice")
+        let timelineController = MockTimelineController(timelineItems: [item])
+        let viewModel = makeViewModel(timelineController: timelineController)
+        viewModel.state.timelineState.isLive = false
+        viewModel.state.timelineState.paginationState = .init(backward: .idle, forward: .endReached)
+        viewModel.process(viewAction: .handleTimelineItemMenuAction(itemID: item.id, action: .selectMessages))
+
+        viewModel.process(viewAction: .paginateForwards)
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(timelineController.paginateForwardsCallCount == 0)
+        #expect(timelineController.focusLiveCallCount == 0)
+        #expect(viewModel.state.messageSelectionState.selectedIDs == [item.id.eventOrTransactionID])
+    }
+
+    @Test
+    func scrollToBottomCancelsSuspendedPreparationWithoutForwardingFromOldProvider() async throws {
+        let item = TextRoomTimelineItem(eventID: "stale-provider", sender: "alice")
+        let contentGate = MessageEventContentGate()
+        let timelineController = MockTimelineController(timelineItems: [item])
+        timelineController.messageEventContentClosure = { itemID in
+            await contentGate.content(for: itemID)
+        }
+        let viewModel = makeViewModel(timelineController: timelineController)
+        viewModel.state.timelineState.isLive = false
+        viewModel.process(viewAction: .handleTimelineItemMenuAction(itemID: item.id, action: .selectMessages))
+
+        let contentRequested = deferFulfillment(contentGate.requests) { $0 == item.id }
+        let contentCompleted = deferFulfillment(contentGate.completions) { $0 == item.id }
+        let noForward = deferFailure(viewModel.actions, timeout: .milliseconds(100)) { action in
+            guard case .displayMessageForwarding = action else { return false }
+            return true
+        }
+        viewModel.process(viewAction: .forwardMessageSelection)
+        try await contentRequested.fulfill()
+
+        viewModel.process(viewAction: .scrollToBottom)
+        contentGate.resume(itemID: item.id)
+
+        try await contentCompleted.fulfill()
+        try await noForward.fulfill()
+        #expect(timelineController.focusLiveCallCount == 0)
+        #expect(contentGate.cancelledIDs == [item.id])
+        #expect(viewModel.state.messageSelectionState.selectedIDs == [item.id.eventOrTransactionID])
+    }
+
+    @Test
+    func sameIDEditCancelsSuspendedForwardingPreparation() async throws {
+        let item = TextRoomTimelineItem(eventID: "edited", text: "Original", sender: "alice")
+        let replacement = TextRoomTimelineItem(eventID: "edited", text: "Edited", sender: "alice")
+
+        try await assertTimelineReplacementCancelsForwardingPreparation(item: item, replacement: replacement)
+    }
+
+    @Test
+    func sameIDRedactionCancelsSuspendedForwardingPreparation() async throws {
+        let item = TextRoomTimelineItem(eventID: "redacted", sender: "alice")
+        let replacement = RedactedRoomTimelineItem(id: item.id,
+                                                   body: "Removed",
+                                                   timestamp: item.timestamp,
+                                                   isOutgoing: item.isOutgoing,
+                                                   isEditable: false,
+                                                   canBeRepliedTo: false,
+                                                   sender: item.sender)
+
+        try await assertTimelineReplacementCancelsForwardingPreparation(item: item, replacement: replacement, selectionRemains: false)
+    }
+
+    @Test
+    func sameIDForwardabilityChangeCancelsSuspendedForwardingPreparation() async throws {
+        let item = TextRoomTimelineItem(eventID: "non-forwardable", sender: "alice")
+        let replacement = PollRoomTimelineItem(id: item.id,
+                                               poll: .disclosed(),
+                                               body: "Poll",
+                                               timestamp: item.timestamp,
+                                               isOutgoing: item.isOutgoing,
+                                               isEditable: false,
+                                               canBeRepliedTo: true,
+                                               sender: item.sender,
+                                               properties: .init())
+
+        try await assertTimelineReplacementCancelsForwardingPreparation(item: item, replacement: replacement, selectionRemains: false)
+    }
+
+    @Test
+    func threadNavigationCancelsSuspendedForwardingPreparation() async throws {
+        let item = TextRoomTimelineItem(eventID: "thread-navigation", sender: "alice")
+        let contentGate = MessageEventContentGate()
+        let timelineController = MockTimelineController(timelineItems: [item])
+        timelineController.messageEventContentClosure = { itemID in
+            await contentGate.content(for: itemID)
+        }
+        let viewModel = makeViewModel(timelineController: timelineController)
+        viewModel.process(viewAction: .handleTimelineItemMenuAction(itemID: item.id, action: .selectMessages))
+
+        let contentRequested = deferFulfillment(contentGate.requests) { $0 == item.id }
+        let contentCompleted = deferFulfillment(contentGate.completions) { $0 == item.id }
+        let noOutboundAction = deferFailure(viewModel.actions, timeout: .milliseconds(100)) { action in
+            switch action {
+            case .displayThread, .displayMessageForwarding:
+                true
+            default:
+                false
+            }
+        }
+        viewModel.process(viewAction: .forwardMessageSelection)
+        try await contentRequested.fulfill()
+
+        viewModel.process(viewAction: .displayThread(itemID: item.id))
+        contentGate.resume(itemID: item.id)
+
+        try await contentCompleted.fulfill()
+        try await noOutboundAction.fulfill()
+        #expect(contentGate.cancelledIDs == [item.id])
+        #expect(viewModel.state.messageSelectionState.selectedIDs == [item.id.eventOrTransactionID])
+    }
+
+    @Test
+    func senderDetailsCancelsSuspendedForwardingPreparation() async throws {
+        let item = TextRoomTimelineItem(eventID: "sender-details", sender: "alice")
+        let contentGate = MessageEventContentGate()
+        let timelineController = MockTimelineController(timelineItems: [item])
+        timelineController.messageEventContentClosure = { itemID in
+            await contentGate.content(for: itemID)
+        }
+        let viewModel = makeViewModel(timelineController: timelineController)
+        viewModel.process(viewAction: .handleTimelineItemMenuAction(itemID: item.id, action: .selectMessages))
+
+        let contentRequested = deferFulfillment(contentGate.requests) { $0 == item.id }
+        let contentCompleted = deferFulfillment(contentGate.completions) { $0 == item.id }
+        let noForward = deferFailure(viewModel.actions, timeout: .milliseconds(100)) { action in
+            guard case .displayMessageForwarding = action else { return false }
+            return true
+        }
+        viewModel.process(viewAction: .forwardMessageSelection)
+        try await contentRequested.fulfill()
+
+        viewModel.process(viewAction: .tappedOnSenderDetails(sender: item.sender))
+        #expect(viewModel.state.bindings.manageMemberViewModel == nil)
+        contentGate.resume(itemID: item.id)
+
+        try await contentCompleted.fulfill()
+        try await noForward.fulfill()
+        #expect(contentGate.cancelledIDs == [item.id])
+        #expect(viewModel.state.messageSelectionState.selectedIDs == [item.id.eventOrTransactionID])
+    }
+
+    @Test
+    func messageSelectionRemainsUntilCompleteForwardingBatchIsPrepared() async throws {
+        let items = [
+            TextRoomTimelineItem(eventID: "forward-1", sender: "alice"),
+            TextRoomTimelineItem(eventID: "forward-2", sender: "alice")
+        ]
+        let contentGate = MessageEventContentGate()
+        let timelineController = MockTimelineController(timelineItems: items)
+        timelineController.messageEventContentClosure = { itemID in
+            guard itemID == items[1].id else {
+                return .init(noHandle: .init())
+            }
+            return await contentGate.content(for: itemID)
+        }
+        let viewModel = makeViewModel(timelineController: timelineController)
+        viewModel.process(viewAction: .handleTimelineItemMenuAction(itemID: items[0].id, action: .selectMessages))
+        viewModel.process(viewAction: .toggleMessageSelection(itemID: items[1].id))
+
+        let contentRequested = deferFulfillment(contentGate.requests) { $0 == items[1].id }
+        let forwarded = deferFulfillment(viewModel.actions) { action in
+            guard case .displayMessageForwarding(let forwardingBatch) = action else { return false }
+            return forwardingBatch.items.map(\.id) == items.map(\.id)
+        }
+        viewModel.process(viewAction: .forwardMessageSelection)
+        try await contentRequested.fulfill()
+
+        #expect(viewModel.state.messageSelectionState.selectedIDs == Set(items.compactMap(\.id.eventOrTransactionID)))
+
+        contentGate.resume(itemID: items[1].id)
+        try await forwarded.fulfill()
+        #expect(!viewModel.state.messageSelectionState.isActive)
+    }
+
+    @Test
+    func deselectingAMessageCancelsSuspendedForwardingPreparation() async throws {
+        let items = [
+            TextRoomTimelineItem(eventID: "keep-selected", sender: "alice"),
+            TextRoomTimelineItem(eventID: "deselect", sender: "alice")
+        ]
+        let contentGate = MessageEventContentGate()
+        let timelineController = MockTimelineController(timelineItems: items)
+        timelineController.messageEventContentClosure = { itemID in
+            guard itemID == items[0].id else {
+                return .init(noHandle: .init())
+            }
+            return await contentGate.content(for: itemID)
+        }
+        let viewModel = makeViewModel(timelineController: timelineController)
+        viewModel.process(viewAction: .handleTimelineItemMenuAction(itemID: items[0].id, action: .selectMessages))
+        viewModel.process(viewAction: .toggleMessageSelection(itemID: items[1].id))
+
+        let contentRequested = deferFulfillment(contentGate.requests) { $0 == items[0].id }
+        let contentCompleted = deferFulfillment(contentGate.completions) { $0 == items[0].id }
+        let noForward = deferFailure(viewModel.actions, timeout: .milliseconds(100)) { action in
+            guard case .displayMessageForwarding = action else { return false }
+            return true
+        }
+        viewModel.process(viewAction: .forwardMessageSelection)
+        try await contentRequested.fulfill()
+
+        viewModel.process(viewAction: .toggleMessageSelection(itemID: items[1].id))
+        #expect(viewModel.state.messageSelectionState.selectedIDs == [.eventID("keep-selected")])
+
+        contentGate.resume(itemID: items[0].id)
+        try await contentCompleted.fulfill()
+        try await noForward.fulfill()
+        #expect(contentGate.cancelledIDs == [items[0].id])
+    }
+
+    @Test
+    func redactingMessagesCancelsSuspendedForwardingPreparation() async throws {
+        let item = TextRoomTimelineItem(eventID: "redact", sender: "bob")
+        let contentGate = MessageEventContentGate()
+        let timelineController = MockTimelineController(timelineItems: [item])
+        timelineController.messageEventContentClosure = { itemID in
+            await contentGate.content(for: itemID)
+        }
+        let viewModel = makeViewModel(timelineController: timelineController)
+        viewModel.state.canCurrentUserRedactSelf = true
+        viewModel.process(viewAction: .handleTimelineItemMenuAction(itemID: item.id, action: .selectMessages))
+        #expect(viewModel.state.messageSelectionState.canRedactSelectedMessages)
+
+        let contentRequested = deferFulfillment(contentGate.requests) { $0 == item.id }
+        let contentCompleted = deferFulfillment(contentGate.completions) { $0 == item.id }
+        let noForward = deferFailure(viewModel.actions, timeout: .milliseconds(100)) { action in
+            guard case .displayMessageForwarding = action else { return false }
+            return true
+        }
+        viewModel.process(viewAction: .forwardMessageSelection)
+        try await contentRequested.fulfill()
+
+        viewModel.process(viewAction: .confirmMessageRedaction)
+        #expect(!viewModel.state.messageSelectionState.isActive)
+
+        contentGate.resume(itemID: item.id)
+        try await contentCompleted.fulfill()
+        try await noForward.fulfill()
+        #expect(contentGate.cancelledIDs == [item.id])
+    }
+
+    @Test
+    func newerForwardingRequestCancelsAndSupersedesStalePreparation() async throws {
+        let items = [
+            TextRoomTimelineItem(eventID: "stale", sender: "alice"),
+            TextRoomTimelineItem(eventID: "current", sender: "alice")
+        ]
+        let contentGate = MessageEventContentGate()
+        let timelineController = MockTimelineController(timelineItems: items)
+        timelineController.messageEventContentClosure = { itemID in
+            await contentGate.content(for: itemID)
+        }
+        let viewModel = makeViewModel(timelineController: timelineController)
+        var forwardedItemIDs = [[TimelineItemIdentifier]]()
+        viewModel.actions.sink { action in
+            guard case .displayMessageForwarding(let forwardingBatch) = action else { return }
+            forwardedItemIDs.append(forwardingBatch.items.map(\.id))
+        }
+        .store(in: &cancellables)
+
+        let staleContentRequested = deferFulfillment(contentGate.requests) { $0 == items[0].id }
+        viewModel.process(viewAction: .handleTimelineItemMenuAction(itemID: items[0].id, action: .selectMessages))
+        viewModel.process(viewAction: .forwardMessageSelection)
+        try await staleContentRequested.fulfill()
+
+        let currentContentRequested = deferFulfillment(contentGate.requests) { $0 == items[1].id }
+        viewModel.state.messageSelectionState = .init(selectedIDs: [.eventID("current")])
+        viewModel.process(viewAction: .forwardMessageSelection)
+        try await currentContentRequested.fulfill()
+
+        let currentForwarded = deferFulfillment(viewModel.actions) { action in
+            guard case .displayMessageForwarding(let forwardingBatch) = action else { return false }
+            return forwardingBatch.items.map(\.id) == [items[1].id]
+        }
+        contentGate.resume(itemID: items[1].id)
+        try await currentForwarded.fulfill()
+
+        let staleContentCompleted = deferFulfillment(contentGate.completions) { $0 == items[0].id }
+        contentGate.resume(itemID: items[0].id)
+        try await staleContentCompleted.fulfill()
+
+        #expect(contentGate.cancelledIDs == [items[0].id])
+        #expect(forwardedItemIDs == [[items[1].id]])
+        #expect(!viewModel.state.messageSelectionState.isActive)
+    }
+
+    @Test
+    func deinitializingTimelineViewModelCancelsForwardingPreparation() async throws {
+        let item = TextRoomTimelineItem(eventID: "deinit", sender: "alice")
+        let contentGate = MessageEventContentGate()
+        let timelineController = MockTimelineController(timelineItems: [item])
+        timelineController.messageEventContentClosure = { itemID in
+            await contentGate.content(for: itemID)
+        }
+        var viewModel: TimelineViewModel? = makeViewModel(timelineController: timelineController)
+        weak let weakViewModel = viewModel
+
+        let contentRequested = deferFulfillment(contentGate.requests) { $0 == item.id }
+        viewModel?.process(viewAction: .handleTimelineItemMenuAction(itemID: item.id, action: .selectMessages))
+        viewModel?.process(viewAction: .forwardMessageSelection)
+        try await contentRequested.fulfill()
+
+        viewModel = nil
+        await Task.yield()
+        let wasDeinitializedWhileContentWasSuspended = weakViewModel == nil
+
+        let contentCompleted = deferFulfillment(contentGate.completions) { $0 == item.id }
+        contentGate.resume(itemID: item.id)
+        try await contentCompleted.fulfill()
+
+        #expect(wasDeinitializedWhileContentWasSuspended)
+        #expect(contentGate.cancelledIDs == [item.id])
+    }
+
+    @Test
+    func disappearingSelectedMessageRetainsSelectionAndShowsAnError() async throws {
+        let items = [
+            TextRoomTimelineItem(eventID: "visible", sender: "alice"),
+            TextRoomTimelineItem(eventID: "disappears", sender: "alice")
+        ]
+        let contentGate = MessageEventContentGate()
+        let timelineController = MockTimelineController(timelineItems: items)
+        timelineController.messageEventContentClosure = { itemID in
+            guard itemID == items[0].id else {
+                return .init(noHandle: .init())
+            }
+            return await contentGate.content(for: itemID)
+        }
+        let viewModel = makeViewModel(timelineController: timelineController)
+        viewModel.process(viewAction: .handleTimelineItemMenuAction(itemID: items[0].id, action: .selectMessages))
+        viewModel.process(viewAction: .toggleMessageSelection(itemID: items[1].id))
+
+        var forwardingActionCount = 0
+        viewModel.actions.sink { action in
+            guard case .displayMessageForwarding = action else { return }
+            forwardingActionCount += 1
+        }
+        .store(in: &cancellables)
+        let indicators = PassthroughSubject<UserIndicator, Never>()
+        var displayedError: UserIndicator?
+        userIndicatorControllerMock.submitIndicatorDelayClosure = { indicator, _ in
+            displayedError = indicator
+            indicators.send(indicator)
+        }
+        let contentRequested = deferFulfillment(contentGate.requests) { $0 == items[0].id }
+        let errorDisplayed = deferFulfillment(indicators) { $0.id == "RoomScreenToastError" }
+        viewModel.process(viewAction: .forwardMessageSelection)
+        try await contentRequested.fulfill()
+
+        #expect(viewModel.state.messageSelectionState.selectedIDs == Set(items.compactMap(\.id.eventOrTransactionID)))
+
+        timelineController.timelineItems.removeLast()
+        contentGate.resume(itemID: items[0].id)
+        try await errorDisplayed.fulfill()
+
+        #expect(forwardingActionCount == 0)
+        #expect(displayedError?.title == UntranslatedL10n.screenRoomMessageSelectionChangedError)
+        #expect(displayedError?.title != L10n.errorUnknown)
+        #expect(viewModel.state.messageSelectionState.selectedIDs == Set(items.compactMap(\.id.eventOrTransactionID)))
+    }
+
+    private func assertTimelineReplacementCancelsForwardingPreparation(item: TextRoomTimelineItem,
+                                                                       replacement: RoomTimelineItemProtocol,
+                                                                       selectionRemains: Bool = true) async throws {
+        let contentGate = MessageEventContentGate()
+        let timelineController = MockTimelineController(timelineItems: [item])
+        timelineController.messageEventContentClosure = { itemID in
+            await contentGate.content(for: itemID)
+        }
+        let viewModel = makeViewModel(timelineController: timelineController)
+        viewModel.process(viewAction: .handleTimelineItemMenuAction(itemID: item.id, action: .selectMessages))
+
+        let contentRequested = deferFulfillment(contentGate.requests) { $0 == item.id }
+        let contentCompleted = deferFulfillment(contentGate.completions) { $0 == item.id }
+        let noForward = deferFailure(viewModel.actions, timeout: .milliseconds(100)) { action in
+            guard case .displayMessageForwarding = action else { return false }
+            return true
+        }
+        viewModel.process(viewAction: .forwardMessageSelection)
+        try await contentRequested.fulfill()
+
+        timelineController.timelineItems = [replacement]
+        timelineController.callbacks.send(.updatedTimelineItems(timelineItems: [replacement],
+                                                                isSwitchingTimelines: false,
+                                                                providerGeneration: timelineController.timelineItemsProviderGeneration))
+
+        contentGate.resume(itemID: item.id)
+        try await contentCompleted.fulfill()
+        try await noForward.fulfill()
+
+        #expect(contentGate.cancelledIDs == [item.id])
+        let selectionID = try #require(item.id.eventOrTransactionID)
+        let expectedSelectedIDs: Set<TimelineItemIdentifier.EventOrTransactionID> = selectionRemains ? [selectionID] : []
+        #expect(viewModel.state.messageSelectionState.selectedIDs == expectedSelectedIDs)
+        #expect(viewModel.state.messageSelectionState.isSelected(selectionID) == selectionRemains)
+        #expect(viewModel.state.messageSelectionState.isActive == selectionRemains)
+    }
+}
+
+@MainActor
+private final class MessageEventContentGate {
+    let requests = PassthroughSubject<TimelineItemIdentifier, Never>()
+    let completions = PassthroughSubject<TimelineItemIdentifier, Never>()
+    private(set) var cancelledIDs = Set<TimelineItemIdentifier>()
+
+    private var continuations = [TimelineItemIdentifier: CheckedContinuation<RoomMessageEventContentWithoutRelation?, Never>]()
+
+    func content(for itemID: TimelineItemIdentifier) async -> RoomMessageEventContentWithoutRelation? {
+        let content = await withCheckedContinuation { continuation in
+            continuations[itemID] = continuation
+            requests.send(itemID)
+        }
+
+        if Task.isCancelled {
+            cancelledIDs.insert(itemID)
+        }
+        completions.send(itemID)
+        return content
+    }
+
+    func resume(itemID: TimelineItemIdentifier) {
+        continuations.removeValue(forKey: itemID)?.resume(returning: .init(noHandle: .init()))
     }
 }
 

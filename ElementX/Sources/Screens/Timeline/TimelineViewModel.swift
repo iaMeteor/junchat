@@ -16,6 +16,11 @@ typealias TimelineViewModelType = StateStoreViewModel<TimelineViewState, Timelin
 
 // swiftlint:disable:next type_body_length
 class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
+    private struct ForwardingItemPreparationWaiter {
+        let id: UUID
+        let continuation: CheckedContinuation<Bool, Never>
+    }
+
     private enum Constants {
         static let paginationEventLimit: UInt16 = 20
         static let detachedTimelineSize: UInt16 = 100
@@ -53,6 +58,14 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
     private var paginateBackwardsTask: Task<Void, Never>?
     private var paginateForwardsTask: Task<Void, Never>?
     private var sendMessageTasks = [UUID: Task<Void, Never>]()
+    private var prepareMessageForwardingTask: Task<Void, Never>?
+    private var prepareDirectMessageForwardingTask: Task<Void, Never>?
+    private var messageForwardingPreparationGeneration = 0
+    private var directMessageForwardingPreparationGeneration = 0
+    private var messageSelectionProviderLease: TimelineProviderLease?
+    private var forwardingItemPreparationOwner: UUID?
+    private var forwardingItemPreparationWaiters = [ForwardingItemPreparationWaiter]()
+    private var renderedProviderGeneration: UInt
 
     init(roomProxy: JoinedRoomProxyProtocol,
          focussedEventID: String? = nil,
@@ -78,6 +91,7 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
         self.emojiProvider = emojiProvider
         self.timelineControllerFactory = timelineControllerFactory
         self.privacyModeAuthorityTimeout = privacyModeAuthorityTimeout
+        renderedProviderGeneration = timelineController.timelineItemsProviderGeneration
 
         let voiceMessageRecorder = VoiceMessageRecorder(audioRecorder: AudioRecorder(), mediaPlayerProvider: mediaPlayerProvider)
 
@@ -159,15 +173,25 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
         trackComposerMode(.default)
     }
 
-    deinit {
+    isolated deinit {
+        prepareMessageForwardingTask?.cancel()
+        prepareDirectMessageForwardingTask?.cancel()
         for task in sendMessageTasks.values {
             task.cancel()
+        }
+        if let messageSelectionProviderLease {
+            timelineController.releaseProviderLease(messageSelectionProviderLease)
         }
     }
 
     // MARK: - Public
 
     override func process(viewAction: TimelineViewAction) {
+        if state.messageSelectionState.isActive, viewAction.isBlockedDuringMessageSelection {
+            cancelMessageForwardingPreparation()
+            return
+        }
+
         switch viewAction {
         case .itemAppeared(let id):
             Task { await timelineController.processItemAppearance(id) }
@@ -196,21 +220,24 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
         case .scrollToFirstItemForCurrentDate:
             state.timelineState.scrollToFirstItemForDatePublisher.send()
         case .displayTimelineItemMenu(let itemID):
+            guard timelineItem(withExactIdentifier: itemID) != nil else { return }
             timelineInteractionHandler.displayTimelineItemActionMenu(for: itemID)
         case .handleTimelineItemMenuAction(let itemID, let action):
+            guard timelineItem(withExactIdentifier: itemID) != nil else { return }
             if action == .selectMessages {
-                startBulkRedactionSelection(itemID: itemID)
+                startMessageSelection(itemID: itemID)
             } else {
                 timelineInteractionHandler.handleTimelineItemMenuAction(action, itemID: itemID)
             }
-        case .toggleBulkRedactionSelection(let itemID):
-            toggleBulkRedactionSelection(itemID: itemID)
-        case .cancelBulkRedactionSelection:
-            state.bulkRedactionSelectionState = TimelineBulkRedactionSelectionState()
-        case .confirmBulkRedactionSelection:
-            confirmBulkRedactionSelection()
-        case .forwardBulkRedactionSelection:
-            forwardBulkRedactionSelection()
+        case .toggleMessageSelection(let itemID):
+            toggleMessageSelection(itemID: itemID)
+        case .cancelMessageSelection:
+            cancelMessageForwardingPreparation()
+            setMessageSelectionState(.init())
+        case .confirmMessageRedaction:
+            confirmMessageRedaction()
+        case .forwardMessageSelection:
+            forwardMessageSelection()
         case .tappedOnSenderDetails(let sender):
             handleTappedOnSenderDetails(sender: sender)
         case .displayEmojiPicker(let itemID):
@@ -280,6 +307,11 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
     }
 
     func focusOnEvent(eventID: String) async {
+        guard let providerMutationToken = timelineController.providerMutationToken() else {
+            cancelMessageForwardingPreparation()
+            return
+        }
+
         if state.timelineState.hasLoadedItem(with: eventID) {
             state.timelineState.focussedEvent = .init(eventID: eventID, appearance: .animated)
             return
@@ -290,16 +322,21 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
             hideFocusLoadingIndicator()
         }
 
-        switch await timelineController.focusOnEvent(eventID, timelineSize: Constants.detachedTimelineSize) {
+        switch await timelineController.focusOnEvent(eventID,
+                                                     timelineSize: Constants.detachedTimelineSize,
+                                                     using: providerMutationToken) {
         case .success:
             state.timelineState.focussedEvent = .init(eventID: eventID, appearance: .immediate)
         case .failure(let error):
-            MXLog.error("Failed to focus on event \(eventID)")
+            guard case .providerMutationInvalidated = error else {
+                MXLog.error("Failed to focus on event \(eventID)")
 
-            if case .eventNotFound = error {
-                displayErrorToast(L10n.errorMessageNotFound)
-            } else {
-                displayErrorToast(L10n.commonFailed)
+                if case .eventNotFound = error {
+                    displayErrorToast(L10n.errorMessageNotFound)
+                } else {
+                    displayErrorToast(L10n.commonFailed)
+                }
+                return
             }
         }
     }
@@ -309,8 +346,72 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
     }
 
     func makeForwardingItem(for itemID: TimelineItemIdentifier) async -> MessageForwardingItem? {
-        guard let content = await timelineController.messageEventContent(for: itemID) else { return nil }
-        return .init(id: itemID, roomID: roomProxy.id, content: content)
+        let preparationGeneration = directMessageForwardingPreparationGeneration
+        let preparationID = UUID()
+        guard await acquireForwardingItemPreparationSlot(id: preparationID) else { return nil }
+        defer { releaseForwardingItemPreparationSlot(id: preparationID) }
+        guard !Task.isCancelled,
+              preparationGeneration == directMessageForwardingPreparationGeneration,
+              let sourceItem = forwardableTimelineItem(withExactIdentifier: itemID) else {
+            return nil
+        }
+        let sourceItemType = RoomTimelineItemType(item: sourceItem)
+        guard let providerLease = timelineController.acquireProviderLease() else { return nil }
+        defer { timelineController.releaseProviderLease(providerLease) }
+        guard providerLease.providerGeneration == renderedProviderGeneration,
+              let forwardingItem = await Self.makeForwardingItem(for: itemID,
+                                                                 roomID: roomProxy.id,
+                                                                 timelineController: timelineController,
+                                                                 providerLease: providerLease),
+              !Task.isCancelled,
+              preparationGeneration == directMessageForwardingPreparationGeneration,
+              providerLease.providerGeneration == renderedProviderGeneration,
+              providerLease.providerGeneration == timelineController.activeProviderGeneration,
+              let currentItem = forwardableTimelineItem(withExactIdentifier: itemID),
+              RoomTimelineItemType(item: currentItem) == sourceItemType else {
+            return nil
+        }
+        return forwardingItem
+    }
+
+    private func acquireForwardingItemPreparationSlot(id: UUID) async -> Bool {
+        guard !Task.isCancelled else { return false }
+        guard forwardingItemPreparationOwner != nil else {
+            forwardingItemPreparationOwner = id
+            return true
+        }
+
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                guard !Task.isCancelled else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                forwardingItemPreparationWaiters.append(.init(id: id, continuation: continuation))
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.cancelForwardingItemPreparationWaiter(id: id)
+            }
+        }
+    }
+
+    private func releaseForwardingItemPreparationSlot(id: UUID) {
+        guard forwardingItemPreparationOwner == id else { return }
+        guard !forwardingItemPreparationWaiters.isEmpty else {
+            forwardingItemPreparationOwner = nil
+            return
+        }
+
+        let waiter = forwardingItemPreparationWaiters.removeFirst()
+        forwardingItemPreparationOwner = waiter.id
+        waiter.continuation.resume(returning: true)
+    }
+
+    private func cancelForwardingItemPreparationWaiter(id: UUID) {
+        guard let index = forwardingItemPreparationWaiters.firstIndex(where: { $0.id == id }) else { return }
+        let waiter = forwardingItemPreparationWaiters.remove(at: index)
+        waiter.continuation.resume(returning: false)
     }
 
     // MARK: - Private
@@ -346,7 +447,15 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
     }
 
     private func focusLive() {
-        timelineController.focusLive()
+        guard let providerMutationToken = timelineController.providerMutationToken() else {
+            cancelMessageForwardingPreparation()
+            return
+        }
+        focusLive(using: providerMutationToken)
+    }
+
+    private func focusLive(using providerMutationToken: TimelineProviderMutationToken) {
+        timelineController.focusLive(using: providerMutationToken)
     }
 
     private func didScrollToFocussedItem() {
@@ -466,7 +575,18 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
                 guard let self else { return }
 
                 switch callback {
-                case .updatedTimelineItems(let updatedItems, let isSwitchingTimelines):
+                case .updatedTimelineItems(let updatedItems, let isSwitchingTimelines, let providerGeneration):
+                    guard providerGeneration == timelineController.activeProviderGeneration else { return }
+                    cancelDirectMessageForwardingPreparation()
+                    if prepareMessageForwardingTask != nil {
+                        cancelMessageForwardingPreparation()
+                    }
+                    if providerGeneration == renderedProviderGeneration {
+                        reconcileMessageSelection(with: updatedItems)
+                    } else {
+                        setMessageSelectionState(.init())
+                        renderedProviderGeneration = providerGeneration
+                    }
                     buildTimelineViews(timelineItems: updatedItems, isSwitchingTimelines: isSwitchingTimelines)
 
                     if !updatedItems.isEmpty {
@@ -524,7 +644,7 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
                 case .displayEmojiPicker(let itemID, let selectedEmojis):
                     actionsSubject.send(.displayEmojiPicker(itemID: itemID, selectedEmojis: selectedEmojis))
                 case .displayMessageForwarding(let itemID):
-                    Task { await self.forwardMessage(itemID: itemID) }
+                    forwardMessage(itemID: itemID)
                 case .displayPollForm(let mode):
                     actionsSubject.send(.displayPollForm(mode: mode))
                 case .displayReportContent(let itemID, let senderID):
@@ -647,7 +767,8 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
     }
 
     private func paginateForwards() {
-        guard paginateForwardsTask == nil else {
+        guard paginateForwardsTask == nil,
+              let providerMutationToken = timelineController.providerMutationToken() else {
             return
         }
 
@@ -664,7 +785,7 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
             }
 
             if state.timelineState.paginationState.forward == .endReached {
-                focusLive()
+                focusLive(using: providerMutationToken)
             }
 
             paginateForwardsTask = nil
@@ -672,42 +793,71 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
     }
 
     private func scrollToBottom() {
+        guard let providerMutationToken = timelineController.providerMutationToken() else {
+            cancelMessageForwardingPreparation()
+            return
+        }
+        scrollToBottom(using: providerMutationToken)
+    }
+
+    private func scrollToBottom(using providerMutationToken: TimelineProviderMutationToken) {
         if state.timelineState.isLive {
+            guard timelineController.isProviderMutationTokenValid(providerMutationToken) else { return }
             state.timelineState.scrollToBottomPublisher.send(())
         } else {
-            focusLive()
+            focusLive(using: providerMutationToken)
         }
     }
 
-    private func startBulkRedactionSelection(itemID: TimelineItemIdentifier) {
+    private func startMessageSelection(itemID: TimelineItemIdentifier) {
         guard let capabilities = selectableMessageSelectionCapabilities(itemID: itemID) else {
             return
         }
-        var selectionState = TimelineBulkRedactionSelectionState()
+        cancelMessageForwardingPreparation()
+        var selectionState = TimelineMessageSelectionState()
         selectionState.insert(capabilities)
-        state.bulkRedactionSelectionState = selectionState
+        setMessageSelectionState(selectionState)
     }
 
-    private func toggleBulkRedactionSelection(itemID: TimelineItemIdentifier) {
+    private func toggleMessageSelection(itemID: TimelineItemIdentifier) {
         guard let capabilities = selectableMessageSelectionCapabilities(itemID: itemID),
-              state.bulkRedactionSelectionState.isActive else {
+              state.messageSelectionState.isActive else {
             return
         }
 
-        if state.bulkRedactionSelectionState.selectedIDs.contains(capabilities.id) {
-            state.bulkRedactionSelectionState.remove(capabilities.id)
+        cancelMessageForwardingPreparation()
+        var selectionState = state.messageSelectionState
+        if selectionState.selectedIDs.contains(capabilities.id) {
+            selectionState.remove(capabilities.id)
         } else {
-            state.bulkRedactionSelectionState.insert(capabilities)
+            selectionState.insert(capabilities)
+        }
+        setMessageSelectionState(selectionState)
+    }
+
+    private func setMessageSelectionState(_ selectionState: TimelineMessageSelectionState) {
+        let wasActive = state.messageSelectionState.isActive
+        if !wasActive, selectionState.isActive {
+            guard let providerLease = timelineController.acquireProviderLease() else { return }
+            messageSelectionProviderLease = providerLease
+        }
+        state.messageSelectionState = selectionState
+        if wasActive, !selectionState.isActive {
+            if let messageSelectionProviderLease {
+                timelineController.releaseProviderLease(messageSelectionProviderLease)
+                self.messageSelectionProviderLease = nil
+            }
         }
     }
 
-    private func confirmBulkRedactionSelection() {
-        let selectionState = state.bulkRedactionSelectionState
+    private func confirmMessageRedaction() {
+        let selectionState = state.messageSelectionState
         guard selectionState.canRedactSelectedMessages else {
             return
         }
+        cancelMessageForwardingPreparation()
         let selectedIDs = selectionState.selectedIDs.intersection(selectionState.redactionIDs)
-        state.bulkRedactionSelectionState = TimelineBulkRedactionSelectionState()
+        setMessageSelectionState(.init())
 
         Task {
             for eventOrTransactionID in selectedIDs {
@@ -716,61 +866,183 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
         }
     }
 
-    private func forwardBulkRedactionSelection() {
-        let selectionState = state.bulkRedactionSelectionState
+    private func forwardMessageSelection() {
+        cancelMessageForwardingPreparation()
+
+        let selectionState = state.messageSelectionState
         guard selectionState.canForwardSelectedMessages else {
             return
         }
         let selectedIDs = selectionState.selectedIDs
-        state.bulkRedactionSelectionState = TimelineBulkRedactionSelectionState()
+        guard let providerLease = messageSelectionProviderLease else { return }
+        let generation = messageForwardingPreparationGeneration
+        let roomID = roomProxy.id
+        let timelineController = timelineController
 
-        Task {
-            let forwardingItems = await selectedForwardingItems(selectedIDs: selectedIDs)
-            guard let firstItem = forwardingItems.first else { return }
+        prepareMessageForwardingTask = Task { [weak self] in
+            let forwardingItems = await Self.selectedForwardingItems(selectedIDs: selectedIDs,
+                                                                     roomID: roomID,
+                                                                     timelineController: timelineController,
+                                                                     providerLease: providerLease)
+            guard !Task.isCancelled,
+                  let self,
+                  messageForwardingPreparationGeneration == generation else {
+                return
+            }
+            prepareMessageForwardingTask = nil
 
-            let forwardingItem = firstItem.addingForwardingItems(Array(forwardingItems.dropFirst()))
-            actionsSubject.send(.displayMessageForwarding(forwardingItem: forwardingItem))
+            guard let forwardingItems,
+                  let firstItem = forwardingItems.first else {
+                displayErrorToast(UntranslatedL10n.screenRoomMessageSelectionChangedError)
+                return
+            }
+
+            guard let forwardingBatch = MessageForwardingBatch(firstItem: firstItem,
+                                                               remainingItems: Array(forwardingItems.dropFirst())) else {
+                displayErrorToast(UntranslatedL10n.screenRoomMessageSelectionChangedError)
+                return
+            }
+            setMessageSelectionState(.init())
+            actionsSubject.send(.displayMessageForwarding(forwardingBatch: forwardingBatch))
         }
     }
 
-    private func selectedForwardingItems(selectedIDs: Set<TimelineItemIdentifier.EventOrTransactionID>) async -> [MessageForwardingItem] {
+    private func cancelMessageForwardingPreparation() {
+        prepareMessageForwardingTask?.cancel()
+        prepareMessageForwardingTask = nil
+        messageForwardingPreparationGeneration &+= 1
+    }
+
+    private static func selectedForwardingItems(selectedIDs: Set<TimelineItemIdentifier.EventOrTransactionID>,
+                                                roomID: String,
+                                                timelineController: TimelineControllerProtocol,
+                                                providerLease: TimelineProviderLease) async -> [MessageForwardingItem]? {
         var forwardingItems = [MessageForwardingItem]()
+        var sourceItemTypes = [TimelineItemIdentifier.EventOrTransactionID: RoomTimelineItemType]()
+        var remainingIDs = selectedIDs
 
         for timelineItem in timelineController.timelineItems {
+            guard !Task.isCancelled else { return nil }
+
             guard let eventTimelineItem = timelineItem as? EventBasedTimelineItemProtocol,
                   let eventOrTransactionID = eventTimelineItem.id.eventOrTransactionID,
-                  selectedIDs.contains(eventOrTransactionID),
-                  eventTimelineItem.isForwardable,
-                  let forwardingItem = await makeForwardingItem(for: eventTimelineItem.id) else {
+                  remainingIDs.remove(eventOrTransactionID) != nil else {
                 continue
             }
 
+            guard eventTimelineItem.isForwardable else { return nil }
+            let sourceItemType = RoomTimelineItemType(item: eventTimelineItem)
+            guard let forwardingItem = await makeForwardingItem(for: eventTimelineItem.id,
+                                                                roomID: roomID,
+                                                                timelineController: timelineController,
+                                                                providerLease: providerLease),
+                !Task.isCancelled else {
+                return nil
+            }
+
+            sourceItemTypes[eventOrTransactionID] = sourceItemType
             forwardingItems.append(forwardingItem)
+        }
+
+        await waitForEnqueuedTimelineUpdates()
+        guard !Task.isCancelled else { return nil }
+
+        guard remainingIDs.isEmpty,
+              forwardingItems.count == selectedIDs.count,
+              sourceItemTypes.count == selectedIDs.count,
+              selectionMatchesCurrentTimeline(sourceItemTypes: sourceItemTypes,
+                                              selectedIDs: selectedIDs,
+                                              timelineItems: timelineController.timelineItems) else {
+            return nil
         }
 
         return forwardingItems
     }
 
-    private func selectableBulkRedactionID(itemID: TimelineItemIdentifier) -> TimelineItemIdentifier.EventOrTransactionID? {
-        guard let timelineItem = timelineController.timelineItems.firstUsingStableID(itemID),
-              let eventTimelineItem = timelineItem as? EventBasedTimelineItemProtocol else {
-            return nil
+    private static func selectionMatchesCurrentTimeline(sourceItemTypes: [TimelineItemIdentifier.EventOrTransactionID: RoomTimelineItemType],
+                                                        selectedIDs: Set<TimelineItemIdentifier.EventOrTransactionID>,
+                                                        timelineItems: [RoomTimelineItemProtocol]) -> Bool {
+        var currentItems = [TimelineItemIdentifier.EventOrTransactionID: EventBasedTimelineItemProtocol]()
+        for case let currentItem as EventBasedTimelineItemProtocol in timelineItems {
+            guard let currentID = currentItem.id.eventOrTransactionID,
+                  selectedIDs.contains(currentID) else { continue }
+            guard currentItems.updateValue(currentItem, forKey: currentID) == nil else { return false }
         }
 
-        return TimelineBulkRedactionEligibility.selectableRedactionID(for: eventTimelineItem,
-                                                                      canCurrentUserRedactSelf: state.canCurrentUserRedactSelf,
-                                                                      canCurrentUserRedactOthers: state.canCurrentUserRedactOthers)
+        return sourceItemTypes.allSatisfy { sourceID, sourceItemType in
+            guard let currentItem = currentItems[sourceID] else { return false }
+            return currentItem.isForwardable && RoomTimelineItemType(item: currentItem) == sourceItemType
+        }
+    }
+
+    private static func waitForEnqueuedTimelineUpdates() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                continuation.resume()
+            }
+        }
+    }
+
+    private static func makeForwardingItem(for itemID: TimelineItemIdentifier,
+                                           roomID: String,
+                                           timelineController: TimelineControllerProtocol,
+                                           providerLease: TimelineProviderLease) async -> MessageForwardingItem? {
+        guard let content = await timelineController.messageEventContent(for: itemID, using: providerLease) else { return nil }
+        return .init(id: itemID, roomID: roomID, content: content)
     }
 
     private func selectableMessageSelectionCapabilities(itemID: TimelineItemIdentifier) -> TimelineMessageSelectionCapabilities? {
-        guard let timelineItem = timelineController.timelineItems.firstUsingStableID(itemID),
-              let eventTimelineItem = timelineItem as? EventBasedTimelineItemProtocol else {
+        guard let eventTimelineItem = timelineItem(withExactIdentifier: itemID) as? EventBasedTimelineItemProtocol else {
             return nil
         }
 
         return TimelineMessageSelectionEligibility.capabilities(for: eventTimelineItem,
                                                                 canCurrentUserRedactSelf: state.canCurrentUserRedactSelf,
                                                                 canCurrentUserRedactOthers: state.canCurrentUserRedactOthers)
+    }
+
+    private func timelineItem(withExactIdentifier itemID: TimelineItemIdentifier) -> RoomTimelineItemProtocol? {
+        guard renderedProviderGeneration == timelineController.timelineItemsProviderGeneration,
+              renderedProviderGeneration == timelineController.activeProviderGeneration,
+              let timelineItem = timelineController.timelineItems.firstUsingStableID(itemID),
+              timelineItem.id == itemID else {
+            return nil
+        }
+        return timelineItem
+    }
+
+    private func forwardableTimelineItem(withExactIdentifier itemID: TimelineItemIdentifier) -> EventBasedTimelineItemProtocol? {
+        guard let eventTimelineItem = timelineItem(withExactIdentifier: itemID) as? EventBasedTimelineItemProtocol,
+              TimelineMessageSelectionEligibility.capabilities(for: eventTimelineItem,
+                                                               canCurrentUserRedactSelf: state.canCurrentUserRedactSelf,
+                                                               canCurrentUserRedactOthers: state.canCurrentUserRedactOthers)?.canForward == true else {
+            return nil
+        }
+        return eventTimelineItem
+    }
+
+    private func reconcileMessageSelection(with timelineItems: [RoomTimelineItemProtocol]) {
+        guard state.messageSelectionState.isActive else { return }
+
+        var selectionState = state.messageSelectionState
+        for timelineItem in timelineItems {
+            guard let previousItem = state.timelineState.itemsDictionary[timelineItem.id.uniqueID],
+                  let previousID = previousItem.identifier.eventOrTransactionID,
+                  selectionState.isSelected(previousID) else {
+                continue
+            }
+
+            guard let eventTimelineItem = timelineItem as? EventBasedTimelineItemProtocol,
+                  let capabilities = TimelineMessageSelectionEligibility.capabilities(for: eventTimelineItem,
+                                                                                      canCurrentUserRedactSelf: state.canCurrentUserRedactSelf,
+                                                                                      canCurrentUserRedactOthers: state.canCurrentUserRedactOthers) else {
+                selectionState.remove(previousID)
+                continue
+            }
+
+            selectionState.replace(previousID, with: capabilities)
+        }
+        setMessageSelectionState(selectionState)
     }
 
     private func sendReadReceiptIfNeeded(for lastVisibleItemID: TimelineItemIdentifier) async {
@@ -872,6 +1144,7 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
         let roomID = timelineController.roomID
         let authorityTimeout = privacyModeAuthorityTimeout
         let timelineController = timelineController
+        let providerMutationToken = timelineController.providerMutationToken()
         let actionsSubject = actionsSubject
 
         sendMessageTasks[taskID] = Task { [weak self] in
@@ -898,8 +1171,8 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
                                           timelineController: timelineController,
                                           clientProxy: clientProxy,
                                           actionsSubject: actionsSubject)
-            if !Task.isCancelled {
-                self?.scrollToBottom()
+            if !Task.isCancelled, let providerMutationToken {
+                self?.scrollToBottom(using: providerMutationToken)
             }
             self?.sendMessageTasks[taskID] = nil
         }
@@ -1170,9 +1443,25 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
 
     // MARK: - Message forwarding
 
-    private func forwardMessage(itemID: TimelineItemIdentifier) async {
-        guard let forwardingItem = await makeForwardingItem(for: itemID) else { return }
-        actionsSubject.send(.displayMessageForwarding(forwardingItem: forwardingItem))
+    private func forwardMessage(itemID: TimelineItemIdentifier) {
+        cancelDirectMessageForwardingPreparation()
+        let preparationGeneration = directMessageForwardingPreparationGeneration
+        prepareDirectMessageForwardingTask = Task { [weak self] in
+            guard let self,
+                  let forwardingItem = await makeForwardingItem(for: itemID),
+                  !Task.isCancelled,
+                  preparationGeneration == directMessageForwardingPreparationGeneration else {
+                return
+            }
+            prepareDirectMessageForwardingTask = nil
+            actionsSubject.send(.displayMessageForwarding(forwardingBatch: .init(firstItem: forwardingItem)))
+        }
+    }
+
+    private func cancelDirectMessageForwardingPreparation() {
+        prepareDirectMessageForwardingTask?.cancel()
+        prepareDirectMessageForwardingTask = nil
+        directMessageForwardingPreparationGeneration &+= 1
     }
 
     // MARK: Pills
@@ -1280,6 +1569,35 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
                                                               type: .toast,
                                                               title: title,
                                                               iconName: "xmark"))
+    }
+}
+
+private extension TimelineViewAction {
+    var isBlockedDuringMessageSelection: Bool {
+        switch self {
+        case .mediaTapped,
+             .itemSendInfoTapped,
+             .toggleReaction,
+             .displayTimelineItemMenu,
+             .handleTimelineItemMenuAction,
+             .tappedOnSenderDetails,
+             .displayReactionSummary,
+             .displayEmojiPicker,
+             .displayReadReceipts,
+             .displayThread,
+             .handlePasteOrDrop,
+             .handlePollAction,
+             .handleAudioPlayerAction,
+             .stopLiveLocationSharing,
+             .focusOnEventID,
+             .focusLive,
+             .scrollToBottom,
+             .paginateForwards,
+             .displayPredecessorRoom:
+            true
+        default:
+            false
+        }
     }
 }
 

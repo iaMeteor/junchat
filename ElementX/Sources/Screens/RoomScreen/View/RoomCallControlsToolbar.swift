@@ -10,6 +10,7 @@ import SwiftUI
 
 struct RoomCallControlsToolbar: ToolbarContent {
     let viewState: RoomScreenViewState
+    var isDisabled = false
     let onCallTap: (_ isVoiceCall: Bool) -> Void
     
     var body: some ToolbarContent {
@@ -19,7 +20,7 @@ struct RoomCallControlsToolbar: ToolbarContent {
                     onCallTap(viewState.activeRoomCallIntent == .audio)
                 }
                 .accessibilityIdentifier(A11yIdentifiers.roomScreen.joinCall)
-                .disabled(!viewState.canJoinCall)
+                .disabled(!viewState.canJoinCall || isDisabled)
             }
         } else {
             if viewState.isDirectOneToOneRoom {
@@ -40,7 +41,7 @@ struct RoomCallControlsToolbar: ToolbarContent {
                         CompoundIcon(\.voiceCallSolid)
                     }
                     .accessibilityLabel(L10n.a11yStartCall)
-                    .disabled(!viewState.canJoinCall)
+                    .disabled(!viewState.canJoinCall || isDisabled)
                 }
             } else {
                 ToolbarItem(placement: .primaryAction) {
@@ -48,7 +49,7 @@ struct RoomCallControlsToolbar: ToolbarContent {
                         CompoundIcon(\.videoCallSolid)
                     }
                     .accessibilityLabel(L10n.a11yStartVideoCall)
-                    .disabled(!viewState.canJoinCall)
+                    .disabled(!viewState.canJoinCall || isDisabled)
                 }
             }
         }

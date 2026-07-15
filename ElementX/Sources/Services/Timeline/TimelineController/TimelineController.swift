@@ -27,8 +27,14 @@ class TimelineController: TimelineControllerProtocol {
             configureActiveTimelineItemProvider()
         }
     }
+
+    private var providerMutationGeneration: UInt = 0
+    private(set) var activeProviderGeneration: UInt = 0
+    private var isProviderMutationLocked = false
+    private var activeProviderLease: TimelineProviderLease?
     
     private(set) var timelineItems = [RoomTimelineItemProtocol]()
+    private(set) var timelineItemsProviderGeneration: UInt = 0
     
     private(set) var paginationState: TimelinePaginationState = .initial {
         didSet {
@@ -64,11 +70,15 @@ class TimelineController: TimelineControllerProtocol {
             return
         }
         
+        providerMutationGeneration &+= 1
+        let providerMutationToken = TimelineProviderMutationToken(generation: providerMutationGeneration)
         Task {
             paginationState = TimelinePaginationState(backward: .paginating, forward: .paginating)
             
-            switch await focusOnEvent(initialFocussedEventID, timelineSize: 100) {
+            switch await focusOnEvent(initialFocussedEventID, timelineSize: 100, using: providerMutationToken) {
             case .success:
+                break
+            case .failure(.providerMutationInvalidated):
                 break
             case .failure:
                 // Setup the live timeline as a fallback.
@@ -77,10 +87,60 @@ class TimelineController: TimelineControllerProtocol {
         }
     }
     
-    func focusOnEvent(_ eventID: String, timelineSize: UInt16) async -> Result<Void, TimelineControllerError> {
-        switch await roomProxy.timelineFocusedOnEvent(eventID: eventID, numberOfEvents: timelineSize) {
+    func providerMutationToken() -> TimelineProviderMutationToken? {
+        guard !isProviderMutationLocked else { return nil }
+        providerMutationGeneration &+= 1
+        return .init(generation: providerMutationGeneration)
+    }
+
+    func isProviderMutationTokenValid(_ token: TimelineProviderMutationToken) -> Bool {
+        canMutateProvider(using: token)
+    }
+
+    func setProviderMutationLocked(_ isLocked: Bool) {
+        guard activeProviderLease == nil else { return }
+        guard isProviderMutationLocked != isLocked else { return }
+        isProviderMutationLocked = isLocked
+        if isLocked {
+            providerMutationGeneration &+= 1
+        }
+    }
+
+    func acquireProviderLease() -> TimelineProviderLease? {
+        guard !isProviderMutationLocked,
+              timelineItemsProviderGeneration == activeProviderGeneration else { return nil }
+        providerMutationGeneration &+= 1
+        isProviderMutationLocked = true
+        let lease = TimelineProviderLease(mutationGeneration: providerMutationGeneration,
+                                          providerGeneration: activeProviderGeneration)
+        activeProviderLease = lease
+        return lease
+    }
+
+    func releaseProviderLease(_ lease: TimelineProviderLease) {
+        guard activeProviderLease == lease else { return }
+        activeProviderLease = nil
+        isProviderMutationLocked = false
+    }
+
+    func focusOnEvent(_ eventID: String,
+                      timelineSize: UInt16,
+                      using providerMutationToken: TimelineProviderMutationToken) async -> Result<Void, TimelineControllerError> {
+        guard canMutateProvider(using: providerMutationToken) else {
+            return .failure(.providerMutationInvalidated)
+        }
+
+        let result = await roomProxy.timelineFocusedOnEvent(eventID: eventID, numberOfEvents: timelineSize)
+        guard canMutateProvider(using: providerMutationToken) else {
+            return .failure(.providerMutationInvalidated)
+        }
+
+        switch result {
         case .success(let timeline):
             await timeline.subscribeForUpdates()
+            guard canMutateProvider(using: providerMutationToken) else {
+                return .failure(.providerMutationInvalidated)
+            }
             activeTimeline = timeline
             activeTimelineItemProvider = timeline.timelineItemProvider
             return .success(())
@@ -93,9 +153,11 @@ class TimelineController: TimelineControllerProtocol {
         }
     }
     
-    func focusLive() {
+    func focusLive(using providerMutationToken: TimelineProviderMutationToken) -> Bool {
+        guard canMutateProvider(using: providerMutationToken) else { return false }
         activeTimeline = roomProxy.timeline
         activeTimelineItemProvider = liveTimelineItemProvider
+        return true
     }
     
     func paginateBackwards(requestSize: UInt16) async -> Result<Void, TimelineControllerError> {
@@ -249,6 +311,15 @@ class TimelineController: TimelineControllerProtocol {
     func messageEventContent(for timelineItemID: TimelineItemIdentifier) async -> RoomMessageEventContentWithoutRelation? {
         await activeTimeline.messageEventContent(for: timelineItemID)
     }
+
+    func messageEventContent(for timelineItemID: TimelineItemIdentifier,
+                             using providerLease: TimelineProviderLease) async -> RoomMessageEventContentWithoutRelation? {
+        guard isProviderLeaseValid(providerLease) else { return nil }
+        let timeline = activeTimeline
+        let content = await timeline.messageEventContent(for: timelineItemID)
+        guard isProviderLeaseValid(providerLease) else { return nil }
+        return content
+    }
     
     /// Handle this parallel to the timeline items so we're not forced
     /// to bundle the Rust side objects within them
@@ -382,6 +453,14 @@ class TimelineController: TimelineControllerProtocol {
     }
     
     // MARK: - Private
+
+    private func canMutateProvider(using token: TimelineProviderMutationToken) -> Bool {
+        !isProviderMutationLocked && token.generation == providerMutationGeneration
+    }
+
+    private func isProviderLeaseValid(_ lease: TimelineProviderLease) -> Bool {
+        isProviderMutationLocked && activeProviderLease == lease && lease.providerGeneration == activeProviderGeneration
+    }
     
     /// The cancellable used to update the timeline items.
     private var updateTimelineItemsCancellable: AnyCancellable?
@@ -392,30 +471,37 @@ class TimelineController: TimelineControllerProtocol {
     /// - Parameter clearExistingItems: Whether or not to clear any existing items before loading the timeline's contents.
     private func configureActiveTimelineItemProvider() {
         updateTimelineItemsCancellable = nil
+        activeProviderGeneration &+= 1
+        let providerGeneration = activeProviderGeneration
+        let timeline = activeTimeline
+        let timelineItemProvider = activeTimelineItemProvider
         
         isSwitchingTimelines = true
         
         // Inform the world that the initial items are loading from the store
         paginationState = TimelinePaginationState(backward: .paginating, forward: .paginating)
-        callbacks.send(.isLive(activeTimelineItemProvider.kind == .live))
+        callbacks.send(.isLive(timelineItemProvider.kind == .live))
         
         let contentSizeChangePublisher = NotificationCenter.default.publisher(for: UIContentSizeCategory.didChangeNotification)
-        let timelineUpdates = activeTimelineItemProvider.updatePublisher.merge(with: contentSizeChangePublisher.compactMap { [weak self] _ in
-            guard let activeTimelineProvider = self?.activeTimelineItemProvider else {
-                return nil
-            }
-            
-            return (activeTimelineProvider.itemProxies, activeTimelineProvider.paginationState)
+        let timelineUpdates = timelineItemProvider.updatePublisher.merge(with: contentSizeChangePublisher.map { _ in
+            (timelineItemProvider.itemProxies, timelineItemProvider.paginationState)
         })
         
         updateTimelineItemsCancellable = Task { [weak self] in
             for await (items, paginationState) in timelineUpdates.values {
-                await self?.updateTimelineItems(itemProxies: items, paginationState: paginationState)
+                await self?.updateTimelineItems(itemProxies: items,
+                                                paginationState: paginationState,
+                                                timeline: timeline,
+                                                providerGeneration: providerGeneration)
             }
         }.asCancellable()
     }
     
-    private func updateTimelineItems(itemProxies: [TimelineItemProxy], paginationState: TimelinePaginationState) async {
+    private func updateTimelineItems(itemProxies: [TimelineItemProxy],
+                                     paginationState: TimelinePaginationState,
+                                     timeline: TimelineProxyProtocol,
+                                     providerGeneration: UInt) async {
+        guard providerGeneration == activeProviderGeneration else { return }
         let isNewTimeline = isSwitchingTimelines
         isSwitchingTimelines = false
         
@@ -423,7 +509,7 @@ class TimelineController: TimelineControllerProtocol {
         let displayName = roomProxy.infoPublisher.value.displayName
         let hasPredecessor = roomProxy.predecessorRoom != nil
         
-        var newTimelineItems = await Task.detached { [timelineItemFactory, activeTimeline] in
+        var newTimelineItems = await Task.detached { [timelineItemFactory] in
             var newTimelineItems = [RoomTimelineItemProtocol]()
             
             let collapsibleChunks = itemProxies.groupBy { $0.isItemCollapsible }
@@ -437,7 +523,7 @@ class TimelineController: TimelineControllerProtocol {
                                            hasPredecessor: hasPredecessor,
                                            roomDisplayName: displayName,
                                            timelineItemFactory: timelineItemFactory,
-                                           activeTimeline: activeTimeline)
+                                           activeTimeline: timeline)
                 }
                 
                 if items.isEmpty {
@@ -459,6 +545,8 @@ class TimelineController: TimelineControllerProtocol {
             
             return newTimelineItems
         }.value
+
+        guard providerGeneration == activeProviderGeneration else { return }
         
         // Check if we need to add anything to the top of the timeline.
         switch paginationState.backward {
@@ -476,8 +564,12 @@ class TimelineController: TimelineControllerProtocol {
         }
         
         timelineItems = newTimelineItems
+        timelineItemsProviderGeneration = providerGeneration
         
-        callbacks.send(.updatedTimelineItems(timelineItems: newTimelineItems, isSwitchingTimelines: isNewTimeline))
+        callbacks.send(.updatedTimelineItems(timelineItems: newTimelineItems,
+                                             isSwitchingTimelines: isNewTimeline,
+                                             providerGeneration: providerGeneration))
+        guard providerGeneration == activeProviderGeneration else { return }
         self.paginationState = paginationState
     }
     

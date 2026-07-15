@@ -166,7 +166,7 @@ enum TimelineItemMenuAction: Identifiable, Hashable {
         case .copyPermalink:
             Label(L10n.actionCopyLinkToMessage, icon: \.link)
         case .selectMessages:
-            Label("多选消息", icon: \.checkCircleSolid)
+            Label(UntranslatedL10n.actionSelectMessages, icon: \.checkCircleSolid)
         case .reply(let isThread):
             Label(isThread ? L10n.actionReplyInThread : L10n.actionReply, icon: \.reply)
         case .replyInThread:

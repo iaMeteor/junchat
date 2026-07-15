@@ -21,7 +21,7 @@ enum TimelineViewModelAction {
     case displayPollForm(mode: PollFormMode)
     case displayMediaUploadPreviewScreen(mediaURLs: [URL])
     case displaySenderDetails(userID: String)
-    case displayMessageForwarding(forwardingItem: MessageForwardingItem)
+    case displayMessageForwarding(forwardingBatch: MessageForwardingBatch)
     case displayMediaPreview(TimelineMediaPreviewViewModel)
     case displayLocation(StaticLocationData)
     case displayLiveLocation(sender: TimelineItemSender, initialLiveLocationShare: LiveLocationShare)
@@ -61,10 +61,10 @@ enum TimelineViewAction {
 
     case displayTimelineItemMenu(itemID: TimelineItemIdentifier)
     case handleTimelineItemMenuAction(itemID: TimelineItemIdentifier, action: TimelineItemMenuAction)
-    case toggleBulkRedactionSelection(itemID: TimelineItemIdentifier)
-    case cancelBulkRedactionSelection
-    case confirmBulkRedactionSelection
-    case forwardBulkRedactionSelection
+    case toggleMessageSelection(itemID: TimelineItemIdentifier)
+    case cancelMessageSelection
+    case confirmMessageRedaction
+    case forwardMessageSelection
 
     case tappedOnSenderDetails(sender: TimelineItemSender)
     case displayReactionSummary(itemID: TimelineItemIdentifier, key: String)
@@ -120,7 +120,7 @@ struct TimelineViewState: BindableState {
 
     var hideTimelineMedia: Bool
     var isEmergencyPrivacyModeEnabled = false
-    var bulkRedactionSelectionState = TimelineBulkRedactionSelectionState()
+    var messageSelectionState = TimelineMessageSelectionState()
 
     var isViewSourceEnabled: Bool
     var areThreadsEnabled: Bool

@@ -13,5 +13,6 @@ protocol MessageForwardingScreenViewModelProtocol {
     var actions: AnyPublisher<MessageForwardingScreenViewModelAction, Never> { get }
     var context: MessageForwardingScreenViewModelType.Context { get }
     
+    func confirmForwardingCompleted()
     func stop()
 }

@@ -19,7 +19,7 @@ enum RoomScreenViewModelAction: Equatable {
     case removeComposerFocus
     case displayKnockRequests
     case displayRoom(roomID: String, via: [String])
-    case displayMessageForwarding(MessageForwardingItem)
+    case displayMessageForwarding(MessageForwardingBatch)
     case stopLiveLocationSharing
     case displayLiveLocation
 }
@@ -75,6 +75,7 @@ struct RoomScreenViewState: BindableState {
     var shouldShowActiveCallInvitation: Bool {
         isCallingEnabled && canJoinCall && hasOngoingCall && !isParticipatingInOngoingCall && !hasDismissedActiveCallInvitation
     }
+
     var shouldShowCallButton: Bool {
         isCallingEnabled && !hasOngoingCall && !isParticipatingInOngoingCall
     }

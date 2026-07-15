@@ -113,7 +113,7 @@ struct TimelineItemMenuActionProvider {
             secondaryActions.append(.report)
         }
 
-        if canRedactItem(item) || item.isForwardable {
+        if !timelineKind.isThread, canRedactItem(item) || item.isForwardable {
             secondaryActions.append(.selectMessages)
         }
 

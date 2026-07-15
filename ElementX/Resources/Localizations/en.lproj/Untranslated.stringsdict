@@ -2,6 +2,54 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>screen_message_forwarding_cancelled_partial</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@VARIABLE@</string>
+		<key>VARIABLE</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>one</key>
+			<string>Forwarding stopped. %d message was already sent or couldn't be cancelled.</string>
+			<key>other</key>
+			<string>Forwarding stopped. %d messages were already sent or couldn't be cancelled.</string>
+		</dict>
+	</dict>
+	<key>screen_room_message_selection_delete_confirmation</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@VARIABLE@</string>
+		<key>VARIABLE</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>one</key>
+			<string>Delete the selected message? Room members will no longer see its original content.</string>
+			<key>other</key>
+			<string>Delete the %d selected messages? Room members will no longer see their original content.</string>
+		</dict>
+	</dict>
+	<key>screen_room_message_selection_selected_count</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@VARIABLE@</string>
+		<key>VARIABLE</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>d</string>
+			<key>one</key>
+			<string>1 message selected</string>
+			<key>other</key>
+			<string>%d messages selected</string>
+		</dict>
+	</dict>
 	<key>untranslated_plural</key>
 	<dict>
 		<key>NSStringLocalizedFormatKey</key>

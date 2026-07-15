@@ -419,18 +419,17 @@ final class TimelineProxy: TimelineProxyProtocol {
         return .success(())
     }
     
-    func sendMessageEventContent(_ messageContent: RoomMessageEventContentWithoutRelation) async -> Result<Void, TimelineProxyError> {
-        MXLog.info("Sending message content")
+    func queueMessageEventContent(_ messageContent: RoomMessageEventContentWithoutRelation) async -> Result<SendHandle, TimelineProxyError> {
+        MXLog.info("Adding message content to the send queue")
         
         do {
-            _ = try await timeline.send(msg: messageContent)
+            let sendHandle = try await timeline.send(msg: messageContent)
+            MXLog.info("Added message content to the send queue")
+            return .success(sendHandle)
         } catch {
-            MXLog.error("Failed sending message with error: \(error)")
+            MXLog.error("Failed adding message content to the send queue with error: \(error)")
+            return .failure(.sdkError(error))
         }
-        
-        MXLog.info("Finished sending message content")
-        
-        return .success(())
     }
     
     func sendReadReceipt(for eventID: String, type: ReceiptType) async -> Result<Void, TimelineProxyError> {
@@ -630,7 +629,7 @@ extension Array where Element == TimelineItemProxy {
     func firstEventTimelineItemUsingStableID(_ id: TimelineItemIdentifier) -> EventTimelineItem? {
         for item in self {
             if case let .event(eventTimelineItem) = item {
-                if eventTimelineItem.id.uniqueID == id.uniqueID {
+                if eventTimelineItem.id == id {
                     return eventTimelineItem.item
                 }
             }

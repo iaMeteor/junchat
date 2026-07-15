@@ -10,7 +10,7 @@ import Combine
 import SwiftUI
 
 struct MessageForwardingScreenCoordinatorParameters {
-    let forwardingItem: MessageForwardingItem
+    let forwardingBatch: MessageForwardingBatch
     let userSession: UserSessionProtocol
     let roomSummaryProvider: RoomSummaryProviderProtocol
     let userIndicatorController: UserIndicatorControllerProtocol
@@ -18,7 +18,7 @@ struct MessageForwardingScreenCoordinatorParameters {
 
 enum MessageForwardingScreenCoordinatorAction {
     case dismiss
-    case sent(roomID: String)
+    case queued(roomID: String)
 }
 
 final class MessageForwardingScreenCoordinator: CoordinatorProtocol {
@@ -31,10 +31,14 @@ final class MessageForwardingScreenCoordinator: CoordinatorProtocol {
     }
     
     init(parameters: MessageForwardingScreenCoordinatorParameters) {
-        viewModel = MessageForwardingScreenViewModel(forwardingItem: parameters.forwardingItem,
+        viewModel = MessageForwardingScreenViewModel(forwardingBatch: parameters.forwardingBatch,
                                                      userSession: parameters.userSession,
                                                      roomSummaryProvider: parameters.roomSummaryProvider,
                                                      userIndicatorController: parameters.userIndicatorController)
+    }
+
+    init(viewModel: MessageForwardingScreenViewModelProtocol) {
+        self.viewModel = viewModel
     }
     
     func start() {
@@ -42,8 +46,8 @@ final class MessageForwardingScreenCoordinator: CoordinatorProtocol {
             switch action {
             case .dismiss:
                 self?.actionsSubject.send(.dismiss)
-            case .sent(let roomID):
-                self?.actionsSubject.send(.sent(roomID: roomID))
+            case .queued(let roomID):
+                self?.actionsSubject.send(.queued(roomID: roomID))
             }
         }
         .store(in: &cancellables)
@@ -55,5 +59,9 @@ final class MessageForwardingScreenCoordinator: CoordinatorProtocol {
     
     func stop() {
         viewModel.stop()
+    }
+
+    func confirmForwardingCompleted() {
+        viewModel.confirmForwardingCompleted()
     }
 }

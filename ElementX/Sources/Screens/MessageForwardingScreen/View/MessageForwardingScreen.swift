@@ -19,6 +19,7 @@ struct MessageForwardingScreen: View {
                     MessageForwardingListRow(room: room,
                                              isSelected: context.viewState.selectedRoomID == room.id,
                                              context: context)
+                        .disabled(context.viewState.isDestinationLocked || context.viewState.forwardingProgress?.isBusy == true)
                 }
                 // Replace these with ScrollView's `scrollPosition` when dropping iOS 16.
             } header: {
@@ -32,6 +33,24 @@ struct MessageForwardingScreen: View {
                         context.send(viewAction: .reachedBottom)
                     }
             }
+
+            if let progress = context.viewState.forwardingProgress {
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            if progress.isBusy {
+                                ProgressView()
+                            }
+                            Text(progress.statusTitle)
+                                .foregroundStyle(progress.showsFailure || progress.unknownCount > 0 ? Color.compound.textCriticalPrimary : Color.compound.textPrimary)
+                        }
+
+                        let resolvedCount = progress.queuedCount + progress.unknownCount
+                        ProgressView(value: Double(resolvedCount), total: Double(progress.totalCount))
+                            .accessibilityValue(UntranslatedL10n.screenMessageForwardingProgressAccessibilityValue(resolvedCount, progress.totalCount))
+                    }
+                }
+            }
         }
         .compoundList()
         .navigationTitle(L10n.commonForwardMessage)
@@ -41,17 +60,32 @@ struct MessageForwardingScreen: View {
                 Button(L10n.actionCancel) {
                     context.send(viewAction: .cancel)
                 }
+                .disabled(context.viewState.forwardingProgress?.isCancelling == true)
             }
             ToolbarItem(placement: .confirmationAction) {
-                Button(L10n.actionSend) {
+                Button(context.viewState.forwardingProgress?.sendButtonTitle ?? L10n.actionSend) {
                     context.send(viewAction: .send)
                 }
-                .disabled(context.viewState.selectedRoomID == nil)
+                .disabled(!context.viewState.canSend)
             }
         }
         .searchController(query: $context.searchQuery, showsCancelButton: false)
         .compoundSearchField()
         .disableAutocorrection(true)
+        .alert(UntranslatedL10n.screenMessageForwardingResolutionTitle,
+               isPresented: $context.isUnknownOutcomeResolutionPresented) {
+            Button(UntranslatedL10n.screenMessageForwardingContinueWithoutResending) {
+                context.send(viewAction: .continueWithoutResending)
+            }
+            Button(UntranslatedL10n.screenMessageForwardingSendAgain, role: .destructive) {
+                context.send(viewAction: .sendUnknownAgain)
+            }
+            Button(L10n.actionCancel, role: .cancel) {
+                context.send(viewAction: .cancelUnknownOutcomeResolution)
+            }
+        } message: {
+            Text(UntranslatedL10n.screenMessageForwardingResolutionMessage)
+        }
     }
     
     /// The greedy size of Rectangle can create an issue with the navigation bar when the search is highlighted, so is best to use a fixed frame instead of hidden() or EmptyView()
@@ -93,17 +127,54 @@ private struct MessageForwardingListRow: View {
 // MARK: - Previews
 
 struct MessageForwardingScreen_Previews: PreviewProvider, TestablePreview {
+    static let initialViewModel = makeViewModel()
+    static let queueingViewModel = makeViewModel(selectedRoomID: "2",
+                                                 progress: .init(totalCount: 3, queuedCount: 1, failedCount: 1, isQueueing: true))
+    static let partiallyFailedViewModel = makeViewModel(selectedRoomID: "2",
+                                                        progress: .init(totalCount: 3, queuedCount: 2, failedCount: 1, isQueueing: false))
+    static let fullyFailedViewModel = makeViewModel(selectedRoomID: "2",
+                                                    progress: .init(totalCount: 3, queuedCount: 0, failedCount: 3, isQueueing: false))
+    static let unknownOutcomeViewModel = makeViewModel(selectedRoomID: "2",
+                                                       progress: .init(totalCount: 3, queuedCount: 1, failedCount: 0, unknownCount: 2, isQueueing: false))
+
     static var previews: some View {
+        ElementNavigationStack {
+            MessageForwardingScreen(context: initialViewModel.context)
+        }
+        .previewDisplayName("Initial")
+
+        ElementNavigationStack {
+            MessageForwardingScreen(context: queueingViewModel.context)
+        }
+        .previewDisplayName("Queueing with an earlier failure")
+
+        ElementNavigationStack {
+            MessageForwardingScreen(context: partiallyFailedViewModel.context)
+        }
+        .previewDisplayName("Partially failed and locked")
+
+        ElementNavigationStack {
+            MessageForwardingScreen(context: fullyFailedViewModel.context)
+        }
+        .previewDisplayName("Fully failed and unlocked")
+
+        ElementNavigationStack {
+            MessageForwardingScreen(context: unknownOutcomeViewModel.context)
+        }
+        .previewDisplayName("Unknown outcome")
+    }
+
+    static func makeViewModel(selectedRoomID: String? = nil,
+                              progress: MessageForwardingProgress? = nil) -> MessageForwardingScreenViewModel {
         let summaryProvider = RoomSummaryProviderMock(.init(state: .loaded(.mockRooms)))
-        let viewModel = MessageForwardingScreenViewModel(forwardingItem: .init(id: .randomEvent,
-                                                                               roomID: "",
-                                                                               content: .init(noHandle: .init())),
+        let viewModel = MessageForwardingScreenViewModel(forwardingBatch: .init(firstItem: .init(id: .randomEvent,
+                                                                                                 roomID: "",
+                                                                                                 content: .init(noHandle: .init()))),
                                                          userSession: UserSessionMock(.init()),
                                                          roomSummaryProvider: summaryProvider,
                                                          userIndicatorController: UserIndicatorControllerMock())
-        
-        ElementNavigationStack {
-            MessageForwardingScreen(context: viewModel.context)
-        }
+        viewModel.state.selectedRoomID = selectedRoomID
+        viewModel.state.forwardingProgress = progress
+        return viewModel
     }
 }

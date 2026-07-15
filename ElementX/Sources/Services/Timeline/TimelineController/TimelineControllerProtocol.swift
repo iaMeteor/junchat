@@ -11,7 +11,9 @@ import MatrixRustSDK
 import SwiftUI
 
 enum TimelineControllerCallback {
-    case updatedTimelineItems(timelineItems: [RoomTimelineItemProtocol], isSwitchingTimelines: Bool)
+    case updatedTimelineItems(timelineItems: [RoomTimelineItemProtocol],
+                              isSwitchingTimelines: Bool,
+                              providerGeneration: UInt)
     case paginationState(TimelinePaginationState)
     case isLive(Bool)
 }
@@ -33,7 +35,17 @@ enum TimelineControllerAction {
 enum TimelineControllerError: Error {
     case generic
     case eventNotFound
+    case providerMutationInvalidated
     case timelineProxyError(TimelineProxyError)
+}
+
+struct TimelineProviderMutationToken: Equatable {
+    let generation: UInt
+}
+
+struct TimelineProviderLease: Equatable {
+    let mutationGeneration: UInt
+    let providerGeneration: UInt
 }
 
 /// This protocol is a high level abstraction on top of the ``TimelineProxyProtocol``
@@ -48,18 +60,29 @@ protocol TimelineControllerProtocol {
     
     /// The currently known items, use only for setting up the intial state.
     var timelineItems: [RoomTimelineItemProtocol] { get }
+    var timelineItemsProviderGeneration: UInt { get }
+    var activeProviderGeneration: UInt { get }
     
     /// The current pagination state, use only for setting up the intial state
     var paginationState: TimelinePaginationState { get }
     
     var callbacks: PassthroughSubject<TimelineControllerCallback, Never> { get }
+
+    func providerMutationToken() -> TimelineProviderMutationToken?
+    func isProviderMutationTokenValid(_ token: TimelineProviderMutationToken) -> Bool
+    func setProviderMutationLocked(_ isLocked: Bool)
+    func acquireProviderLease() -> TimelineProviderLease?
+    func releaseProviderLease(_ lease: TimelineProviderLease)
     
     func processItemAppearance(_ itemID: TimelineItemIdentifier) async
     
     func processItemDisappearance(_ itemID: TimelineItemIdentifier) async
     
-    func focusOnEvent(_ eventID: String, timelineSize: UInt16) async -> Result<Void, TimelineControllerError>
-    func focusLive()
+    func focusOnEvent(_ eventID: String,
+                      timelineSize: UInt16,
+                      using providerMutationToken: TimelineProviderMutationToken) async -> Result<Void, TimelineControllerError>
+    @discardableResult
+    func focusLive(using providerMutationToken: TimelineProviderMutationToken) -> Bool
     
     func paginateBackwards(requestSize: UInt16) async -> Result<Void, TimelineControllerError>
     func paginateForwards(requestSize: UInt16) async -> Result<Void, TimelineControllerError>
@@ -87,6 +110,8 @@ protocol TimelineControllerProtocol {
     func unpin(eventID: String) async
     
     func messageEventContent(for itemID: TimelineItemIdentifier) async -> RoomMessageEventContentWithoutRelation?
+    func messageEventContent(for itemID: TimelineItemIdentifier,
+                             using providerLease: TimelineProviderLease) async -> RoomMessageEventContentWithoutRelation?
     
     func debugInfo(for itemID: TimelineItemIdentifier) -> TimelineItemDebugInfo
     

@@ -55,6 +55,14 @@ struct PreviewTests {
         }
     }
     
+    @Test
+    func messageSelectionCountResolvesPluralArgument() {
+        let selectedCount = UntranslatedL10n.screenRoomMessageSelectionSelectedCount(1)
+
+        #expect(!selectedCount.contains("#@VARIABLE@"))
+        #expect(selectedCount.contains("1"))
+    }
+
     // MARK: - Snapshots
 
     func assertSnapshots(matching preview: _Preview,
@@ -126,7 +134,8 @@ struct PreviewTests {
     }
 
     private var languageCode: String {
-        Locale.current.language.languageCode?.identifier ?? ""
+        guard let preferredLanguage = Locale.preferredLanguages.first else { return "" }
+        return Locale(identifier: preferredLanguage).language.languageCode?.identifier ?? ""
     }
 
     private var regionCode: String {

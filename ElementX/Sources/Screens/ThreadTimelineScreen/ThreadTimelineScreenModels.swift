@@ -9,7 +9,7 @@
 import Foundation
 
 enum ThreadTimelineScreenViewModelAction {
-    case displayMessageForwarding(MessageForwardingItem)
+    case displayMessageForwarding(MessageForwardingBatch)
 }
 
 struct ThreadTimelineScreenViewState: BindableState {

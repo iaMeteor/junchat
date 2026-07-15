@@ -432,8 +432,8 @@ class RoomFlowCoordinator: FlowCoordinatorProtocol {
                                    timelineController: timelineController,
                                    animated: animated)
                 
-            case (_, .presentMessageForwarding(let forwardingItem), .messageForwarding):
-                presentMessageForwarding(with: forwardingItem)
+            case (_, .presentMessageForwarding(let forwardingBatch), .messageForwarding):
+                presentMessageForwarding(with: forwardingBatch)
 
             case (_, .presentMapNavigator(let mode), .mapNavigator):
                 guard let timelineController = (context.userInfo as? EventUserInfo)?.timelineController else {
@@ -718,8 +718,8 @@ class RoomFlowCoordinator: FlowCoordinatorProtocol {
                                           userInfo: EventUserInfo(animated: animated, timelineController: timelineController))
                 case .presentRoomMemberDetails(userID: let userID):
                     stateMachine.tryEvent(.startMembersFlow(entryPoint: .roomMember(userID: userID)))
-                case .presentMessageForwarding(let forwardingItem):
-                    stateMachine.tryEvent(.presentMessageForwarding(forwardingItem: forwardingItem))
+                case .presentMessageForwarding(let forwardingBatch):
+                    stateMachine.tryEvent(.presentMessageForwarding(forwardingBatch: forwardingBatch))
                 case .presentCallScreen(let isVoiceCall):
                     actionsSubject.send(.presentCallScreen(roomProxy: roomProxy, isVoiceCall: isVoiceCall))
                 case .presentPinnedEventsTimeline:
@@ -830,8 +830,8 @@ class RoomFlowCoordinator: FlowCoordinatorProtocol {
                                       userInfo: EventUserInfo(animated: animated, timelineController: timelineController))
             case .presentRoomMemberDetails(let userID):
                 stateMachine.tryEvent(.startMembersFlow(entryPoint: .roomMember(userID: userID)))
-            case .presentMessageForwarding(let forwardingItem):
-                stateMachine.tryEvent(.presentMessageForwarding(forwardingItem: forwardingItem))
+            case .presentMessageForwarding(let forwardingBatch):
+                stateMachine.tryEvent(.presentMessageForwarding(forwardingBatch: forwardingBatch))
             case .presentResolveSendFailure(let failure, let sendHandle):
                 stateMachine.tryEvent(.presentResolveSendFailure(failure: failure,
                                                                  sendHandle: sendHandle))
@@ -1252,27 +1252,31 @@ class RoomFlowCoordinator: FlowCoordinatorProtocol {
         }
     }
     
-    private func presentMessageForwarding(with forwardingItem: MessageForwardingItem) {
+    private func presentMessageForwarding(with forwardingBatch: MessageForwardingBatch) {
         let roomSummaryProvider = userSession.clientProxy.alternateRoomSummaryProvider
         
         let stackCoordinator = NavigationStackCoordinator()
         
-        let parameters = MessageForwardingScreenCoordinatorParameters(forwardingItem: forwardingItem,
+        let parameters = MessageForwardingScreenCoordinatorParameters(forwardingBatch: forwardingBatch,
                                                                       userSession: userSession,
                                                                       roomSummaryProvider: roomSummaryProvider,
                                                                       userIndicatorController: flowParameters.userIndicatorController)
         let coordinator = MessageForwardingScreenCoordinator(parameters: parameters)
         
-        coordinator.actions.sink { [weak self] action in
+        coordinator.actions.sink { [weak self, weak coordinator] action in
             guard let self else { return }
             
             switch action {
             case .dismiss:
                 navigationStackCoordinator.setSheetCoordinator(nil)
-            case .sent(let roomID):
-                navigationStackCoordinator.setSheetCoordinator(nil)
+            case .queued(let roomID):
                 // Timelines are cached - the local echo will be visible when fetching the room by its ID.
-                stateMachine.tryEvent(.startChildFlow(roomID: roomID, via: [], entryPoint: .room))
+                guard stateMachine.tryEvent(.dismissMessageForwarding),
+                      stateMachine.tryEvent(.startChildFlow(roomID: roomID, via: [], entryPoint: .room)) else {
+                    return
+                }
+                coordinator?.confirmForwardingCompleted()
+                navigationStackCoordinator.setSheetCoordinator(nil)
             }
         }
         .store(in: &cancellables)
@@ -1600,8 +1604,8 @@ class RoomFlowCoordinator: FlowCoordinatorProtocol {
                                       userInfo: EventUserInfo(animated: false)) // No animation so the timeline visible when the preview animates away.
             case .finished:
                 stateMachine.tryEvent(.dismissMediaEventsTimeline)
-            case .displayMessageForwarding(let forwardingItem):
-                stateMachine.tryEvent(.presentMessageForwarding(forwardingItem: forwardingItem))
+            case .displayMessageForwarding(let forwardingBatch):
+                stateMachine.tryEvent(.presentMessageForwarding(forwardingBatch: forwardingBatch))
             }
         }
         .store(in: &cancellables)

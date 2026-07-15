@@ -11,22 +11,103 @@ import MatrixRustSDK
 
 enum MessageForwardingScreenViewModelAction {
     case dismiss
-    case sent(roomID: String)
+    case queued(roomID: String)
 }
 
 struct MessageForwardingScreenViewState: BindableState {
     var rooms: [MessageForwardingRoom] = []
     var selectedRoomID: String?
+    var forwardingProgress: MessageForwardingProgress?
     var bindings = MessageForwardingScreenViewStateBindings()
+
+    var isDestinationLocked: Bool {
+        guard let forwardingProgress else { return false }
+        return forwardingProgress.queuedCount + forwardingProgress.unknownCount > 0
+    }
+
+    var canSend: Bool {
+        guard selectedRoomID != nil, forwardingProgress?.isBusy != true else {
+            return false
+        }
+
+        guard let forwardingProgress else {
+            return true
+        }
+
+        return forwardingProgress.queuedCount < forwardingProgress.totalCount
+    }
+}
+
+struct MessageForwardingProgress: Equatable {
+    let totalCount: Int
+    let queuedCount: Int
+    let failedCount: Int
+    let unknownCount: Int
+    let isQueueing: Bool
+    let isCancelling: Bool
+
+    init(totalCount: Int,
+         queuedCount: Int,
+         failedCount: Int,
+         unknownCount: Int = 0,
+         isQueueing: Bool,
+         isCancelling: Bool = false) {
+        self.totalCount = totalCount
+        self.queuedCount = queuedCount
+        self.failedCount = failedCount
+        self.unknownCount = unknownCount
+        self.isQueueing = isQueueing
+        self.isCancelling = isCancelling
+    }
+
+    var isBusy: Bool {
+        isQueueing || isCancelling
+    }
+
+    var statusTitle: String {
+        if isCancelling {
+            UntranslatedL10n.screenMessageForwardingCancelling
+        } else if isQueueing {
+            UntranslatedL10n.screenMessageForwardingAddingToSendQueue
+        } else if unknownCount > 0 {
+            UntranslatedL10n.screenMessageForwardingOutcomeUnknown
+        } else if failedCount > 0 {
+            UntranslatedL10n.screenMessageForwardingQueueFailed
+        } else {
+            UntranslatedL10n.screenMessageForwardingAddedToSendQueue
+        }
+    }
+
+    var sendButtonTitle: String {
+        if isCancelling {
+            UntranslatedL10n.screenMessageForwardingCancelling
+        } else if isQueueing {
+            UntranslatedL10n.screenMessageForwardingAdding
+        } else if unknownCount > 0 {
+            UntranslatedL10n.screenMessageForwardingReview
+        } else if failedCount > 0 {
+            L10n.actionRetry
+        } else {
+            L10n.actionSend
+        }
+    }
+
+    var showsFailure: Bool {
+        !isBusy && failedCount > 0
+    }
 }
 
 struct MessageForwardingScreenViewStateBindings {
     var searchQuery = ""
+    var isUnknownOutcomeResolutionPresented = false
 }
 
 enum MessageForwardingScreenViewAction {
     case cancel
+    case cancelUnknownOutcomeResolution
+    case continueWithoutResending
     case send
+    case sendUnknownAgain
     case selectRoom(roomID: String)
     case reachedTop
     case reachedBottom
@@ -46,35 +127,28 @@ struct MessageForwardingItem: Hashable {
     let roomID: String
     /// The item's content to be forwarded.
     let content: RoomMessageEventContentWithoutRelation
-    /// Additional items forwarded in the same operation.
-    private let additionalItems: [MessageForwardingItem]
-
-    init(id: TimelineItemIdentifier,
-         roomID: String,
-         content: RoomMessageEventContentWithoutRelation,
-         additionalItems: [MessageForwardingItem] = []) {
-        self.id = id
-        self.roomID = roomID
-        self.content = content
-        self.additionalItems = additionalItems
-    }
-
-    var forwardingItems: [MessageForwardingItem] {
-        let singleItem = MessageForwardingItem(id: id, roomID: roomID, content: content)
-        return [singleItem] + additionalItems.flatMap(\.forwardingItems)
-    }
-
-    func addingForwardingItems(_ items: [MessageForwardingItem]) -> MessageForwardingItem {
-        MessageForwardingItem(id: id, roomID: roomID, content: content, additionalItems: additionalItems + items)
-    }
 
     static func == (lhs: MessageForwardingItem, rhs: MessageForwardingItem) -> Bool {
-        lhs.id == rhs.id && lhs.roomID == rhs.roomID && lhs.additionalItems == rhs.additionalItems
+        lhs.id == rhs.id && lhs.roomID == rhs.roomID
     }
 
     func hash(into hasher: inout Hasher) {
         hasher.combine(id)
         hasher.combine(roomID)
-        hasher.combine(additionalItems)
+    }
+}
+
+struct MessageForwardingBatch: Hashable {
+    static let maximumItemCount = 150
+
+    let items: [MessageForwardingItem]
+
+    init(firstItem: MessageForwardingItem) {
+        items = [firstItem]
+    }
+
+    init?(firstItem: MessageForwardingItem, remainingItems: [MessageForwardingItem]) {
+        guard remainingItems.count < Self.maximumItemCount else { return nil }
+        items = [firstItem] + remainingItems
     }
 }

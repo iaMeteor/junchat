@@ -70,7 +70,7 @@ extension RoomFlowCoordinator {
         case mediaUploadPreview(mediaURLs: [URL], previousState: State)
         case emojiPicker(itemID: TimelineItemIdentifier, selectedEmojis: Set<String>, previousState: State)
         case mapNavigator(previousState: State)
-        case messageForwarding(forwardingItem: MessageForwardingItem, previousState: State)
+        case messageForwarding(forwardingBatch: MessageForwardingBatch, previousState: State)
         case reportContent(itemID: TimelineItemIdentifier, senderID: String, previousState: State)
         case pollForm(previousState: State)
         case pollsHistory
@@ -151,7 +151,7 @@ extension RoomFlowCoordinator {
         case presentMapNavigator(interactionMode: LocationSharingInteractionMode)
         case dismissMapNavigator
         
-        case presentMessageForwarding(forwardingItem: MessageForwardingItem)
+        case presentMessageForwarding(forwardingBatch: MessageForwardingBatch)
         case dismissMessageForwarding
 
         case presentPollForm(mode: PollFormMode)
@@ -219,10 +219,10 @@ extension RoomFlowCoordinator {
             case (.room, .presentEmojiPicker(let itemID, let selectedEmoji)):
                 return .emojiPicker(itemID: itemID, selectedEmojis: selectedEmoji, previousState: fromState)
             
-            case (.room, .presentMessageForwarding(let forwardingItem)):
-                return .messageForwarding(forwardingItem: forwardingItem, previousState: fromState)
-            case (.mediaEventsTimeline, .presentMessageForwarding(forwardingItem: let forwardingItem)):
-                return .messageForwarding(forwardingItem: forwardingItem, previousState: fromState)
+            case (.room, .presentMessageForwarding(let forwardingBatch)):
+                return .messageForwarding(forwardingBatch: forwardingBatch, previousState: fromState)
+            case (.mediaEventsTimeline, .presentMessageForwarding(forwardingBatch: let forwardingBatch)):
+                return .messageForwarding(forwardingBatch: forwardingBatch, previousState: fromState)
 
             case (.room, .presentMapNavigator(_)):
                 return .mapNavigator(previousState: fromState)
@@ -268,8 +268,8 @@ extension RoomFlowCoordinator {
             case (.thread, .presentEmojiPicker(let itemID, let selectedEmoji)):
                 return .emojiPicker(itemID: itemID, selectedEmojis: selectedEmoji, previousState: fromState)
             
-            case (.thread, .presentMessageForwarding(let forwardingItem)):
-                return .messageForwarding(forwardingItem: forwardingItem, previousState: fromState)
+            case (.thread, .presentMessageForwarding(let forwardingBatch)):
+                return .messageForwarding(forwardingBatch: forwardingBatch, previousState: fromState)
 
             case (.thread, .presentMapNavigator(_)):
                 return .mapNavigator(previousState: fromState)

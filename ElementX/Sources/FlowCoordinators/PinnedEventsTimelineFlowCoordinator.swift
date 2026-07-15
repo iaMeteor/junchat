@@ -20,6 +20,7 @@ class PinnedEventsTimelineFlowCoordinator: FlowCoordinatorProtocol {
     private let roomProxy: JoinedRoomProxyProtocol
     private let navigationStackCoordinator: NavigationStackCoordinator
     private let flowParameters: CommonFlowParameters
+    private let messageForwardingCoordinatorFactory: @MainActor (MessageForwardingScreenCoordinatorParameters) -> MessageForwardingScreenCoordinator
     
     private var userSession: UserSessionProtocol {
         flowParameters.userSession
@@ -34,10 +35,12 @@ class PinnedEventsTimelineFlowCoordinator: FlowCoordinatorProtocol {
     
     init(roomProxy: JoinedRoomProxyProtocol,
          navigationStackCoordinator: NavigationStackCoordinator,
-         flowParameters: CommonFlowParameters) {
+         flowParameters: CommonFlowParameters,
+         messageForwardingCoordinatorFactory: @escaping @MainActor (MessageForwardingScreenCoordinatorParameters) -> MessageForwardingScreenCoordinator = MessageForwardingScreenCoordinator.init) {
         self.roomProxy = roomProxy
         self.navigationStackCoordinator = navigationStackCoordinator
         self.flowParameters = flowParameters
+        self.messageForwardingCoordinatorFactory = messageForwardingCoordinatorFactory
     }
     
     func start(animated: Bool) {
@@ -91,8 +94,8 @@ class PinnedEventsTimelineFlowCoordinator: FlowCoordinatorProtocol {
                 case .presentLiveLocationViewer(let sender, let initialLiveLocationShare):
                     presentMapNavigator(interactionMode: .viewLive(sender: sender, initialLiveLocationShare: initialLiveLocationShare),
                                         timelineController: timelineController)
-                case .displayMessageForwarding(let forwardingItem):
-                    presentMessageForwarding(with: forwardingItem)
+                case .displayMessageForwarding(let forwardingBatch):
+                    presentMessageForwarding(with: forwardingBatch)
                 case .displayRoomScreenWithFocussedPin(let eventID, let threadRootEventID):
                     actionsSubject.send(.displayRoomScreenWithFocussedPin(eventID: eventID, threadRootEventID: threadRootEventID))
                 }
@@ -131,26 +134,27 @@ class PinnedEventsTimelineFlowCoordinator: FlowCoordinatorProtocol {
         navigationStackCoordinator.setSheetCoordinator(stackCoordinator)
     }
     
-    private func presentMessageForwarding(with forwardingItem: MessageForwardingItem) {
+    func presentMessageForwarding(with forwardingBatch: MessageForwardingBatch) {
         let roomSummaryProvider = userSession.clientProxy.alternateRoomSummaryProvider
         
         let stackCoordinator = NavigationStackCoordinator()
         
-        let parameters = MessageForwardingScreenCoordinatorParameters(forwardingItem: forwardingItem,
+        let parameters = MessageForwardingScreenCoordinatorParameters(forwardingBatch: forwardingBatch,
                                                                       userSession: userSession,
                                                                       roomSummaryProvider: roomSummaryProvider,
                                                                       userIndicatorController: flowParameters.userIndicatorController)
-        let coordinator = MessageForwardingScreenCoordinator(parameters: parameters)
+        let coordinator = messageForwardingCoordinatorFactory(parameters)
         
-        coordinator.actions.sink { [weak self] action in
+        coordinator.actions.sink { [weak self, weak coordinator] action in
             guard let self else { return }
             
             switch action {
             case .dismiss:
                 navigationStackCoordinator.setSheetCoordinator(nil)
-            case .sent(let roomID):
-                navigationStackCoordinator.setSheetCoordinator(nil)
+            case .queued(let roomID):
+                coordinator?.confirmForwardingCompleted()
                 actionsSubject.send(.forwardedMessageToRoom(roomID: roomID))
+                navigationStackCoordinator.setSheetCoordinator(nil)
             }
         }
         .store(in: &cancellables)

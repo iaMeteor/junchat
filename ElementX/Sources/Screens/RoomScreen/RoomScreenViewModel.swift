@@ -157,11 +157,11 @@ class RoomScreenViewModel: RoomScreenViewModelType, RoomScreenViewModelProtocol 
             switch action {
             case .dismiss:
                 state.bindings.mediaPreviewViewModel = nil
-            case .displayMessageForwarding(let forwardingItem):
+            case .displayMessageForwarding(let forwardingBatch):
                 state.bindings.mediaPreviewViewModel = nil
                 // We need a small delay because we need to wait for the media preview to be fully dismissed.
                 DispatchQueue.main.asyncAfter(deadline: .now() + TimelineMediaPreviewViewModel.displayMessageForwardingDelay) {
-                    self.actionsSubject.send(.displayMessageForwarding(forwardingItem))
+                    self.actionsSubject.send(.displayMessageForwarding(forwardingBatch))
                 }
             case .viewInRoomTimeline:
                 fatalError("\(action) should not be visible on a room preview.")
@@ -368,7 +368,7 @@ class RoomScreenViewModel: RoomScreenViewModelType, RoomScreenViewModelProtocol 
         state.activeRoomCallIntent = roomInfo.activeRoomCallIntent
         state.hasSuccessor = roomInfo.successor != nil
 
-        if hadOngoingCall && !roomHasJoinableCall {
+        if hadOngoingCall, !roomHasJoinableCall {
             state.hasDismissedActiveCallInvitation = false
         }
 

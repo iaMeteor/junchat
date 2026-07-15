@@ -26,6 +26,8 @@ class TimelineMediaPreviewViewModel: TimelineMediaPreviewViewModelType {
     var actions: AnyPublisher<TimelineMediaPreviewViewModelAction, Never> {
         actionsSubject.eraseToAnyPublisher()
     }
+
+    private var prepareMessageForwardingTask: Task<Void, Never>?
     
     init(initialItem: EventBasedMessageTimelineItemProtocol,
          timelineViewModel: TimelineViewModelProtocol,
@@ -60,6 +62,7 @@ class TimelineMediaPreviewViewModel: TimelineMediaPreviewViewModelType {
         timelineViewModel.context.$viewState.map(\.timelineState.itemViewStates)
             .removeDuplicates()
             .sink { [weak self] itemViewStates in
+                self?.cancelMessageForwardingPreparation()
                 self?.state.dataSource.updatePreviewItems(itemViewStates: itemViewStates)
             }
             .store(in: &cancellables)
@@ -90,7 +93,7 @@ class TimelineMediaPreviewViewModel: TimelineMediaPreviewViewModelType {
             case .redact:
                 state.bindings.redactConfirmationItem = item
             case .forward(let itemID):
-                Task { await forwardItem(itemID: itemID) }
+                forwardItem(itemID: itemID)
             default:
                 MXLog.error("Received unexpected action: \(action)")
             }
@@ -100,11 +103,28 @@ class TimelineMediaPreviewViewModel: TimelineMediaPreviewViewModelType {
             showTimelineEndIndicator()
         }
     }
+
+    isolated deinit {
+        prepareMessageForwardingTask?.cancel()
+    }
     
-    private func forwardItem(itemID: TimelineItemIdentifier) async {
-        guard let forwardingItem = await timelineViewModel.makeForwardingItem(for: itemID) else { return }
-        state.previewControllerDriver.send(.dismissDetailsSheet)
-        actionsSubject.send(.displayMessageForwarding(forwardingItem))
+    private func forwardItem(itemID: TimelineItemIdentifier) {
+        cancelMessageForwardingPreparation()
+        prepareMessageForwardingTask = Task { [weak self] in
+            guard let self,
+                  let forwardingItem = await timelineViewModel.makeForwardingItem(for: itemID),
+                  !Task.isCancelled else {
+                return
+            }
+            prepareMessageForwardingTask = nil
+            state.previewControllerDriver.send(.dismissDetailsSheet)
+            actionsSubject.send(.displayMessageForwarding(.init(firstItem: forwardingItem)))
+        }
+    }
+
+    private func cancelMessageForwardingPreparation() {
+        prepareMessageForwardingTask?.cancel()
+        prepareMessageForwardingTask = nil
     }
     
     private func updateCurrentItem(_ previewItem: TimelineMediaPreviewItem) async {
