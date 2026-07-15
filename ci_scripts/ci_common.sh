@@ -34,33 +34,46 @@ xcode_select_for_github_actions() {
     sudo xcode-select -s /Applications/Xcode_26.4.app
 }
 
+is_canonical_junchat_release_version() {
+    local version_pattern='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+
+    [[ "$1" =~ $version_pattern ]]
+}
+
+is_canonical_decimal_before() {
+    local candidate_component="$1"
+    local current_component="$2"
+    local LC_ALL=C
+
+    if [[ ${#candidate_component} != "${#current_component}" ]]; then
+        [[ ${#candidate_component} -lt ${#current_component} ]]
+    else
+        [[ "$candidate_component" < "$current_component" ]]
+    fi
+}
+
 is_junchat_release_version_before() {
     local candidate_version="$1"
     local current_version="$2"
-    local version_pattern='^([0-9]+)\.([0-9]+)\.([0-9]+)$'
     local candidate_major candidate_minor candidate_patch
     local current_major current_minor current_patch
 
-    if [[ ! "$candidate_version" =~ $version_pattern ]]; then
+    if ! is_canonical_junchat_release_version "$candidate_version" ||
+       ! is_canonical_junchat_release_version "$current_version"; then
         return 1
     fi
-    candidate_major=$((10#${BASH_REMATCH[1]}))
-    candidate_minor=$((10#${BASH_REMATCH[2]}))
-    candidate_patch=$((10#${BASH_REMATCH[3]}))
 
-    if [[ ! "$current_version" =~ $version_pattern ]]; then
-        return 1
-    fi
-    current_major=$((10#${BASH_REMATCH[1]}))
-    current_minor=$((10#${BASH_REMATCH[2]}))
-    current_patch=$((10#${BASH_REMATCH[3]}))
+    IFS=. read -r candidate_major candidate_minor candidate_patch <<< "$candidate_version"
+    IFS=. read -r current_major current_minor current_patch <<< "$current_version"
 
-    if ((candidate_major != current_major)); then
-        ((candidate_major < current_major))
-    elif ((candidate_minor != current_minor)); then
-        ((candidate_minor < current_minor))
+    if [[ "$candidate_major" != "$current_major" ]]; then
+        is_canonical_decimal_before "$candidate_major" "$current_major"
+    elif [[ "$candidate_minor" != "$current_minor" ]]; then
+        is_canonical_decimal_before "$candidate_minor" "$current_minor"
+    elif [[ "$candidate_patch" != "$current_patch" ]]; then
+        is_canonical_decimal_before "$candidate_patch" "$current_patch"
     else
-        ((candidate_patch < current_patch))
+        return 1
     fi
 }
 
@@ -74,6 +87,10 @@ resolve_junchat_release_notes_baseline() {
     export JUNCHAT_PREVIOUS_RELEASE_TAG=""
     export JUNCHAT_RELEASE_NOTES_START_COMMIT=""
 
+    if ! is_canonical_junchat_release_version "$current_version"; then
+        printf '%s\n' "resolve_junchat_release_notes_baseline: $current_version is not a canonical release version." >&2
+        return 1
+    fi
     if ! archived_commit=$(git rev-parse --verify "$archived_revision^{commit}"); then
         printf '%s\n' "resolve_junchat_release_notes_baseline: Could not resolve archived commit $archived_revision." >&2
         return 1

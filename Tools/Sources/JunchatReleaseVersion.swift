@@ -144,8 +144,12 @@ struct JunchatReleaseVersion: Equatable {
 
     private static func isOrderedBefore(_ lhs: (major: Int, minor: Int, patch: Int),
                                         _ rhs: (major: Int, minor: Int, patch: Int)) -> Bool {
-        if lhs.major != rhs.major { return lhs.major < rhs.major }
-        if lhs.minor != rhs.minor { return lhs.minor < rhs.minor }
+        if lhs.major != rhs.major {
+            return lhs.major < rhs.major
+        }
+        if lhs.minor != rhs.minor {
+            return lhs.minor < rhs.minor
+        }
         return lhs.patch < rhs.patch
     }
 

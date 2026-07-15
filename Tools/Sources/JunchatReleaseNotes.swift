@@ -41,8 +41,12 @@ enum JunchatReleaseNotes {
         let cleanedNotes = withoutComments
             .split(separator: "\n", omittingEmptySubsequences: false)
             .map { line -> String in
-                if line.hasPrefix("### ") { return "#\(line)" }
-                if line.hasPrefix("## ") { return "#\(line)" }
+                if line.hasPrefix("### ") {
+                    return "#\(line)"
+                }
+                if line.hasPrefix("## ") {
+                    return "#\(line)"
+                }
                 return String(line)
             }
             .joined(separator: "\n")
