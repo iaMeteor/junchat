@@ -171,6 +171,11 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
             return
         }
 
+        guard !forwardingOperations.contains(where: \.status.isBlockedBySameLaunchOwner) else {
+            reportLedgerReconciliationFailure()
+            return
+        }
+
         guard !forwardingOperations.contains(where: \.status.isUnknownOutcome) else {
             state.bindings.isUnknownOutcomeResolutionPresented = true
             return
@@ -391,17 +396,21 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
         state.isRestoredCompletionPending = false
         let restorableIndices = forwardingOperations.indices.filter { forwardingOperations[$0].status.shouldQueue }
         let restorableItems = restorableIndices.map { forwardingOperations[$0].item }
-        let persistedStates = ledgerStore.states(accountID: clientProxy.userID,
-                                                 destinationRoomID: roomID,
-                                                 items: restorableItems)
+        let persistedStates = ledgerStore.restorationStates(owner: ledgerOwner,
+                                                            accountID: clientProxy.userID,
+                                                            destinationRoomID: roomID,
+                                                            items: restorableItems)
         var didRestoreOperation = false
         for (index, persistedState) in zip(restorableIndices, persistedStates) {
             switch persistedState {
-            case .admitted:
+            case .state(.admitted):
                 forwardingOperations[index].status = .acceptedByQueue
                 didRestoreOperation = true
-            case .admitting, .unknown:
+            case .state(.admitting), .state(.unknown):
                 forwardingOperations[index].status = .restoredUnknown
+                didRestoreOperation = true
+            case .sameLaunchForeignOwner:
+                forwardingOperations[index].status = .blockedBySameLaunchOwner
                 didRestoreOperation = true
             case nil:
                 break
@@ -504,6 +513,11 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
     }
 
     private func resolveUnknownOperations(resendUnknown: Bool) {
+        guard !forwardingOperations.contains(where: \.status.isBlockedBySameLaunchOwner) else {
+            state.bindings.isUnknownOutcomeResolutionPresented = false
+            reportLedgerReconciliationFailure()
+            return
+        }
         guard let roomID = state.selectedRoomID else { return }
         guard reconcileLedger(roomID: roomID, resendUnknown: resendUnknown) else {
             reportLedgerReconciliationFailure()
@@ -729,6 +743,7 @@ private enum MessageForwardingOperationStatus {
     case cancelled
     case cancellationUnknown
     case restoredUnknown
+    case blockedBySameLaunchOwner
 
     var shouldQueue: Bool {
         switch self {
@@ -775,7 +790,7 @@ private enum MessageForwardingOperationStatus {
 
     var isUnknownOutcome: Bool {
         switch self {
-        case .queuedWithUnknownLedgerState, .cancellationUnknown, .restoredUnknown:
+        case .queuedWithUnknownLedgerState, .cancellationUnknown, .restoredUnknown, .blockedBySameLaunchOwner:
             true
         default:
             false
@@ -793,6 +808,14 @@ private enum MessageForwardingOperationStatus {
 
     var isRestoredUnknown: Bool {
         if case .restoredUnknown = self {
+            true
+        } else {
+            false
+        }
+    }
+
+    var isBlockedBySameLaunchOwner: Bool {
+        if case .blockedBySameLaunchOwner = self {
             true
         } else {
             false

@@ -622,8 +622,10 @@ struct MessageForwardingScreenViewModelTests {
         let firstViewModel = makeViewModel(forwardingBatch: .init(firstItem: forwardingItem),
                                            targetTimeline: targetTimeline,
                                            ledgerStore: firstStore)
+        let secondIndicatorController = UserIndicatorControllerMock()
         let secondViewModel = makeViewModel(forwardingBatch: .init(firstItem: forwardingItem),
                                             targetTimeline: targetTimeline,
+                                            userIndicatorController: secondIndicatorController,
                                             ledgerStore: secondStore)
         let firstContext = firstViewModel.context
         let secondContext = secondViewModel.context
@@ -653,9 +655,11 @@ struct MessageForwardingScreenViewModelTests {
         #expect(targetTimeline.queueMessageEventContentCallsCount == 1)
         #expect(secondContext.viewState.forwardingProgress?.unknownCount == 1)
         secondContext.send(viewAction: .send)
-        #expect(secondContext.viewState.bindings.isUnknownOutcomeResolutionPresented)
+        #expect(!secondContext.viewState.bindings.isUnknownOutcomeResolutionPresented)
+        #expect(secondIndicatorController.submitIndicatorDelayReceivedArguments?.indicator.title ==
+            UntranslatedL10n.screenMessageForwardingQueueFailed)
         secondContext.send(viewAction: .sendUnknownAgain)
-        #expect(secondContext.viewState.bindings.isUnknownOutcomeResolutionPresented)
+        #expect(!secondContext.viewState.bindings.isUnknownOutcomeResolutionPresented)
         #expect(targetTimeline.queueMessageEventContentCallsCount == 1)
         #expect(firstStore.state(accountID: RoomMemberProxyMock.mockMe.userID,
                                  destinationRoomID: "2",
@@ -1108,6 +1112,55 @@ struct MessageForwardingScreenViewModelTests {
 
 extension MessageForwardingScreenViewModelTests {
     @Test
+    func sameLaunchForeignAdmissionCannotCompleteAfterItsOwnerRetractsIt() async throws {
+        let suiteName = "MessageForwardingScreenViewModelTests.\(UUID().uuidString)"
+        let userDefaults = try #require(UserDefaults(suiteName: suiteName))
+        userDefaults.removePersistentDomain(forName: suiteName)
+        defer { userDefaults.removePersistentDomain(forName: suiteName) }
+        let ledgerStore = MessageForwardingLedgerStore(userDefaults: userDefaults)
+        let firstOwner = MessageForwardingLedgerOwner(launchID: "same-launch", reservationID: "first-scene")
+        let secondOwner = MessageForwardingLedgerOwner(launchID: "same-launch", reservationID: "second-scene")
+        #expect(ledgerStore.reserveAdmissions(owner: firstOwner,
+                                              accountID: RoomMemberProxyMock.mockMe.userID,
+                                              destinationRoomID: "2",
+                                              items: [forwardingItem]) == .stored)
+        #expect(ledgerStore.setState(.admitted,
+                                     owner: firstOwner,
+                                     accountID: RoomMemberProxyMock.mockMe.userID,
+                                     destinationRoomID: "2",
+                                     item: forwardingItem) == .stored)
+        let targetTimeline = TimelineProxyMock(.init())
+        let userIndicatorController = UserIndicatorControllerMock()
+        let secondViewModel = makeViewModel(forwardingBatch: .init(firstItem: forwardingItem),
+                                            targetTimeline: targetTimeline,
+                                            userIndicatorController: userIndicatorController,
+                                            ledgerStore: ledgerStore,
+                                            ledgerOwner: secondOwner)
+        let secondContext = secondViewModel.context
+        secondContext.send(viewAction: .selectRoom(roomID: "2"))
+
+        #expect(secondContext.viewState.forwardingProgress?.queuedCount == 0)
+        #expect(secondContext.viewState.forwardingProgress?.unknownCount == 1)
+        #expect(ledgerStore.removeStates(owner: firstOwner,
+                                         accountID: RoomMemberProxyMock.mockMe.userID,
+                                         destinationRoomID: "2",
+                                         items: [forwardingItem],
+                                         includingPreviousLaunches: false))
+        let noQueued = deferFailure(secondViewModel.actions, timeout: .milliseconds(150)) { action in
+            guard case .queued = action else { return false }
+            return true
+        }
+
+        secondContext.send(viewAction: .send)
+        try await noQueued.fulfill()
+
+        #expect(targetTimeline.queueMessageEventContentCallsCount == 0)
+        #expect(!secondContext.viewState.bindings.isUnknownOutcomeResolutionPresented)
+        #expect(userIndicatorController.submitIndicatorDelayReceivedArguments?.indicator.title ==
+            UntranslatedL10n.screenMessageForwardingQueueFailed)
+    }
+
+    @Test
     func interruptedBatchRestoresOnlyTheInFlightItemAsUnknownAndQueuesTheUntouchedSuffix() async throws {
         let forwardingBatch = makeForwardingBatch(count: 3)
         let ledgerStore = InMemoryMessageForwardingLedgerStore()
@@ -1306,16 +1359,20 @@ extension MessageForwardingScreenViewModelTests {
         #expect(firstContext.viewState.forwardingProgress?.failedCount == 1)
         #expect(firstContext.viewState.isDestinationLocked)
 
+        let secondIndicatorController = UserIndicatorControllerMock()
         let secondViewModel = makeViewModel(forwardingBatch: .init(firstItem: forwardingItem),
                                             targetTimeline: targetTimeline,
+                                            userIndicatorController: secondIndicatorController,
                                             ledgerStore: ledgerStore)
         let secondContext = secondViewModel.context
         secondContext.send(viewAction: .selectRoom(roomID: "2"))
         #expect(secondContext.viewState.forwardingProgress?.unknownCount == 1)
         secondContext.send(viewAction: .send)
 
-        #expect(secondContext.viewState.bindings.isUnknownOutcomeResolutionPresented)
+        #expect(!secondContext.viewState.bindings.isUnknownOutcomeResolutionPresented)
         #expect(targetTimeline.queueMessageEventContentCallsCount == 1)
+        #expect(secondIndicatorController.submitIndicatorDelayReceivedArguments?.indicator.title ==
+            UntranslatedL10n.screenMessageForwardingQueueFailed)
     }
 
     @Test
@@ -1438,6 +1495,26 @@ private final class InMemoryMessageForwardingLedgerStore: MessageForwardingLedge
         entries[Key(accountID: accountID, destinationRoomID: destinationRoomID, item: item)]?.visibleState
     }
 
+    func restorationStates(owner: MessageForwardingLedgerOwner,
+                           accountID: String,
+                           destinationRoomID: String,
+                           items: [MessageForwardingItem]) -> [MessageForwardingLedgerRestorationState?] {
+        items.map { item in
+            guard let entry = entries[Key(accountID: accountID, destinationRoomID: destinationRoomID, item: item)] else {
+                return nil
+            }
+            if let entryOwner = entry.owner,
+               entryOwner.launchID == owner.launchID,
+               entryOwner != owner {
+                return .sameLaunchForeignOwner
+            }
+            if entry.isSafeReservation, entry.owner?.launchID != owner.launchID {
+                return nil
+            }
+            return .state(entry.state)
+        }
+    }
+
     func reserveAdmissions(owner: MessageForwardingLedgerOwner,
                            accountID: String,
                            destinationRoomID: String,
@@ -1557,6 +1634,13 @@ private final class CapacityExceededMessageForwardingLedgerStore: MessageForward
         nil
     }
 
+    func restorationStates(owner: MessageForwardingLedgerOwner,
+                           accountID: String,
+                           destinationRoomID: String,
+                           items: [MessageForwardingItem]) -> [MessageForwardingLedgerRestorationState?] {
+        Array(repeating: nil, count: items.count)
+    }
+
     func reserveAdmissions(owner: MessageForwardingLedgerOwner,
                            accountID: String,
                            destinationRoomID: String,
@@ -1595,6 +1679,13 @@ private final class PartialCapacityMessageForwardingLedgerStore: MessageForwardi
                destinationRoomID: String,
                item: MessageForwardingItem) -> MessageForwardingLedgerState? {
         nil
+    }
+
+    func restorationStates(owner: MessageForwardingLedgerOwner,
+                           accountID: String,
+                           destinationRoomID: String,
+                           items: [MessageForwardingItem]) -> [MessageForwardingLedgerRestorationState?] {
+        Array(repeating: nil, count: items.count)
     }
 
     func reserveAdmissions(owner: MessageForwardingLedgerOwner,

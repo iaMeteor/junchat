@@ -14,6 +14,11 @@ enum MessageForwardingLedgerState: String, Codable {
     case unknown
 }
 
+enum MessageForwardingLedgerRestorationState: Equatable {
+    case state(MessageForwardingLedgerState)
+    case sameLaunchForeignOwner
+}
+
 struct MessageForwardingLedgerOwner: Codable, Equatable {
     private static let currentLaunchID = UUID().uuidString
 
@@ -59,6 +64,11 @@ protocol MessageForwardingLedgerStoreProtocol {
     func states(accountID: String,
                 destinationRoomID: String,
                 items: [MessageForwardingItem]) -> [MessageForwardingLedgerState?]
+
+    func restorationStates(owner: MessageForwardingLedgerOwner,
+                           accountID: String,
+                           destinationRoomID: String,
+                           items: [MessageForwardingItem]) -> [MessageForwardingLedgerRestorationState?]
 
     @discardableResult
     func reserveAdmissions(owner: MessageForwardingLedgerOwner,
@@ -161,6 +171,23 @@ struct MessageForwardingLedgerStore: MessageForwardingLedgerStoreProtocol {
                 return items.map { destination?[itemFingerprint($0)]?.visibleState }
             case .corrupt:
                 return Array(repeating: .unknown, count: items.count)
+            }
+        }
+    }
+
+    func restorationStates(owner: MessageForwardingLedgerOwner,
+                           accountID: String,
+                           destinationRoomID: String,
+                           items: [MessageForwardingItem]) -> [MessageForwardingLedgerRestorationState?] {
+        Self.mutationLock.withLock {
+            switch loadLedger(forKey: storageKey(accountID: accountID)) {
+            case .missing:
+                return Array(repeating: nil, count: items.count)
+            case .loaded(let ledger):
+                let destination = ledger.destinations[fingerprint([destinationRoomID])]
+                return items.map { destination?[itemFingerprint($0)]?.restorationState(for: owner) }
+            case .corrupt:
+                return Array(repeating: .state(.unknown), count: items.count)
             }
         }
     }
@@ -432,6 +459,16 @@ private struct LedgerEntry: Codable, Equatable {
 
     var visibleState: MessageForwardingLedgerState? {
         isSafeReservation ? nil : state
+    }
+
+    func restorationState(for restoringOwner: MessageForwardingLedgerOwner) -> MessageForwardingLedgerRestorationState? {
+        if let owner, owner.launchID == restoringOwner.launchID, owner != restoringOwner {
+            return .sameLaunchForeignOwner
+        }
+        if isSafeReservation, owner?.launchID != restoringOwner.launchID {
+            return nil
+        }
+        return .state(state)
     }
 
     init(state: MessageForwardingLedgerState,

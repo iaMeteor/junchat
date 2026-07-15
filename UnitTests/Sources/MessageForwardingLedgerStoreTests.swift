@@ -383,6 +383,61 @@ struct MessageForwardingLedgerStoreTests {
     }
 
     @Test
+    func restorationSeparatesSameLaunchForeignOwnersFromPreviousLaunchAdmissions() throws {
+        let testDefaults = try makeTestDefaults()
+        defer { testDefaults.cleanup() }
+        let store = MessageForwardingLedgerStore(userDefaults: testDefaults.userDefaults)
+        let accountID = "@alice:example.org"
+        let destinationRoomID = "!destination:example.org"
+        let currentOwner = MessageForwardingLedgerOwner(launchID: "current-launch", reservationID: "current")
+        let foreignOwner = MessageForwardingLedgerOwner(launchID: "current-launch", reservationID: "foreign")
+        let previousOwner = MessageForwardingLedgerOwner(launchID: "previous-launch", reservationID: "previous")
+        let currentSafeItem = makeItem(eventID: "$current-safe")
+        let foreignSafeItem = makeItem(eventID: "$foreign-safe")
+        let foreignAdmittedItem = makeItem(eventID: "$foreign-admitted")
+        let previousSafeItem = makeItem(eventID: "$previous-safe")
+        let previousAdmittedItem = makeItem(eventID: "$previous-admitted")
+
+        #expect(store.reserveAdmissions(owner: currentOwner,
+                                        accountID: accountID,
+                                        destinationRoomID: destinationRoomID,
+                                        items: [currentSafeItem]) == .stored)
+        #expect(store.reserveAdmissions(owner: foreignOwner,
+                                        accountID: accountID,
+                                        destinationRoomID: destinationRoomID,
+                                        items: [foreignSafeItem, foreignAdmittedItem]) == .stored)
+        #expect(store.setState(.admitted,
+                               owner: foreignOwner,
+                               accountID: accountID,
+                               destinationRoomID: destinationRoomID,
+                               item: foreignAdmittedItem) == .stored)
+        #expect(store.reserveAdmissions(owner: previousOwner,
+                                        accountID: accountID,
+                                        destinationRoomID: destinationRoomID,
+                                        items: [previousSafeItem, previousAdmittedItem]) == .stored)
+        #expect(store.setState(.admitted,
+                               owner: previousOwner,
+                               accountID: accountID,
+                               destinationRoomID: destinationRoomID,
+                               item: previousAdmittedItem) == .stored)
+
+        #expect(store.restorationStates(owner: currentOwner,
+                                        accountID: accountID,
+                                        destinationRoomID: destinationRoomID,
+                                        items: [currentSafeItem,
+                                                foreignSafeItem,
+                                                foreignAdmittedItem,
+                                                previousSafeItem,
+                                                previousAdmittedItem]) == [
+                .state(.admitting),
+                .sameLaunchForeignOwner,
+                .sameLaunchForeignOwner,
+                nil,
+                .state(.admitted)
+            ])
+    }
+
+    @Test
     func previousLaunchReservationRequiresExplicitResolution() throws {
         let testDefaults = try makeTestDefaults()
         defer { testDefaults.cleanup() }
