@@ -24,8 +24,10 @@ swift run -q tools set-junchat-release-version \
 ```
 
 The command rejects duplicate or missing fields, semantic-version downgrades,
-and non-increasing build numbers. Repeating the exact prepared pair is a safe
-no-op. It does not commit, tag, push, upload, or contact a server.
+and non-increasing build numbers. Repeating the exact prepared pair leaves the
+version fields unchanged but regenerates the Xcode project so a failed earlier
+generation can be retried safely. It does not commit, tag, push, upload, or
+contact a server.
 
 ## Verification
 
