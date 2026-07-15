@@ -91,17 +91,9 @@ class TimelineInteractionHandler {
     
     // MARK: Timeline Item Action Menu
     
-    func displayTimelineItemActionMenu(for itemID: TimelineItemIdentifier) {
-        Task {
-            guard let timelineItem = timelineController.timelineItems.firstUsingStableID(itemID),
-                  let eventTimelineItem = timelineItem as? EventBasedTimelineItemProtocol else {
-                // Don't show a menu for non-event based items.
-                return
-            }
-
-            actionsSubject.send(.composer(action: .removeFocus))
-            actionsSubject.send(.showActionMenu(.init(item: eventTimelineItem)))
-        }
+    func displayTimelineItemActionMenu(for eventTimelineItem: EventBasedTimelineItemProtocol) {
+        actionsSubject.send(.composer(action: .removeFocus))
+        actionsSubject.send(.showActionMenu(.init(item: eventTimelineItem)))
     }
 
     // swiftlint:disable:next cyclomatic_complexity

@@ -109,6 +109,9 @@ protocol TimelineControllerProtocol {
     func toggleReaction(_ reaction: String, to eventOrTransactionID: TimelineItemIdentifier.EventOrTransactionID) async
 
     func redact(_ eventOrTransactionID: TimelineItemIdentifier.EventOrTransactionID) async
+
+    func redact(_ eventOrTransactionIDs: [TimelineItemIdentifier.EventOrTransactionID],
+                using providerLease: TimelineProviderLease) async -> Result<Void, TimelineControllerError>
     
     func pin(eventID: String) async
     

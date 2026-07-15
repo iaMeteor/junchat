@@ -203,6 +203,36 @@ class MockTimelineController: TimelineControllerProtocol {
         if let timelineProxy {
             _ = await timelineProxy.redact(eventOrTransactionID, reason: nil)
         }
+        recordRedaction(eventOrTransactionID)
+    }
+
+    func redact(_ eventOrTransactionIDs: [TimelineItemIdentifier.EventOrTransactionID],
+                using providerLease: TimelineProviderLease) async -> Result<Void, TimelineControllerError> {
+        guard isProviderLeaseValid(providerLease) else {
+            return .failure(.providerMutationInvalidated)
+        }
+
+        for eventOrTransactionID in eventOrTransactionIDs {
+            guard !Task.isCancelled, isProviderLeaseValid(providerLease) else {
+                return .failure(.providerMutationInvalidated)
+            }
+
+            guard let timelineProxy else {
+                await redact(eventOrTransactionID)
+                continue
+            }
+
+            let result = await timelineProxy.redact(eventOrTransactionID, reason: nil)
+            recordRedaction(eventOrTransactionID)
+            if case .failure(let error) = result {
+                return .failure(.timelineProxyError(error))
+            }
+        }
+
+        return .success(())
+    }
+
+    private func recordRedaction(_ eventOrTransactionID: TimelineItemIdentifier.EventOrTransactionID) {
         redactCalled = true
         redactedEventOrTransactionID = eventOrTransactionID
         redactedEventOrTransactionIDs.append(eventOrTransactionID)

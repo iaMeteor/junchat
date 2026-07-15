@@ -55,6 +55,7 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
     private var sendMessageTasks = [UUID: Task<Void, Never>]()
     private var prepareMessageForwardingTask: Task<Void, Never>?
     private var prepareDirectMessageForwardingTask: Task<Void, Never>?
+    private var redactMessagesTask: Task<Void, Never>?
     private var messageForwardingPreparationGeneration = 0
     private var messageSelectionProviderLease: TimelineProviderLease?
     private let directMessageForwardingPreparationOwnerID = UUID()
@@ -175,6 +176,7 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
     isolated deinit {
         prepareMessageForwardingTask?.cancel()
         prepareDirectMessageForwardingTask?.cancel()
+        redactMessagesTask?.cancel()
         forwardingItemPreparer.cancel(preparationOwnerID: directMessageForwardingPreparationOwnerID)
         for task in sendMessageTasks.values {
             task.cancel()
@@ -220,8 +222,8 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
         case .scrollToFirstItemForCurrentDate:
             state.timelineState.scrollToFirstItemForDatePublisher.send()
         case .displayTimelineItemMenu(let itemID):
-            guard timelineItem(withExactIdentifier: itemID) != nil else { return }
-            timelineInteractionHandler.displayTimelineItemActionMenu(for: itemID)
+            guard let timelineItem = timelineItem(withExactIdentifier: itemID) as? EventBasedTimelineItemProtocol else { return }
+            timelineInteractionHandler.displayTimelineItemActionMenu(for: timelineItem)
         case .handleTimelineItemMenuAction(let itemID, let action):
             guard timelineItem(withExactIdentifier: itemID) != nil else { return }
             if action == .selectMessages {
@@ -823,11 +825,18 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
         }
         cancelMessageForwardingPreparation()
         let selectedIDs = selectionState.selectedIDs.intersection(selectionState.redactionIDs)
+        guard let providerLease = messageSelectionProviderLease else { return }
+        messageSelectionProviderLease = nil
         setMessageSelectionState(.init())
 
-        Task {
-            for eventOrTransactionID in selectedIDs {
-                await timelineController.redact(eventOrTransactionID)
+        let timelineController = timelineController
+        redactMessagesTask = Task { [weak self] in
+            defer { timelineController.releaseProviderLease(providerLease) }
+            let result = await timelineController.redact(Array(selectedIDs), using: providerLease)
+            guard !Task.isCancelled, let self else { return }
+            redactMessagesTask = nil
+            if case .failure = result {
+                displayErrorToast(L10n.commonFailed)
             }
         }
     }

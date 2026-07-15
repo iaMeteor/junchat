@@ -255,14 +255,7 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
             updateProgress(isQueueing: true, isCancelling: false)
 
             let result = await targetRoomProxy.timeline.queueMessageEventContent(forwardingOperations[index].item.content)
-
-            switch result {
-            case .success(let sendHandle):
-                forwardingOperations[index].status = .queued(sendHandle)
-            case .failure(let error):
-                forwardingOperations[index].status = .queueingFailed
-                MXLog.error("Failed adding a forwarded message to the send queue: \(type(of: error))")
-            }
+            let shouldContinueQueueing = applyQueueingResult(result, at: index)
 
             if shouldCancelForwarding(generation: generation) {
                 updateProgress(isQueueing: false, isCancelling: true)
@@ -270,6 +263,9 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
             }
 
             updateProgress(isQueueing: true, isCancelling: false)
+            if !shouldContinueQueueing {
+                break
+            }
         }
 
         guard persistQueueingResults(roomID: roomID) else {
@@ -278,6 +274,21 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
             return .queueingFailed
         }
         return finishForwardingAttempt(roomID: roomID)
+    }
+
+    private func applyQueueingResult(_ result: Result<SendHandle, TimelineProxyError>, at index: Int) -> Bool {
+        switch result {
+        case .success(let sendHandle):
+            forwardingOperations[index].status = .queued(sendHandle)
+            return true
+        case .failure(let error):
+            forwardingOperations[index].status = .queueingFailed
+            for remainingIndex in forwardingOperations.indices where remainingIndex > index && forwardingOperations[remainingIndex].status.isReserved {
+                forwardingOperations[remainingIndex].status = .queueingFailed
+            }
+            MXLog.error("Failed adding a forwarded message to the send queue: \(type(of: error))")
+            return false
+        }
     }
 
     private func shouldCancelForwarding(generation: Int) -> Bool {

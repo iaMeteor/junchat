@@ -130,9 +130,7 @@ class TimelineController: TimelineControllerProtocol {
     }
 
     func isProviderLeaseValid(_ lease: TimelineProviderLease) -> Bool {
-        isProviderMutationLocked &&
-            activeProviderLease == lease &&
-            lease.providerGeneration == activeProviderGeneration &&
+        ownsProviderLease(lease) &&
             lease.timelineItemsGeneration == timelineItemsGeneration &&
             !isTimelineItemsBuildInProgress
     }
@@ -141,6 +139,12 @@ class TimelineController: TimelineControllerProtocol {
         guard activeProviderLease == lease else { return }
         activeProviderLease = nil
         isProviderMutationLocked = false
+    }
+
+    private func ownsProviderLease(_ lease: TimelineProviderLease) -> Bool {
+        isProviderMutationLocked &&
+            activeProviderLease == lease &&
+            lease.providerGeneration == activeProviderGeneration
     }
 
     func focusOnEvent(_ eventID: String,
@@ -288,13 +292,41 @@ class TimelineController: TimelineControllerProtocol {
     }
     
     func redact(_ eventOrTransactionID: TimelineItemIdentifier.EventOrTransactionID) async {
+        _ = await redact(eventOrTransactionID, on: activeTimeline)
+    }
+
+    func redact(_ eventOrTransactionIDs: [TimelineItemIdentifier.EventOrTransactionID],
+                using providerLease: TimelineProviderLease) async -> Result<Void, TimelineControllerError> {
+        guard isProviderLeaseValid(providerLease) else {
+            return .failure(.providerMutationInvalidated)
+        }
+        let timeline = activeTimeline
+
+        for eventOrTransactionID in eventOrTransactionIDs {
+            guard !Task.isCancelled, ownsProviderLease(providerLease) else {
+                return .failure(.providerMutationInvalidated)
+            }
+
+            let result = await redact(eventOrTransactionID, on: timeline)
+            if case .failure = result {
+                return result
+            }
+        }
+
+        return .success(())
+    }
+
+    private func redact(_ eventOrTransactionID: TimelineItemIdentifier.EventOrTransactionID,
+                        on timeline: TimelineProxyProtocol) async -> Result<Void, TimelineControllerError> {
         MXLog.info("Send redaction in \(roomID)")
         
-        switch await activeTimeline.redact(eventOrTransactionID, reason: nil) {
+        switch await timeline.redact(eventOrTransactionID, reason: nil) {
         case .success:
             MXLog.info("Finished redacting message")
+            return .success(())
         case .failure(let error):
             MXLog.error("Failed redacting message with error: \(error)")
+            return .failure(.timelineProxyError(error))
         }
     }
     
@@ -586,7 +618,7 @@ class TimelineController: TimelineControllerProtocol {
         timelineItems = newTimelineItems
         timelineItemsProviderGeneration = providerGeneration
         settledTimelineItemsGeneration = timelineItemsBuildGeneration
-        
+
         callbacks.send(.updatedTimelineItems(timelineItems: newTimelineItems,
                                              isSwitchingTimelines: isNewTimeline,
                                              providerGeneration: providerGeneration,

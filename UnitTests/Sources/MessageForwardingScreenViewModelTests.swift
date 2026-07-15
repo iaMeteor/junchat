@@ -146,28 +146,32 @@ struct MessageForwardingScreenViewModelTests {
     }
 
     @Test
-    func partialFailureRetriesOnlyFailedItemsAndLocksTheDestination() async throws {
+    func partialFailureStopsImmediatelyAndRetriesTheRemainingSuffixInOrder() async throws {
         let forwardingBatch = makeForwardingBatch(count: 3)
         let targetTimeline = TimelineProxyMock(.init())
+        var queuedContents = [RoomMessageEventContentWithoutRelation]()
         let results = ForwardingResultSequence([
             .success(SendHandleSDKMock()),
             .failure(.failedRedacting),
             .success(SendHandleSDKMock()),
             .success(SendHandleSDKMock())
         ])
-        targetTimeline.queueMessageEventContentClosure = { _ in results.next() }
+        targetTimeline.queueMessageEventContentClosure = { content in
+            queuedContents.append(content)
+            return results.next()
+        }
         let viewModel = makeViewModel(forwardingBatch: forwardingBatch, targetTimeline: targetTimeline)
         let context = viewModel.context
         context.send(viewAction: .selectRoom(roomID: "2"))
 
         let firstAttempt = deferFulfillment(context.$viewState) { state in
-            state.forwardingProgress?.isQueueing == false && state.forwardingProgress?.failedCount == 1
+            state.forwardingProgress?.isQueueing == false && state.forwardingProgress?.failedCount == 2
         }
         context.send(viewAction: .send)
         try await firstAttempt.fulfill()
 
-        #expect(targetTimeline.queueMessageEventContentCallsCount == 3)
-        #expect(context.viewState.forwardingProgress?.queuedCount == 2)
+        #expect(targetTimeline.queueMessageEventContentCallsCount == 2)
+        #expect(context.viewState.forwardingProgress?.queuedCount == 1)
         #expect(context.viewState.isDestinationLocked)
 
         context.send(viewAction: .selectRoom(roomID: "3"))
@@ -181,15 +185,19 @@ struct MessageForwardingScreenViewModelTests {
         try await queued.fulfill()
 
         #expect(targetTimeline.queueMessageEventContentCallsCount == 4)
+        let expectedContents = [forwardingBatch.items[0].content,
+                                forwardingBatch.items[1].content,
+                                forwardingBatch.items[1].content,
+                                forwardingBatch.items[2].content]
+        #expect(queuedContents.elementsEqual(expectedContents) { $0 === $1 })
         #expect(context.viewState.forwardingProgress?.queuedCount == 3)
         #expect(context.viewState.forwardingProgress?.failedCount == 0)
     }
 
     @Test
-    func allFailuresAllowChangingDestinationAndRetryingTheWholeBatch() async throws {
+    func failureBeforeAnyAdmissionAllowsChangingDestinationAndRetryingTheWholeBatch() async throws {
         let targetTimeline = TimelineProxyMock(.init())
         let results = ForwardingResultSequence([
-            .failure(.failedRedacting),
             .failure(.failedRedacting),
             .success(SendHandleSDKMock()),
             .success(SendHandleSDKMock())
@@ -216,7 +224,7 @@ struct MessageForwardingScreenViewModelTests {
         context.send(viewAction: .send)
         try await queued.fulfill()
 
-        #expect(targetTimeline.queueMessageEventContentCallsCount == 4)
+        #expect(targetTimeline.queueMessageEventContentCallsCount == 3)
     }
 
     @Test

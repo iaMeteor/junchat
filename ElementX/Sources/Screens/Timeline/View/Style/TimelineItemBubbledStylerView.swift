@@ -59,6 +59,11 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
         return context.viewState.messageSelectionState.isSelected(messageSelectionID)
     }
 
+    private var canToggleMessageSelection: Bool {
+        guard let messageSelectionID else { return false }
+        return context.viewState.messageSelectionState.canToggleSelection(messageSelectionID)
+    }
+
     /// The base padding applied to bubbles on either side.
     ///
     /// **Note:** This is on top of the insets applied to the cells by the table view.
@@ -108,7 +113,7 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
             }
             .contentShape(Rectangle())
             .onTapGesture {
-                guard isMessageSelectionActive, messageSelectionID != nil else {
+                guard isMessageSelectionActive, canToggleMessageSelection else {
                     return
                 }
                 context.send(viewAction: .toggleMessageSelection(itemID: timelineItem.id))
@@ -116,6 +121,8 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
         }
         .padding(EdgeInsets(top: 1, leading: 8, bottom: 1, trailing: 8))
         .highlightedTimelineItem(isFocussed)
+        .allowsHitTesting(!isMessageSelectionActive || canToggleMessageSelection)
+        .accessibilityRespondsToUserInteraction(!isMessageSelectionActive || canToggleMessageSelection)
     }
 
     @ViewBuilder
@@ -229,7 +236,7 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
 
     private var messageSelectionButton: some View {
         Button {
-            guard messageSelectionID != nil else {
+            guard canToggleMessageSelection else {
                 return
             }
             context.send(viewAction: .toggleMessageSelection(itemID: timelineItem.id))
@@ -250,13 +257,14 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
                 }
             }
             .frame(width: 42)
-            .opacity(messageSelectionID == nil ? 0.35 : 1)
+            .opacity(canToggleMessageSelection ? 1 : 0.35)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(UntranslatedL10n.a11yMessageSelectionLabel)
         .accessibilityValue(isMessageSelected ? UntranslatedL10n.a11yMessageSelectionSelected : UntranslatedL10n.a11yMessageSelectionNotSelected)
         .accessibilityAddTraits(isMessageSelected ? .isSelected : [])
-        .disabled(messageSelectionID == nil)
+        .accessibilityHidden(!canToggleMessageSelection)
+        .disabled(!canToggleMessageSelection)
     }
 
     var messageBubble: some View {

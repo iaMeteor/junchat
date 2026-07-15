@@ -32,6 +32,10 @@ struct TimelineMessageSelectionState: Equatable {
         selectedIDs.contains(id)
     }
 
+    func canToggleSelection(_ id: TimelineItemIdentifier.EventOrTransactionID) -> Bool {
+        isSelected(id) || selectedCount < MessageForwardingBatch.maximumItemCount
+    }
+
     var canRedactSelectedMessages: Bool {
         isActive && selectedIDs.isSubset(of: redactionIDs)
     }
@@ -41,7 +45,7 @@ struct TimelineMessageSelectionState: Equatable {
     }
 
     mutating func insert(_ capabilities: TimelineMessageSelectionCapabilities) {
-        guard selectedIDs.contains(capabilities.id) || selectedCount < MessageForwardingBatch.maximumItemCount else { return }
+        guard canToggleSelection(capabilities.id) else { return }
 
         selectedIDs.insert(capabilities.id)
         if capabilities.canRedact {

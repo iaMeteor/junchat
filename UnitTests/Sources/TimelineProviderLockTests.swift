@@ -779,6 +779,27 @@ extension TimelineViewModelTests {
     }
 
     @Test
+    func deferredActionMenuPresentationCannotCrossAProviderGenerationCollision() async throws {
+        let uniqueID = TimelineItemIdentifier.UniqueID("deferred-menu-provider-local-id")
+        let retiredItem = makeProviderLockItem(id: .event(uniqueID: uniqueID, eventOrTransactionID: .eventID("deferred-menu-retired")))
+        let replacementItem = makeProviderLockItem(id: .event(uniqueID: uniqueID, eventOrTransactionID: .eventID("deferred-menu-replacement")))
+        let timelineController = MockTimelineController(timelineItems: [retiredItem])
+        let viewModel = makeProviderLockViewModel(timelineController: timelineController)
+
+        viewModel.process(viewAction: .displayTimelineItemMenu(itemID: retiredItem.id))
+        timelineController.activeProviderGeneration = 1
+        timelineController.timelineItemsProviderGeneration = 1
+        timelineController.timelineItems = [replacementItem]
+
+        for _ in 0..<100 where viewModel.state.bindings.actionMenuInfo == nil {
+            await Task.yield()
+        }
+
+        let menuItem = try #require(viewModel.state.bindings.actionMenuInfo?.item)
+        #expect(menuItem.id == retiredItem.id)
+    }
+
+    @Test
     func delayedMenuActionsCannotCrossAProviderGenerationCollision() async throws {
         let uniqueID = TimelineItemIdentifier.UniqueID("delayed-menu-provider-local-id")
         let retiredItem = makeProviderLockItem(id: .event(uniqueID: uniqueID, eventOrTransactionID: .eventID("delayed-menu-retired")))
@@ -862,6 +883,88 @@ extension TimelineViewModelTests {
         let staleID = TimelineItemIdentifier.event(uniqueID: .init("provider-local-id"), eventOrTransactionID: .eventID("stale-event"))
 
         #expect([activeProxy].firstEventTimelineItemUsingStableID(staleID) == nil)
+    }
+
+    @Test
+    func bulkRedactionRetainsExactProviderOwnershipUntilTheBatchCompletes() async throws {
+        let items = [makeProviderLockItem(eventID: "bulk-redaction-1"),
+                     makeProviderLockItem(eventID: "bulk-redaction-2")]
+        let timelineController = ProviderRaceTimelineController(timelineItems: items)
+        defer { timelineController.redactionGate.resume() }
+        let viewModel = makeProviderLockViewModel(timelineController: timelineController)
+        viewModel.state.canCurrentUserRedactOthers = true
+        viewModel.process(viewAction: .handleTimelineItemMenuAction(itemID: items[0].id, action: .selectMessages))
+        viewModel.process(viewAction: .toggleMessageSelection(itemID: items[1].id))
+
+        let redactionStarted = deferFulfillment(timelineController.redactionGate.started) { _ in true }
+        viewModel.process(viewAction: .confirmMessageRedaction)
+        try await redactionStarted.fulfill()
+
+        let providerMutationToken = timelineController.providerMutationToken()
+        if let providerMutationToken {
+            _ = timelineController.focusLive(using: providerMutationToken)
+        }
+        timelineController.redactionGate.resume()
+        for _ in 0..<100 where timelineController.redactionSources.count < 2 {
+            await Task.yield()
+        }
+
+        #expect(providerMutationToken == nil)
+        #expect(timelineController.redactionSources == [.exact, .exact])
+        #expect(timelineController.providerMutationToken() != nil)
+        _ = viewModel
+    }
+
+    @Test
+    func messageSelectionSurfacesBulkRedactionFailures() async {
+        let item = makeProviderLockItem(eventID: "bulk-failure")
+        let timelineProxy = TimelineProxyMock(.init())
+        timelineProxy.redactReasonReturnValue = .failure(.failedRedacting)
+        let timelineController = MockTimelineController(timelineItems: [item], timelineProxy: timelineProxy)
+        let viewModel = makeProviderLockViewModel(timelineController: timelineController)
+        viewModel.state.canCurrentUserRedactOthers = true
+
+        viewModel.process(viewAction: .handleTimelineItemMenuAction(itemID: item.id, action: .selectMessages))
+        viewModel.process(viewAction: .confirmMessageRedaction)
+        for _ in 0..<100 where !timelineController.redactCalled {
+            await Task.yield()
+        }
+
+        #expect(timelineController.redactCalled)
+        #expect(userIndicatorControllerMock.submitIndicatorDelayCallsCount == 1)
+        #expect(userIndicatorControllerMock.submitIndicatorDelayReceivedArguments?.indicator.title == L10n.commonFailed)
+        _ = viewModel
+    }
+
+    @Test
+    func cancellingBulkRedactionReleasesProviderOwnership() async throws {
+        let item = makeProviderLockItem(eventID: "cancelled-bulk-redaction")
+        let timelineController = CancellableRedactionTimelineController(timelineItems: [item])
+        defer { timelineController.redactionGate.resume() }
+        var viewModel: TimelineViewModel? = makeProviderLockViewModel(timelineController: timelineController)
+        weak let weakViewModel = viewModel
+        viewModel?.state.canCurrentUserRedactOthers = true
+        viewModel?.process(viewAction: .handleTimelineItemMenuAction(itemID: item.id, action: .selectMessages))
+
+        let redactionStarted = deferFulfillment(timelineController.redactionGate.started) { _ in true }
+        viewModel?.process(viewAction: .confirmMessageRedaction)
+        try await redactionStarted.fulfill()
+
+        #expect(timelineController.providerMutationToken() == nil)
+        viewModel = nil
+        for _ in 0..<100 where !timelineController.redactionGate.wasCancelled {
+            await Task.yield()
+        }
+        #expect(weakViewModel == nil)
+        #expect(timelineController.redactionGate.wasCancelled)
+
+        timelineController.redactionGate.resume()
+        var didReleaseProvider = false
+        for _ in 0..<100 where !didReleaseProvider {
+            didReleaseProvider = timelineController.providerMutationToken() != nil
+            await Task.yield()
+        }
+        #expect(didReleaseProvider)
     }
 
     @Test
@@ -980,6 +1083,17 @@ extension TimelineViewModelTests {
         let constructedState = TimelineMessageSelectionState(selectedIDs: bypassIDs)
         #expect(constructedState.selectedCount == 151)
         #expect(!constructedState.canForwardSelectedMessages)
+    }
+
+    @Test
+    func selectionLimitAllowsDeselectionButDisablesUnselectedControls() {
+        var selectionState = TimelineMessageSelectionState()
+        for index in 1...MessageForwardingBatch.maximumItemCount {
+            selectionState.insert(.init(id: .eventID("selection-control-limit-\(index)"), canRedact: true, canForward: true))
+        }
+
+        #expect(selectionState.canToggleSelection(.eventID("selection-control-limit-1")))
+        #expect(!selectionState.canToggleSelection(.eventID("selection-control-overflow")))
     }
 
     @Test
@@ -1224,6 +1338,37 @@ private final class TimelineOperationGate {
 }
 
 @MainActor
+private final class CancellationAwareTimelineOperationGate {
+    let started = PassthroughSubject<Void, Never>()
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var wasCancelled = false
+
+    func wait() async {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                self.continuation = continuation
+                started.send()
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.cancel()
+            }
+        }
+    }
+
+    func resume() {
+        let continuation = continuation
+        self.continuation = nil
+        continuation?.resume()
+    }
+
+    private func cancel() {
+        wasCancelled = true
+        resume()
+    }
+}
+
+@MainActor
 private final class ProviderForwardingContentGate {
     let requests = PassthroughSubject<TimelineItemIdentifier, Never>()
     private var continuation: CheckedContinuation<RoomMessageEventContentWithoutRelation?, Never>?
@@ -1254,11 +1399,13 @@ private final class ProviderRaceTimelineController: MockTimelineController {
     let sendGate = TimelineOperationGate()
     let focusGate = TimelineOperationGate()
     let contentGate = TimelineOperationGate()
+    let redactionGate = TimelineOperationGate()
     let focusLiveAttempts = PassthroughSubject<Void, Never>()
     let focusCompletions = PassthroughSubject<Void, Never>()
 
     private(set) var source = Source.exact
     private(set) var contentSources = [Source]()
+    private(set) var redactionSources = [Source]()
 
     init(timelineItems: [RoomTimelineItemProtocol]) {
         super.init(timelineKind: .detached, timelineItems: timelineItems)
@@ -1305,5 +1452,21 @@ private final class ProviderRaceTimelineController: MockTimelineController {
             await contentGate.wait()
         }
         return .init(noHandle: .init())
+    }
+
+    override func redact(_ eventOrTransactionID: TimelineItemIdentifier.EventOrTransactionID) async {
+        redactionSources.append(source)
+        if redactionSources.count == 1 {
+            await redactionGate.wait()
+        }
+    }
+}
+
+@MainActor
+private final class CancellableRedactionTimelineController: MockTimelineController {
+    let redactionGate = CancellationAwareTimelineOperationGate()
+
+    override func redact(_ eventOrTransactionID: TimelineItemIdentifier.EventOrTransactionID) async {
+        await redactionGate.wait()
     }
 }
