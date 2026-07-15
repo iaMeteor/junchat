@@ -34,6 +34,21 @@ final class GitHubReleaseURLSession: URLSessionProtocol {
     }
 }
 
+struct GitHubPublishedRelease: Equatable {
+    let id: Int64
+    let tagName: String
+    let tagCommit: String
+}
+
+struct GitHubDraftRelease: Equatable {
+    let id: Int64
+    let tagName: String
+    let name: String
+    let targetCommitish: String
+    let body: String
+    let tagCommit: String
+}
+
 struct GitHubReleaseAPI {
     enum APIError: LocalizedError {
         case invalidResponse
@@ -64,6 +79,10 @@ struct GitHubReleaseAPI {
         }
     }
 
+    enum PushAttemptError: Error {
+        case pushFailed(any Error)
+    }
+
     private static let pageSize = 100
     private static let maximumPages = 100
     private static let maximumTagDepth = 10
@@ -75,9 +94,10 @@ struct GitHubReleaseAPI {
         self.urlSession = urlSession
     }
 
-    func publishedReleaseTags(repository: GitHubRepository,
-                              token: String) async throws -> [String] {
-        var tags = [String]()
+    func publishedReleases(repository: GitHubRepository,
+                           token: String) async throws -> [GitHubPublishedRelease] {
+        var publishedReleases = [GitHubPublishedRelease]()
+        var seenIDs = Set<Int64>()
         var seenTags = Set<String>()
 
         for page in 1...Self.maximumPages {
@@ -85,16 +105,33 @@ struct GitHubReleaseAPI {
                                                   token: token,
                                                   page: page)
             for release in releases where release.isPublishedFormalRelease {
-                guard seenTags.insert(release.tagName).inserted else {
+                guard release.id > 0 else {
+                    throw APIError.invalidResponse
+                }
+                guard seenIDs.insert(release.id).inserted,
+                      seenTags.insert(release.tagName).inserted else {
                     throw APIError.duplicateExistingRelease
                 }
-                tags.append(release.tagName)
+                let tagCommit = try await releaseTagCommit(tagName: release.tagName,
+                                                           repository: repository,
+                                                           token: token)
+                guard Self.isGitObjectSHA(tagCommit) else {
+                    throw APIError.invalidResponse
+                }
+                publishedReleases.append(GitHubPublishedRelease(id: release.id,
+                                                                tagName: release.tagName,
+                                                                tagCommit: tagCommit))
             }
             if releases.count < Self.pageSize {
-                return tags
+                return publishedReleases
             }
         }
         throw APIError.releaseSearchLimitExceeded
+    }
+
+    func publishedReleaseTags(repository: GitHubRepository,
+                              token: String) async throws -> [String] {
+        try await publishedReleases(repository: repository, token: token).map(\.tagName)
     }
 
     func createOrReuseDraft(version: String,
@@ -102,11 +139,23 @@ struct GitHubReleaseAPI {
                             repository: GitHubRepository,
                             token: String,
                             allowCreation: Bool = true) async throws -> String {
+        try await createOrReuseDraftSnapshot(version: version,
+                                             targetCommit: targetCommit,
+                                             repository: repository,
+                                             token: token,
+                                             allowCreation: allowCreation).body
+    }
+
+    func createOrReuseDraftSnapshot(version: String,
+                                    targetCommit: String,
+                                    repository: GitHubRepository,
+                                    token: String,
+                                    allowCreation: Bool = true) async throws -> GitHubDraftRelease {
         let releaseRequest = GitHubReleaseRequest(version: version, targetCommit: targetCommit)
-        if let body = try await reusableDraftBody(for: releaseRequest,
-                                                  repository: repository,
-                                                  token: token) {
-            return body
+        if let draft = try await reusableDraft(for: releaseRequest,
+                                               repository: repository,
+                                               token: token) {
+            return draft
         }
         guard allowCreation else {
             throw APIError.missingExistingDraft
@@ -118,13 +167,25 @@ struct GitHubReleaseAPI {
                                          token: token)
         } catch APIError.failedRequest(statusCode: 422, message: _) {
             // A concurrent retry may have created the same draft after lookup.
-            if let body = try await reusableDraftBody(for: releaseRequest,
-                                                      repository: repository,
-                                                      token: token) {
-                return body
+            if let draft = try await reusableDraft(for: releaseRequest,
+                                                   repository: repository,
+                                                   token: token) {
+                return draft
             }
             throw APIError.failedRequest(statusCode: 422,
                                          message: "The release could not be created and no compatible draft exists.")
+        }
+    }
+
+    func pushAfterRevalidatingDraft(_ draft: GitHubDraftRelease,
+                                    repository: GitHubRepository,
+                                    token: String,
+                                    push: () async throws -> Void) async throws {
+        try await revalidateDraft(draft, repository: repository, token: token)
+        do {
+            try await push()
+        } catch {
+            throw PushAttemptError.pushFailed(error)
         }
     }
 
@@ -235,9 +296,9 @@ struct GitHubReleaseAPI {
         return object.sha
     }
 
-    private func reusableDraftBody(for releaseRequest: GitHubReleaseRequest,
-                                   repository: GitHubRepository,
-                                   token: String) async throws -> String? {
+    private func reusableDraft(for releaseRequest: GitHubReleaseRequest,
+                               repository: GitHubRepository,
+                               token: String) async throws -> GitHubDraftRelease? {
         for page in 1...Self.maximumPages {
             let releases = try await listReleases(repository: repository,
                                                   token: token,
@@ -247,15 +308,17 @@ struct GitHubReleaseAPI {
                 throw APIError.duplicateExistingRelease
             }
             if let release = matchingReleases.first {
-                let body = try release.validatedDraftBody(for: releaseRequest,
-                                                          validateTargetCommitish: false)
+                _ = try release.validatedDraftBody(for: releaseRequest,
+                                                   validateTargetCommitish: false)
                 let tagCommit = try await releaseTagCommit(tagName: releaseRequest.tagName,
                                                            repository: repository,
                                                            token: token)
                 guard tagCommit == releaseRequest.targetCommit else {
                     throw APIError.incompatibleExistingRelease
                 }
-                return body
+                return try release.validatedDraft(for: releaseRequest,
+                                                  validateTargetCommitish: false,
+                                                  tagCommit: tagCommit)
             }
             if releases.count < Self.pageSize {
                 return nil
@@ -285,7 +348,7 @@ struct GitHubReleaseAPI {
 
     private func createDraft(_ releaseRequest: GitHubReleaseRequest,
                              repository: GitHubRepository,
-                             token: String) async throws -> String {
+                             token: String) async throws -> GitHubDraftRelease {
         if let existingTagCommit = try await releaseTagCommitIfPresent(tagName: releaseRequest.tagName,
                                                                        repository: repository,
                                                                        token: token) {
@@ -300,15 +363,37 @@ struct GitHubReleaseAPI {
         request.httpBody = try JSONEncoder().encode(releaseRequest)
         let data = try await successfulData(for: request)
         let release = try JSONDecoder().decode(GitHubReleaseRecord.self, from: data)
-        let body = try release.validatedDraftBody(for: releaseRequest,
-                                                  validateTargetCommitish: true)
+        _ = try release.validatedDraftBody(for: releaseRequest,
+                                           validateTargetCommitish: true)
         let tagCommit = try await releaseTagCommit(tagName: releaseRequest.tagName,
                                                    repository: repository,
                                                    token: token)
         guard tagCommit == releaseRequest.targetCommit else {
             throw APIError.incompatibleExistingRelease
         }
-        return body
+        return try release.validatedDraft(for: releaseRequest,
+                                          validateTargetCommitish: true,
+                                          tagCommit: tagCommit)
+    }
+
+    private func revalidateDraft(_ draft: GitHubDraftRelease,
+                                 repository: GitHubRepository,
+                                 token: String) async throws {
+        guard draft.id > 0, Self.isGitObjectSHA(draft.tagCommit) else {
+            throw APIError.incompatibleExistingRelease
+        }
+        let releaseURL = try repositoryAPIURL(repository: repository,
+                                              pathComponents: ["releases", String(draft.id)])
+        let data = try await successfulData(for: authenticatedRequest(url: releaseURL, token: token))
+        let release = try JSONDecoder().decode(GitHubReleaseRecord.self, from: data)
+        try release.validateUnchangedDraft(draft)
+
+        let tagCommit = try await releaseTagCommit(tagName: draft.tagName,
+                                                   repository: repository,
+                                                   token: token)
+        guard tagCommit == draft.tagCommit else {
+            throw APIError.incompatibleExistingRelease
+        }
     }
 
     private func releaseTagCommit(tagName: String,
@@ -343,6 +428,9 @@ struct GitHubReleaseAPI {
         var visitedTags = Set<String>()
 
         for _ in 0..<Self.maximumTagDepth {
+            guard Self.isGitObjectSHA(object.sha) else {
+                throw APIError.incompatibleExistingRelease
+            }
             switch object.type {
             case "commit":
                 return object.sha
@@ -476,6 +564,7 @@ struct GitHubReleaseAPI {
 }
 
 private struct GitHubReleaseRecord: Decodable {
+    let id: Int64
     let tagName: String
     let name: String?
     let targetCommitish: String
@@ -485,6 +574,7 @@ private struct GitHubReleaseRecord: Decodable {
     let publishedAt: String?
 
     private enum CodingKeys: String, CodingKey {
+        case id
         case tagName = "tag_name"
         case name
         case targetCommitish = "target_commitish"
@@ -498,10 +588,25 @@ private struct GitHubReleaseRecord: Decodable {
         !draft && !prerelease && publishedAt != nil && tagName.hasPrefix("release/")
     }
 
+    func validatedDraft(for request: GitHubReleaseRequest,
+                        validateTargetCommitish: Bool,
+                        tagCommit: String) throws -> GitHubDraftRelease {
+        let body = try validatedDraftBody(for: request,
+                                          validateTargetCommitish: validateTargetCommitish)
+        return GitHubDraftRelease(id: id,
+                                  tagName: tagName,
+                                  name: request.name,
+                                  targetCommitish: targetCommitish,
+                                  body: body,
+                                  tagCommit: tagCommit)
+    }
+
     func validatedDraftBody(for request: GitHubReleaseRequest,
                             validateTargetCommitish: Bool) throws -> String {
-        guard draft,
+        guard id > 0,
+              draft,
               !prerelease,
+              publishedAt == nil,
               tagName == request.tagName,
               name == request.name,
               !validateTargetCommitish || targetCommitish == request.targetCommit,
@@ -509,6 +614,19 @@ private struct GitHubReleaseRecord: Decodable {
             throw GitHubReleaseAPI.APIError.incompatibleExistingRelease
         }
         return body
+    }
+
+    func validateUnchangedDraft(_ expected: GitHubDraftRelease) throws {
+        guard id == expected.id,
+              draft,
+              !prerelease,
+              publishedAt == nil,
+              tagName == expected.tagName,
+              name == expected.name,
+              targetCommitish == expected.targetCommitish,
+              body == expected.body else {
+            throw GitHubReleaseAPI.APIError.incompatibleExistingRelease
+        }
     }
 }
 

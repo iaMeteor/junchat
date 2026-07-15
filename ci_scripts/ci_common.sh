@@ -5,6 +5,35 @@
 # Trace each command before executing it
 set -eEu
 
+validate_xcode_cloud_post_build_environment() {
+    local workflow_id="${CI_WORKFLOW_ID-}"
+
+    if [[ "${CI-}" != TRUE ]]; then
+        printf '%s\n' 'validate_xcode_cloud_post_build_environment: CI must be TRUE.' >&2
+        return 1
+    fi
+    if [[ "${CI_XCODE_CLOUD-}" != TRUE ]]; then
+        printf '%s\n' 'validate_xcode_cloud_post_build_environment: CI_XCODE_CLOUD must be TRUE.' >&2
+        return 1
+    fi
+    if [[ "${CI_XCODEBUILD_ACTION-}" != archive ]]; then
+        printf '%s\n' 'validate_xcode_cloud_post_build_environment: CI_XCODEBUILD_ACTION must be archive.' >&2
+        return 1
+    fi
+    if [[ -z "${workflow_id//[[:space:]]/}" ]]; then
+        printf '%s\n' 'validate_xcode_cloud_post_build_environment: CI_WORKFLOW_ID must be nonempty.' >&2
+        return 1
+    fi
+    case "${CI_WORKFLOW-}" in
+        Release|Nightly)
+            ;;
+        *)
+            printf '%s\n' 'validate_xcode_cloud_post_build_environment: CI_WORKFLOW must be Release or Nightly.' >&2
+            return 1
+            ;;
+    esac
+}
+
 install_xcode_cloud_brew_dependencies () {
     brew update && brew install xcodegen pkl getsentry/tools/sentry-cli
 }
@@ -80,11 +109,14 @@ is_junchat_release_version_before() {
 resolve_junchat_release_notes_baseline() {
     local current_version="$1"
     local archived_revision="$2"
-    local published_release_tags="${3-}"
+    local published_release_snapshot="${3-}"
     local current_tag="release/$current_version"
-    local candidate_tag candidate_version previous_tag="" previous_version=""
-    local archived_commit previous_commit first_release_baseline resolved_baseline
+    local snapshot_line candidate_id candidate_tag candidate_commit candidate_version
+    local previous_id="" previous_tag="" previous_commit="" previous_version=""
+    local archived_commit local_tag_commit first_release_baseline resolved_baseline
+    local seen_ids="" seen_tags=""
 
+    export JUNCHAT_PREVIOUS_RELEASE_ID=""
     export JUNCHAT_PREVIOUS_RELEASE_TAG=""
     export JUNCHAT_RELEASE_NOTES_START_COMMIT=""
 
@@ -100,21 +132,52 @@ resolve_junchat_release_notes_baseline() {
         printf '%s\n' "resolve_junchat_release_notes_baseline: Could not resolve archived commit $archived_revision." >&2
         return 1
     fi
-    while IFS= read -r candidate_tag; do
-        [[ -n "$candidate_tag" ]] || continue
-        [[ "$candidate_tag" != "$current_tag" ]] || continue
+    while IFS= read -r snapshot_line; do
+        [[ -n "$snapshot_line" ]] || continue
+        if [[ "$snapshot_line" != *$'\t'*$'\t'* ]]; then
+            printf '%s\n' 'resolve_junchat_release_notes_baseline: Published release snapshot rows must contain ID, tag, and peeled commit SHA.' >&2
+            return 1
+        fi
+        candidate_id=${snapshot_line%%$'\t'*}
+        snapshot_line=${snapshot_line#*$'\t'}
+        candidate_tag=${snapshot_line%%$'\t'*}
+        candidate_commit=${snapshot_line#*$'\t'}
+        if [[ "$candidate_commit" = *$'\t'* || ! "$candidate_id" =~ ^[1-9][0-9]*$ ||
+              ! "$candidate_commit" =~ ^[0-9a-f]{40}$ ]]; then
+            printf '%s\n' 'resolve_junchat_release_notes_baseline: Published release snapshot identity is malformed.' >&2
+            return 1
+        fi
         candidate_version=${candidate_tag#release/}
-        if [[ "$candidate_tag" = "release/$candidate_version" ]] &&
-           is_junchat_release_version_before "$candidate_version" "$current_version" &&
+        if [[ "$candidate_tag" != "release/$candidate_version" ]] ||
+           ! is_canonical_junchat_release_version "$candidate_version"; then
+            printf '%s\n' "resolve_junchat_release_notes_baseline: $candidate_tag is not a canonical formal release tag." >&2
+            return 1
+        fi
+        if [[ $'\n'"$seen_ids"$'\n' = *$'\n'"$candidate_id"$'\n'* ||
+              $'\n'"$seen_tags"$'\n' = *$'\n'"$candidate_tag"$'\n'* ]]; then
+            printf '%s\n' 'resolve_junchat_release_notes_baseline: Published release snapshot contains duplicate identity.' >&2
+            return 1
+        fi
+        seen_ids+="${seen_ids:+$'\n'}$candidate_id"
+        seen_tags+="${seen_tags:+$'\n'}$candidate_tag"
+
+        [[ "$candidate_tag" != "$current_tag" ]] || continue
+        if is_junchat_release_version_before "$candidate_version" "$current_version" &&
            { [[ -z "$previous_tag" ]] || is_junchat_release_version_before "$previous_version" "$candidate_version"; }; then
+            previous_id="$candidate_id"
             previous_tag="$candidate_tag"
+            previous_commit="$candidate_commit"
             previous_version="$candidate_version"
         fi
-    done <<< "$published_release_tags"
+    done <<< "$published_release_snapshot"
 
     if [[ -n "$previous_tag" ]]; then
-        if ! previous_commit=$(git rev-parse --verify "$previous_tag^{commit}"); then
+        if ! local_tag_commit=$(git rev-parse --verify "$previous_tag^{commit}"); then
             printf '%s\n' "resolve_junchat_release_notes_baseline: Could not peel $previous_tag to a commit." >&2
+            return 1
+        fi
+        if [[ "$local_tag_commit" != "$previous_commit" ]]; then
+            printf '%s\n' "resolve_junchat_release_notes_baseline: $previous_tag no longer peels to its frozen published commit." >&2
             return 1
         fi
         if [[ "$previous_commit" = "$archived_commit" ]] ||
@@ -123,6 +186,7 @@ resolve_junchat_release_notes_baseline() {
             return 1
         fi
 
+        export JUNCHAT_PREVIOUS_RELEASE_ID="$previous_id"
         export JUNCHAT_PREVIOUS_RELEASE_TAG="$previous_tag"
         export JUNCHAT_RELEASE_NOTES_START_COMMIT="$previous_commit"
         return 0

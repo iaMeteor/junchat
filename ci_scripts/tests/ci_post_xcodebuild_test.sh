@@ -10,6 +10,7 @@ trap 'rm -rf "$TEST_ROOT"' EXIT
 FIXTURE_ROOT="$TEST_ROOT/repository"
 FAKE_BIN="$TEST_ROOT/bin"
 COMMAND_LOG="$TEST_ROOT/swift-commands.log"
+ENTRY_COMMAND_LOG="$TEST_ROOT/entry-commands.log"
 GIT_LOG_ARGUMENTS="$TEST_ROOT/git-log-arguments.log"
 ARCHIVED_SHA_MARKER="$TEST_ROOT/archived-sha-captured"
 BASELINE_SHA_MARKER="$TEST_ROOT/baseline-sha-captured"
@@ -26,6 +27,8 @@ cp "$REPOSITORY_ROOT/ci_scripts/ci_post_xcodebuild.sh" "$FIXTURE_ROOT/ci_scripts
 cat > "$FAKE_BIN/git" <<'EOF'
 #!/bin/bash
 set -euo pipefail
+
+printf 'git %s\n' "$*" >> "$ENTRY_COMMAND_LOG"
 
 case "${1:-}" in
     fetch)
@@ -76,6 +79,8 @@ cat > "$FAKE_BIN/swift" <<'EOF'
 #!/bin/bash
 set -euo pipefail
 
+printf 'swift %s\n' "$*" >> "$ENTRY_COMMAND_LOG"
+
 if [[ "$*" == 'run -q tools ci current-release-version' ]]; then
     printf '%s\n' '1.8.2'
     printf '%s\n' captured > "$VERSION_COMMAND_MARKER"
@@ -83,7 +88,7 @@ if [[ "$*" == 'run -q tools ci current-release-version' ]]; then
 fi
 
 if [[ "$*" == "run -q tools ci published-junchat-release-tags --repository-url $REPOSITORY_URL" ]]; then
-    printf '%s\n' 'release/1.8.1'
+    printf '101\trelease/1.8.1\t%s\n' "$PREVIOUS_SHA"
     printf '%s\n' captured > "$PUBLISHED_RELEASE_SNAPSHOT_MARKER"
     exit 0
 fi
@@ -102,11 +107,55 @@ if [[ "$*" == *"release-to-github"* ]] &&
 fi
 EOF
 
-chmod +x "$FAKE_BIN/git" "$FAKE_BIN/swift"
+cat > "$FAKE_BIN/sentry-cli" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+
+printf 'sentry-cli %s\n' "$*" >> "$ENTRY_COMMAND_LOG"
+EOF
+
+chmod +x "$FAKE_BIN/git" "$FAKE_BIN/swift" "$FAKE_BIN/sentry-cli"
+
+assert_invalid_identity_has_no_commands() {
+    local scenario="$1"
+    shift
+
+    rm -f "$ENTRY_COMMAND_LOG"
+    if (
+        cd "$FIXTURE_ROOT/ci_scripts"
+        export ARCHIVED_SHA ARCHIVED_SHA_MARKER BASELINE_SHA_MARKER COMMAND_LOG ENTRY_COMMAND_LOG FIXTURE_ROOT GIT_LOG_ARGUMENTS NOTES_RANGE_MARKER PREVIOUS_SHA PUBLISHED_RELEASE_SNAPSHOT_MARKER REPOSITORY_URL VERSION_COMMAND_MARKER
+        PATH="$FAKE_BIN:$PATH" "$@" bash ci_post_xcodebuild.sh
+    ); then
+        printf 'Invalid Xcode Cloud identity succeeded: %s.\n' "$scenario" >&2
+        exit 95
+    fi
+    if [[ -s "$ENTRY_COMMAND_LOG" ]]; then
+        printf 'Invalid Xcode Cloud identity ran commands (%s):\n' "$scenario" >&2
+        cat "$ENTRY_COMMAND_LOG" >&2
+        exit 96
+    fi
+}
+
+assert_invalid_identity_has_no_commands missing-ci \
+    env -u CI CI_XCODE_CLOUD=TRUE CI_WORKFLOW=Release CI_WORKFLOW_ID=release-workflow-id CI_XCODEBUILD_ACTION=archive
+assert_invalid_identity_has_no_commands missing-xcode-cloud \
+    env -u CI_XCODE_CLOUD CI=TRUE CI_WORKFLOW=Release CI_WORKFLOW_ID=release-workflow-id CI_XCODEBUILD_ACTION=archive
+assert_invalid_identity_has_no_commands missing-workflow \
+    env -u CI_WORKFLOW CI=TRUE CI_XCODE_CLOUD=TRUE CI_WORKFLOW_ID=release-workflow-id CI_XCODEBUILD_ACTION=archive
+assert_invalid_identity_has_no_commands missing-workflow-id \
+    env -u CI_WORKFLOW_ID CI=TRUE CI_XCODE_CLOUD=TRUE CI_WORKFLOW=Release CI_XCODEBUILD_ACTION=archive
+assert_invalid_identity_has_no_commands missing-action \
+    env -u CI_XCODEBUILD_ACTION CI=TRUE CI_XCODE_CLOUD=TRUE CI_WORKFLOW=Release CI_WORKFLOW_ID=release-workflow-id
+assert_invalid_identity_has_no_commands wrong-action \
+    env CI=TRUE CI_XCODE_CLOUD=TRUE CI_WORKFLOW=Release CI_WORKFLOW_ID=release-workflow-id CI_XCODEBUILD_ACTION=build
+assert_invalid_identity_has_no_commands wrong-workflow \
+    env CI=TRUE CI_XCODE_CLOUD=TRUE CI_WORKFLOW='Pull Request' CI_WORKFLOW_ID=pull-request-workflow-id CI_XCODEBUILD_ACTION=archive
+
+rm -f "$ENTRY_COMMAND_LOG"
 
 (
     cd "$FIXTURE_ROOT/ci_scripts"
-    export ARCHIVED_SHA ARCHIVED_SHA_MARKER BASELINE_SHA_MARKER COMMAND_LOG FIXTURE_ROOT GIT_LOG_ARGUMENTS NOTES_RANGE_MARKER PREVIOUS_SHA PUBLISHED_RELEASE_SNAPSHOT_MARKER REPOSITORY_URL VERSION_COMMAND_MARKER
+    export ARCHIVED_SHA ARCHIVED_SHA_MARKER BASELINE_SHA_MARKER COMMAND_LOG ENTRY_COMMAND_LOG FIXTURE_ROOT GIT_LOG_ARGUMENTS NOTES_RANGE_MARKER PREVIOUS_SHA PUBLISHED_RELEASE_SNAPSHOT_MARKER REPOSITORY_URL VERSION_COMMAND_MARKER
     PATH="$FAKE_BIN:$PATH" \
         CI=TRUE \
         CI_ARCHIVE_PATH="$TEST_ROOT/archive" \
@@ -130,7 +179,7 @@ test "$(sed -n '3p' "$GIT_LOG_ARGUMENTS")" = "$PREVIOUS_SHA..$ARCHIVED_SHA"
 rm -f "$COMMAND_LOG" "$FIXTURE_ROOT/TestFlight/WhatToTest.en-US.txt"
 if (
     cd "$FIXTURE_ROOT/ci_scripts"
-    export ARCHIVED_SHA ARCHIVED_SHA_MARKER BASELINE_SHA_MARKER COMMAND_LOG FIXTURE_ROOT GIT_LOG_ARGUMENTS NOTES_RANGE_MARKER PREVIOUS_SHA PUBLISHED_RELEASE_SNAPSHOT_MARKER REPOSITORY_URL VERSION_COMMAND_MARKER
+    export ARCHIVED_SHA ARCHIVED_SHA_MARKER BASELINE_SHA_MARKER COMMAND_LOG ENTRY_COMMAND_LOG FIXTURE_ROOT GIT_LOG_ARGUMENTS NOTES_RANGE_MARKER PREVIOUS_SHA PUBLISHED_RELEASE_SNAPSHOT_MARKER REPOSITORY_URL VERSION_COMMAND_MARKER
     PATH="$FAKE_BIN:$PATH" \
         CI=TRUE \
         CI_ARCHIVE_PATH="$TEST_ROOT/archive" \

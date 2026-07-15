@@ -3,7 +3,7 @@ import Foundation
 
 struct PublishedJunchatReleaseTags: AsyncParsableCommand {
     static let configuration = CommandConfiguration(commandName: "published-junchat-release-tags",
-                                                    abstract: "Prints published, non-prerelease JunChat release tags from GitHub.")
+                                                    abstract: "Prints published JunChat release IDs, tags and peeled commits from GitHub.")
 
     @Option(help: "The repository remote URL used to identify the GitHub repository.")
     var repositoryURL: String
@@ -14,10 +14,12 @@ struct PublishedJunchatReleaseTags: AsyncParsableCommand {
         }
 
         let repository = try GitHubRepository(remoteURL: repositoryURL)
-        let tags = try await GitHubReleaseAPI().publishedReleaseTags(repository: repository,
-                                                                     token: token)
-        for tag in tags {
-            print(tag)
+        let releases = try await GitHubReleaseAPI().publishedReleases(repository: repository,
+                                                                      token: token)
+        let snapshot = releases.map { "\($0.id)\t\($0.tagName)\t\($0.tagCommit)" }
+            .joined(separator: "\n")
+        if !snapshot.isEmpty {
+            FileHandle.standardOutput.write(Data("\(snapshot)\n".utf8))
         }
     }
 }

@@ -17,9 +17,14 @@ grep -Fq 'run: swift test' "$WORKFLOW"
 grep -Fq 'for test_script in ci_scripts/tests/*_test.sh' "$WORKFLOW"
 grep -Fq 'XcodeCloudReleaseEnvironment.perform(environment: ProcessInfo.processInfo.environment)' \
     "$REPOSITORY_ROOT/Tools/Sources/Commands/CI/ReleaseToGithub.swift"
+grep -Fq 'pushAfterRevalidatingDraft' \
+    "$REPOSITORY_ROOT/Tools/Sources/Commands/CI/ReleaseToGithub.swift"
 
 for release_metadata_path in \
     'project.yml' \
+    'app.yml' \
+    '**/SupportingFiles/target.yml' \
+    'Variants/**/*.yml' \
     'ElementX.xcodeproj/project.pbxproj' \
     'JUNCHAT_CHANGES.md' \
     'ElementX/SupportingFiles/Info.plist' \
@@ -28,12 +33,31 @@ for release_metadata_path in \
     grep -Fq -- "- \"$release_metadata_path\"" "$WORKFLOW"
 done
 
-XCODEGEN_LINE=$(grep -n -F 'xcodegen' "$WORKFLOW" | head -n1 | cut -d: -f1)
-ZERO_DIFF_LINE=$(grep -n -F 'git diff --exit-code --' "$WORKFLOW" | head -n1 | cut -d: -f1)
-if [[ -z "$XCODEGEN_LINE" || -z "$ZERO_DIFF_LINE" || "$XCODEGEN_LINE" -ge "$ZERO_DIFF_LINE" ]]; then
-    printf '%s\n' 'Release hygiene must regenerate the Xcode project before asserting a zero diff.' >&2
+TARGET_SPECS=$(ruby -ryaml -e '
+  project = YAML.safe_load(File.read(ARGV.fetch(0)), aliases: true)
+  project.fetch("include").map { |entry| entry.fetch("path") if entry.fetch("path").end_with?("target.yml") }.compact.each { |path| puts(path) }
+' "$REPOSITORY_ROOT/project.yml")
+while IFS= read -r target_spec; do
+    case "$target_spec" in
+        */SupportingFiles/target.yml)
+            test -f "$REPOSITORY_ROOT/$target_spec"
+            ;;
+        *)
+            printf 'XcodeGen target spec is not covered by the workflow glob: %s.\n' "$target_spec" >&2
+            exit 99
+            ;;
+    esac
+done <<< "$TARGET_SPECS"
+
+if ! grep -Fq 'bash ci_scripts/verify_xcodegen_is_current.sh' "$WORKFLOW"; then
+    printf '%s\n' 'Release hygiene must run the tested XcodeGen drift gate.' >&2
     exit 98
 fi
+
+XCODEGEN_GATE="$REPOSITORY_ROOT/ci_scripts/verify_xcodegen_is_current.sh"
+grep -Fq 'xcodegen' "$XCODEGEN_GATE"
+grep -Fq 'git diff --exit-code --' "$XCODEGEN_GATE"
+grep -Fq 'git ls-files --others --exclude-standard' "$XCODEGEN_GATE"
 
 if grep -Eq 'release-to-github|upload-dsyms|fastlane|GITHUB_TOKEN|secrets\.' "$WORKFLOW"; then
     printf '%s\n' 'Release hygiene PR checks must not invoke publication, signing, or provider credentials.' >&2

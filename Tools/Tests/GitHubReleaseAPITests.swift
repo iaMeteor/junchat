@@ -4,12 +4,16 @@ import Foundation
 import XCTest
 
 final class GitHubReleaseAPITests: XCTestCase {
-    func testListsOnlyPublishedFormalReleaseTagsAcrossEveryPage() async throws {
+    func testListsPublishedReleaseIdentityAndPeeledCommitAcrossEveryPage() async throws {
+        let annotatedTagObject = String(repeating: "9", count: 40)
+        let firstPublishedCommit = String(repeating: "b", count: 40)
+        let secondPublishedCommit = String(repeating: "f", count: 40)
         var firstPage = (0..<96).map { index in
             releaseRecord(version: "9.9.\(index)", targetCommit: String(repeating: "a", count: 40))
         }
         firstPage.append(releaseRecord(version: "1.8.1",
-                                       targetCommit: String(repeating: "b", count: 40),
+                                       targetCommit: firstPublishedCommit,
+                                       id: 181,
                                        draft: false,
                                        publishedAt: "2026-07-01T00:00:00Z"))
         firstPage.append(releaseRecord(version: "1.8.0",
@@ -27,18 +31,33 @@ final class GitHubReleaseAPITests: XCTestCase {
                                        tagPrefix: "notes/"))
         let stub = GitHubHTTPStub(responses: [
             .json(200, firstPage),
+            .json(200, referenceRecord(commit: annotatedTagObject, type: "tag")),
+            .json(200, tagObjectRecord(commit: firstPublishedCommit)),
             .json(200, [releaseRecord(version: "1.7.8",
-                                      targetCommit: String(repeating: "f", count: 40),
+                                      targetCommit: secondPublishedCommit,
+                                      id: 178,
                                       draft: false,
-                                      publishedAt: "2026-04-01T00:00:00Z")])
+                                      publishedAt: "2026-04-01T00:00:00Z")]),
+            .json(200, referenceRecord(commit: secondPublishedCommit))
         ])
         let api = GitHubReleaseAPI(urlSession: stub)
 
-        let tags = try await api.publishedReleaseTags(repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
-                                                      token: "secret")
+        let releases = try await api.publishedReleases(repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
+                                                       token: "secret")
 
-        XCTAssertEqual(tags, ["release/1.8.1", "release/1.7.8"])
-        XCTAssertEqual(stub.requests.map { $0.url?.query }, ["per_page=100&page=1", "per_page=100&page=2"])
+        XCTAssertEqual(releases, [
+            GitHubPublishedRelease(id: 181,
+                                   tagName: "release/1.8.1",
+                                   tagCommit: firstPublishedCommit),
+            GitHubPublishedRelease(id: 178,
+                                   tagName: "release/1.7.8",
+                                   tagCommit: secondPublishedCommit)
+        ])
+        XCTAssertEqual(stub.requests[0].url?.query, "per_page=100&page=1")
+        XCTAssertEqual(stub.requests[1].url?.path, "/repos/acme/junchat-ios/git/ref/tags/release/1.8.1")
+        XCTAssertEqual(stub.requests[2].url?.path, "/repos/acme/junchat-ios/git/tags/\(annotatedTagObject)")
+        XCTAssertEqual(stub.requests[3].url?.query, "per_page=100&page=2")
+        XCTAssertEqual(stub.requests[4].url?.path, "/repos/acme/junchat-ios/git/ref/tags/release/1.7.8")
     }
 
     func testAuthenticatedGitHubResponsesAreNeverStoredInURLCache() async throws {
@@ -114,6 +133,80 @@ final class GitHubReleaseAPITests: XCTestCase {
         XCTAssertFalse(try XCTUnwrap(requests[0].url?.absoluteString).contains("secret"))
         let tagRequest = try XCTUnwrap(requests.dropFirst().first)
         XCTAssertEqual(tagRequest.url?.path, "/repos/acme/junchat-ios/git/ref/tags/release/1.8.2")
+    }
+
+    func testRevalidatesTheExactDraftAndTagImmediatelyBeforePush() async throws {
+        let targetCommit = String(repeating: "a", count: 40)
+        let annotatedTagObject = String(repeating: "9", count: 40)
+        let draft = GitHubDraftRelease(id: 42,
+                                       tagName: "release/1.8.2",
+                                       name: "1.8.2",
+                                       targetCommitish: targetCommit,
+                                       body: "Generated notes",
+                                       tagCommit: targetCommit)
+        let stub = GitHubHTTPStub(responses: [
+            .json(200, releaseRecord(targetCommit: targetCommit)),
+            .json(200, referenceRecord(commit: annotatedTagObject, type: "tag")),
+            .json(200, tagObjectRecord(commit: targetCommit))
+        ])
+        let api = GitHubReleaseAPI(urlSession: stub)
+        var requestsSeenAtPush = 0
+
+        try await api.pushAfterRevalidatingDraft(draft,
+                                                 repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
+                                                 token: "secret") {
+            requestsSeenAtPush = stub.requests.count
+        }
+
+        XCTAssertEqual(requestsSeenAtPush, 3)
+        XCTAssertEqual(stub.requests[0].url?.path, "/repos/acme/junchat-ios/releases/42")
+        XCTAssertEqual(stub.requests[1].url?.path, "/repos/acme/junchat-ios/git/ref/tags/release/1.8.2")
+        XCTAssertEqual(stub.requests[2].url?.path, "/repos/acme/junchat-ios/git/tags/\(annotatedTagObject)")
+    }
+
+    func testDraftEditsPublicationDeletionAndTagMovesFailBeforePush() async throws {
+        let targetCommit = String(repeating: "a", count: 40)
+        let movedCommit = String(repeating: "b", count: 40)
+        let draft = GitHubDraftRelease(id: 42,
+                                       tagName: "release/1.8.2",
+                                       name: "1.8.2",
+                                       targetCommitish: targetCommit,
+                                       body: "Generated notes",
+                                       tagCommit: targetCommit)
+        let defects: [(String, [GitHubHTTPStub.Response])] = [
+            ("edited release ID", [.json(200, releaseRecord(targetCommit: targetCommit, id: 43))]),
+            ("edited body", [.json(200, releaseRecord(targetCommit: targetCommit, body: "Edited notes"))]),
+            ("edited name", [.json(200, releaseRecord(targetCommit: targetCommit, name: "Edited release"))]),
+            ("edited target", [.json(200, releaseRecord(targetCommit: movedCommit))]),
+            ("prerelease draft", [.json(200, releaseRecord(targetCommit: targetCommit, prerelease: true))]),
+            ("published draft", [.json(200, releaseRecord(targetCommit: targetCommit,
+                                                          draft: false,
+                                                          publishedAt: "2026-07-16T00:00:00Z"))]),
+            ("deleted draft", [.json(404, ["message": "Not Found"])]),
+            ("edited tag", [.json(200, releaseRecord(version: "1.8.3", targetCommit: targetCommit))]),
+            ("moved tag", [
+                .json(200, releaseRecord(targetCommit: targetCommit)),
+                .json(200, referenceRecord(commit: movedCommit))
+            ])
+        ]
+
+        for (name, responses) in defects {
+            let stub = GitHubHTTPStub(responses: responses)
+            let api = GitHubReleaseAPI(urlSession: stub)
+            var pushRan = false
+
+            do {
+                try await api.pushAfterRevalidatingDraft(draft,
+                                                         repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
+                                                         token: "secret") {
+                    pushRan = true
+                }
+                XCTFail("Expected \(name) to fail closed")
+            } catch { }
+
+            XCTAssertFalse(pushRan, "Push ran after \(name)")
+            XCTAssertEqual(stub.requests.first?.url?.path, "/repos/acme/junchat-ios/releases/42")
+        }
     }
 
     func testReusesAnExistingDraftByItsPeeledTagInsteadOfTargetCommitish() async throws {
@@ -886,15 +979,19 @@ private let preparationTree = String(repeating: "8", count: 40)
 
 private func releaseRecord(version: String = "1.8.2",
                            targetCommit: String,
+                           id: Int64 = 42,
+                           name: String? = nil,
                            draft: Bool = true,
                            prerelease: Bool = false,
                            publishedAt: String? = nil,
-                           tagPrefix: String = "release/") -> [String: Any] {
+                           tagPrefix: String = "release/",
+                           body: String = "Generated notes") -> [String: Any] {
     var record: [String: Any] = [
+        "id": id,
         "tag_name": "\(tagPrefix)\(version)",
-        "name": version,
+        "name": name ?? version,
         "target_commitish": targetCommit,
-        "body": "Generated notes",
+        "body": body,
         "draft": draft,
         "prerelease": prerelease
     ]

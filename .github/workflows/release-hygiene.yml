@@ -10,6 +10,9 @@ on:
       - "ci_scripts/**"
       - "docs/JUNCHAT_RELEASE.md"
       - "project.yml"
+      - "app.yml"
+      - "**/SupportingFiles/target.yml"
+      - "Variants/**/*.yml"
       - "ElementX.xcodeproj/project.pbxproj"
       - "JUNCHAT_CHANGES.md"
       - "ElementX/SupportingFiles/Info.plist"
@@ -40,7 +43,4 @@ jobs:
           done
 
       - name: Verify generated Xcode project is current
-        run: |
-          set -euo pipefail
-          xcodegen
-          git diff --exit-code --
+        run: bash ci_scripts/verify_xcodegen_is_current.sh

@@ -42,6 +42,10 @@ git diff --exit-code -- ElementX.xcodeproj ElementX/SupportingFiles/Info.plist N
 
 Use the repository's existing Xcode build and test schemes for the release
 candidate. Do not set `JUNCHAT_SKIP_SWIFTLINT=1` as a normal release path.
+The Release Hygiene pull-request workflow watches `project.yml`, `app.yml`, all
+`**/SupportingFiles/target.yml` files, variant specs, and generated release
+metadata. Its tested XcodeGen gate rejects unstaged or staged tracked changes
+and any untracked generated files.
 
 ## Publication
 
@@ -61,6 +65,11 @@ values `CI=TRUE`, `CI_XCODE_CLOUD=TRUE`, `CI_WORKFLOW=Release`, and
 `CI_XCODEBUILD_ACTION=archive`, plus a nonempty `CI_WORKFLOW_ID`. Local runs,
 other workflows or actions, alternate boolean values, and missing values fail
 closed. `GITHUB_TOKEN` is checked only after this environment gate.
+The post-xcodebuild shell entry applies the same official Xcode Cloud archive
+identity before `git fetch`, GitHub release lookup, dSYM upload, or any Swift
+command. It accepts only the existing `Release` and `Nightly` archive workflows;
+unknown or missing workflow identity fails without running a command. The
+Swift `release-to-github` gate still independently requires `Release`.
 
 If a run fails after draft creation, a clean CI retry lists authenticated
 releases and reuses only the same draft, non-prerelease tag and name after
@@ -77,6 +86,13 @@ unrelated remote advancement fails closed. The branch update names the captured
 branch explicitly and leases it to the archived SHA, so deletion, rewind, or
 replacement fails closed. A concurrent push failure performs the same
 validation before treating the operation as complete.
+
+Draft creation or reuse captures the GitHub release ID, exact body, name, tag,
+target commitish, and peeled tag commit. Immediately before the branch push,
+the command reads that release again by ID and requires every captured field,
+draft state, and peeled tag commit to remain unchanged. Editing, publishing, or
+deleting the draft, renaming its tag, or moving either a lightweight or
+annotated tag stops the operation before `git push` can run.
 
 Remote preparation reads are bound to the verified archived and prepared
 commits. For each commit, the command verifies the recursive Git tree identity,
@@ -101,10 +117,13 @@ the caller's global git configuration; nightly tags are lightweight and need no
 tagger identity.
 
 Before upload or GitHub orchestration, the Release workflow reads the current
-marketing version and freezes the highest earlier stable `release/*` tag and
-its peeled commit. The current release tag and tags for later versions are
-excluded, and the selected commit must be a strict ancestor of the archived
-commit. A first formal JunChat release with no earlier tag must set
+marketing version and freezes the highest earlier published stable release's
+GitHub release ID, `release/*` tag, and remotely peeled commit SHA. The local
+tag must exist and peel to that exact frozen SHA, whether lightweight or
+annotated; a missing, malformed, or moved tag fails closed. The current release
+tag and tags for later versions are excluded, and the selected commit must be a
+strict ancestor of the archived commit. A first formal JunChat release with no
+earlier tag must set
 `JUNCHAT_FIRST_RELEASE_BASELINE_COMMIT` to an exact lowercase 40-character
 commit SHA that is a strict ancestor. Missing or unrelated baselines and empty
 note ranges stop the workflow before remote-capable commands run.
