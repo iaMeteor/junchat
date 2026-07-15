@@ -135,6 +135,12 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
         acceptedIncomingCallID?.incomingCallIdentity
     }
 
+    var hasPendingAnswerCallHandoff: Bool {
+        answerCallHandoffIdentity != nil ||
+            answerCallTask != nil ||
+            callProviderAudioSessionDeactivationWaiter != nil
+    }
+
     private let actionsSubject: PassthroughSubject<ElementCallServiceAction, Never> = .init()
     var actions: AnyPublisher<ElementCallServiceAction, Never> {
         actionsSubject.eraseToAnyPublisher()

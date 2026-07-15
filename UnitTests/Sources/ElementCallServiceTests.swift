@@ -401,7 +401,7 @@ final class ElementCallServiceTests {
     }
 
     @Test
-    func answerWaitingForCallKitDeactivationCannotStartAfterIncomingReplacement() async throws {
+    func incomingReplacementImmediatelySettlesAnswerHandoffWithoutCallKitDeactivation() async throws {
         let firstRoomID = "!first:example.com"
         await receiveIncomingPush(PKPushPayloadMock()
             .updatingExpiration(currentDate, lifetime: 30)
@@ -422,14 +422,17 @@ final class ElementCallServiceTests {
         await testClock.advance(by: .seconds(1))
         await waitUntil { self.callProvider.reportCallWithEndedAtReasonCalled }
         #expect(startedRooms.isEmpty)
+        #expect(service.hasPendingAnswerCallHandoff)
 
         let replacementRoomID = "!replacement:example.com"
-        await receiveIncomingPush(PKPushPayloadMock()
-            .updatingExpiration(currentDate, lifetime: 30)
-            .updatingRoomID(replacementRoomID)
-            .updatingRTCNotificationID("$replacement"))
-        await Task.yield()
+        service.pushRegistry(pushRegistry,
+                             didReceiveIncomingPushWith: PKPushPayloadMock()
+                                 .updatingExpiration(currentDate, lifetime: 30)
+                                 .updatingRoomID(replacementRoomID)
+                                 .updatingRTCNotificationID("$replacement"),
+                             for: .voIP) { }
 
+        #expect(!service.hasPendingAnswerCallHandoff)
         #expect(startedRooms.isEmpty)
         #expect(service.incomingCallRoomIDPublisher.value == replacementRoomID)
         withExtendedLifetime((cancellable, provider)) { }
