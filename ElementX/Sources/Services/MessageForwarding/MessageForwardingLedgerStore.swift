@@ -91,8 +91,6 @@ protocol MessageForwardingLedgerStoreProtocol {
                       destinationRoomID: String,
                       items: [MessageForwardingItem],
                       includingPreviousLaunches: Bool) -> Bool
-
-    func discardCorruptLedger(accountID: String) -> Bool
 }
 
 extension MessageForwardingLedgerStoreProtocol {
@@ -126,10 +124,6 @@ extension MessageForwardingLedgerStoreProtocol {
             }
         }
         return .stored
-    }
-
-    func discardCorruptLedger(accountID: String) -> Bool {
-        false
     }
 }
 
@@ -361,21 +355,6 @@ struct MessageForwardingLedgerStore: MessageForwardingLedgerStoreProtocol {
             }
 
             return persist(ledger.destinations.isEmpty ? nil : ledger, forKey: key)
-        }
-    }
-
-    func discardCorruptLedger(accountID: String) -> Bool {
-        Self.mutationLock.withLock {
-            let key = storageKey(accountID: accountID)
-            switch loadLedger(forKey: key) {
-            case .missing:
-                return true
-            case .loaded:
-                return false
-            case .corrupt:
-                userDefaults.removeObject(forKey: key)
-                return userDefaults.object(forKey: key) == nil
-            }
         }
     }
 

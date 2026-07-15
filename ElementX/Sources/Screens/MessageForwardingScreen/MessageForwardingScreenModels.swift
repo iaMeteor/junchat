@@ -18,9 +18,13 @@ struct MessageForwardingScreenViewState: BindableState {
     var rooms: [MessageForwardingRoom] = []
     var selectedRoomID: String?
     var forwardingProgress: MessageForwardingProgress?
+    var isLedgerReconciliationRequired = false
     var bindings = MessageForwardingScreenViewStateBindings()
 
     var isDestinationLocked: Bool {
+        if isLedgerReconciliationRequired {
+            return true
+        }
         guard let forwardingProgress else { return false }
         return forwardingProgress.queuedCount + forwardingProgress.unknownCount > 0
     }

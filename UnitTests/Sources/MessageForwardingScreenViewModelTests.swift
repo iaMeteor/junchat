@@ -694,43 +694,72 @@ struct MessageForwardingScreenViewModelTests {
     }
 
     @Test
-    func corruptProductionLedgerCanBeExplicitlyDiscardedWithoutResending() async throws {
+    func corruptProductionLedgerIsPreservedAcrossBatchAndDestinationResolutionAttempts() async throws {
         let suiteName = "MessageForwardingScreenViewModelTests.\(UUID().uuidString)"
         let userDefaults = try #require(UserDefaults(suiteName: suiteName))
         userDefaults.removePersistentDomain(forName: suiteName)
         defer { userDefaults.removePersistentDomain(forName: suiteName) }
-        let owner = MessageForwardingLedgerOwner(launchID: "previous-launch", reservationID: "reservation")
+        let otherItem = makeForwardingBatch(count: 2).items[1]
+        let firstOwner = MessageForwardingLedgerOwner(launchID: "previous-launch", reservationID: "first")
+        let secondOwner = MessageForwardingLedgerOwner(launchID: "previous-launch", reservationID: "second")
         var ledgerStore = MessageForwardingLedgerStore(userDefaults: userDefaults)
-        #expect(ledgerStore.reserveAdmissions(owner: owner,
+        #expect(ledgerStore.reserveAdmissions(owner: firstOwner,
                                               accountID: RoomMemberProxyMock.mockMe.userID,
                                               destinationRoomID: "2",
                                               items: [forwardingItem]) == .stored)
+        #expect(ledgerStore.reserveAdmissions(owner: secondOwner,
+                                              accountID: RoomMemberProxyMock.mockMe.userID,
+                                              destinationRoomID: "3",
+                                              items: [otherItem]) == .stored)
         let ledgerKey = try #require(userDefaults.persistentDomain(forName: suiteName)?.keys.first)
-        userDefaults.set(Data("corrupt-forwarding-ledger".utf8), forKey: ledgerKey)
+        let corruptLedger = Data("corrupt-forwarding-ledger-with-two-destinations".utf8)
+        userDefaults.set(corruptLedger, forKey: ledgerKey)
         #expect(userDefaults.synchronize())
         ledgerStore = MessageForwardingLedgerStore(userDefaults: userDefaults)
         let targetTimeline = TimelineProxyMock(.init())
-        let viewModel = makeViewModel(forwardingBatch: .init(firstItem: forwardingItem),
-                                      targetTimeline: targetTimeline,
-                                      ledgerStore: ledgerStore)
-        let context = viewModel.context
-        context.send(viewAction: .selectRoom(roomID: "2"))
-        #expect(context.viewState.forwardingProgress?.unknownCount == 1)
-
-        context.send(viewAction: .send)
-        #expect(context.viewState.bindings.isUnknownOutcomeResolutionPresented)
-        #expect(targetTimeline.queueMessageEventContentCallsCount == 0)
-        #expect(userDefaults.object(forKey: ledgerKey) != nil)
-        let queued = deferFulfillment(viewModel.actions, timeout: .milliseconds(250)) { action in
-            guard case .queued(roomID: "2") = action else { return false }
+        let firstIndicatorController = UserIndicatorControllerMock()
+        let firstViewModel = makeViewModel(forwardingBatch: .init(firstItem: forwardingItem),
+                                           targetTimeline: targetTimeline,
+                                           userIndicatorController: firstIndicatorController,
+                                           ledgerStore: ledgerStore)
+        let firstContext = firstViewModel.context
+        firstContext.send(viewAction: .selectRoom(roomID: "2"))
+        firstContext.send(viewAction: .send)
+        let noFirstQueue = deferFailure(firstViewModel.actions, timeout: .milliseconds(150)) { action in
+            guard case .queued = action else { return false }
             return true
         }
+        firstContext.send(viewAction: .continueWithoutResending)
+        try await noFirstQueue.fulfill()
 
-        context.send(viewAction: .continueWithoutResending)
-        try await queued.fulfill()
-
+        #expect(firstContext.viewState.forwardingProgress?.unknownCount == 1)
+        #expect(firstContext.viewState.bindings.isUnknownOutcomeResolutionPresented)
         #expect(targetTimeline.queueMessageEventContentCallsCount == 0)
-        #expect(userDefaults.object(forKey: ledgerKey) == nil)
+        #expect(firstIndicatorController.submitIndicatorDelayReceivedArguments?.indicator.title ==
+            UntranslatedL10n.screenMessageForwardingQueueFailed)
+        #expect(userDefaults.data(forKey: ledgerKey) == corruptLedger)
+
+        let secondIndicatorController = UserIndicatorControllerMock()
+        let secondViewModel = makeViewModel(forwardingBatch: .init(firstItem: otherItem),
+                                            targetTimeline: targetTimeline,
+                                            userIndicatorController: secondIndicatorController,
+                                            ledgerStore: ledgerStore)
+        let secondContext = secondViewModel.context
+        secondContext.send(viewAction: .selectRoom(roomID: "3"))
+        secondContext.send(viewAction: .send)
+        let noSecondQueue = deferFailure(secondViewModel.actions, timeout: .milliseconds(150)) { action in
+            guard case .queued = action else { return false }
+            return true
+        }
+        secondContext.send(viewAction: .sendUnknownAgain)
+        try await noSecondQueue.fulfill()
+
+        #expect(secondContext.viewState.forwardingProgress?.unknownCount == 1)
+        #expect(secondContext.viewState.bindings.isUnknownOutcomeResolutionPresented)
+        #expect(targetTimeline.queueMessageEventContentCallsCount == 0)
+        #expect(secondIndicatorController.submitIndicatorDelayReceivedArguments?.indicator.title ==
+            UntranslatedL10n.screenMessageForwardingQueueFailed)
+        #expect(userDefaults.data(forKey: ledgerKey) == corruptLedger)
     }
 
     @Test
@@ -1080,51 +1109,78 @@ struct MessageForwardingScreenViewModelTests {
 
 extension MessageForwardingScreenViewModelTests {
     @Test
-    func queuedSDKResultFailsClosedWhenLedgerPersistenceFails() async throws {
-        let ledgerStore = InMemoryMessageForwardingLedgerStore(applyResults: [.persistenceFailed])
-        let targetTimeline = TimelineProxyMock(.init())
-        let userIndicatorController = UserIndicatorControllerMock()
-        let viewModel = makeViewModel(forwardingBatch: .init(firstItem: forwardingItem),
-                                      targetTimeline: targetTimeline,
-                                      userIndicatorController: userIndicatorController,
-                                      ledgerStore: ledgerStore)
-        let context = viewModel.context
-        context.send(viewAction: .selectRoom(roomID: "2"))
-        var queuedActionCount = 0
-        let cancellable = viewModel.actions.sink { action in
-            guard case .queued = action else { return }
-            queuedActionCount += 1
+    func partialSDKSuccessRetainsRetryableSuffixWhenLedgerPersistenceFails() async throws {
+        for resolutionAction in [MessageForwardingScreenViewAction.continueWithoutResending, .sendUnknownAgain] {
+            let forwardingBatch = makeForwardingBatch(count: 3)
+            let ledgerStore = InMemoryMessageForwardingLedgerStore(applyResults: [.persistenceFailed])
+            let targetTimeline = TimelineProxyMock(.init())
+            var queuedContents = [RoomMessageEventContentWithoutRelation]()
+            let results = ForwardingResultSequence([
+                .success(SendHandleSDKMock()),
+                .failure(.failedRedacting),
+                .success(SendHandleSDKMock()),
+                .success(SendHandleSDKMock())
+            ])
+            targetTimeline.queueMessageEventContentClosure = { content in
+                queuedContents.append(content)
+                return results.next()
+            }
+            let viewModel = makeViewModel(forwardingBatch: forwardingBatch,
+                                          targetTimeline: targetTimeline,
+                                          ledgerStore: ledgerStore)
+            let context = viewModel.context
+            context.send(viewAction: .selectRoom(roomID: "2"))
+
+            context.send(viewAction: .send)
+            try await waitForCondition {
+                ledgerStore.applyCallsCount == 1 && context.viewState.forwardingProgress?.isBusy == false
+            }
+
+            #expect(targetTimeline.queueMessageEventContentCallsCount == 2)
+            #expect(context.viewState.forwardingProgress?.unknownCount == 1)
+            #expect(context.viewState.forwardingProgress?.failedCount == 2)
+            #expect(context.viewState.isDestinationLocked)
+
+            let queued = deferFulfillment(viewModel.actions) { action in
+                guard case .queued(roomID: "2") = action else { return false }
+                return true
+            }
+            context.send(viewAction: .send)
+            #expect(context.viewState.bindings.isUnknownOutcomeResolutionPresented)
+            context.send(viewAction: resolutionAction)
+            try await queued.fulfill()
+
+            let expectedContents = [forwardingBatch.items[0].content,
+                                    forwardingBatch.items[1].content,
+                                    forwardingBatch.items[1].content,
+                                    forwardingBatch.items[2].content]
+            #expect(queuedContents.elementsEqual(expectedContents) { $0 === $1 })
+            #expect(ledgerStore.applyCallsCount == 3)
+            #expect(context.viewState.forwardingProgress?.queuedCount == 3)
+            #expect(context.viewState.forwardingProgress?.failedCount == 0)
+            #expect(context.viewState.forwardingProgress?.unknownCount == 0)
         }
-
-        context.send(viewAction: .send)
-        try await waitForCondition { ledgerStore.applyCallsCount == 1 }
-
-        #expect(targetTimeline.queueMessageEventContentCallsCount == 1)
-        #expect(queuedActionCount == 0)
-        #expect(context.viewState.forwardingProgress?.unknownCount == 1)
-        #expect(ledgerStore.state(accountID: RoomMemberProxyMock.mockMe.userID,
-                                  destinationRoomID: "2",
-                                  item: forwardingItem) == .admitting)
-        #expect(userIndicatorController.submitIndicatorDelayReceivedArguments?.indicator.title ==
-            UntranslatedL10n.screenMessageForwardingQueueFailed)
-        withExtendedLifetime(cancellable) { }
     }
 
     @Test
-    func cancellationDoesNotDismissWhenLedgerPersistenceFails() async throws {
+    func cancellationPersistenceFailureOnlyLocksTheTrulyUncertainItem() async throws {
+        let forwardingBatch = makeForwardingBatch(count: 3)
         let ledgerStore = InMemoryMessageForwardingLedgerStore(applyResults: [.persistenceFailed])
         let sendGate = ForwardingSendGate()
         let sendHandle = SendHandleSDKMock()
-        sendHandle.abortReturnValue = true
+        sendHandle.abortReturnValue = false
         let targetTimeline = TimelineProxyMock(.init())
-        targetTimeline.queueMessageEventContentClosure = { _ in
-            await sendGate.wait()
-            return .success(sendHandle)
+        var queuedContents = [RoomMessageEventContentWithoutRelation]()
+        targetTimeline.queueMessageEventContentClosure = { content in
+            queuedContents.append(content)
+            if queuedContents.count == 1 {
+                await sendGate.wait()
+                return .success(sendHandle)
+            }
+            return .success(SendHandleSDKMock())
         }
-        let userIndicatorController = UserIndicatorControllerMock()
-        let viewModel = makeViewModel(forwardingBatch: .init(firstItem: forwardingItem),
+        let viewModel = makeViewModel(forwardingBatch: forwardingBatch,
                                       targetTimeline: targetTimeline,
-                                      userIndicatorController: userIndicatorController,
                                       ledgerStore: ledgerStore)
         let context = viewModel.context
         context.send(viewAction: .selectRoom(roomID: "2"))
@@ -1143,12 +1199,57 @@ extension MessageForwardingScreenViewModelTests {
         #expect(sendHandle.abortCallsCount == 1)
         #expect(dismissActionCount == 0)
         #expect(context.viewState.forwardingProgress?.unknownCount == 1)
-        #expect(ledgerStore.state(accountID: RoomMemberProxyMock.mockMe.userID,
-                                  destinationRoomID: "2",
-                                  item: forwardingItem) == .admitting)
-        #expect(userIndicatorController.submitIndicatorDelayReceivedArguments?.indicator.title ==
-            UntranslatedL10n.screenMessageForwardingQueueFailed)
+        #expect(context.viewState.forwardingProgress?.failedCount == 2)
+        #expect(context.viewState.isDestinationLocked)
+
+        let queued = deferFulfillment(viewModel.actions) { action in
+            guard case .queued(roomID: "2") = action else { return false }
+            return true
+        }
+        context.send(viewAction: .send)
+        #expect(context.viewState.bindings.isUnknownOutcomeResolutionPresented)
+        context.send(viewAction: .continueWithoutResending)
+        try await queued.fulfill()
+
+        let expectedContents = forwardingBatch.items.map(\.content)
+        #expect(queuedContents.elementsEqual(expectedContents) { $0 === $1 })
+        #expect(ledgerStore.applyCallsCount == 3)
         withExtendedLifetime(cancellable) { }
+    }
+
+    @Test
+    func stoppingAfterPersistenceFailuresKeepsDefiniteOutcomeInMemoryAndRebuildFailsClosed() async throws {
+        let ledgerStore = InMemoryMessageForwardingLedgerStore(applyResults: [.persistenceFailed, .persistenceFailed])
+        let sendHandle = SendHandleSDKMock()
+        sendHandle.abortReturnValue = true
+        let targetTimeline = TimelineProxyMock(.init())
+        targetTimeline.queueMessageEventContentReturnValue = .success(sendHandle)
+        let firstViewModel = makeViewModel(forwardingBatch: .init(firstItem: forwardingItem),
+                                           targetTimeline: targetTimeline,
+                                           ledgerStore: ledgerStore)
+        let firstContext = firstViewModel.context
+        firstContext.send(viewAction: .selectRoom(roomID: "2"))
+
+        firstContext.send(viewAction: .send)
+        try await waitForCondition { ledgerStore.applyCallsCount == 1 }
+        firstViewModel.stop()
+        try await waitForCondition { ledgerStore.applyCallsCount == 2 }
+
+        #expect(sendHandle.abortCallsCount == 1)
+        #expect(firstContext.viewState.forwardingProgress?.unknownCount == 0)
+        #expect(firstContext.viewState.forwardingProgress?.failedCount == 1)
+        #expect(firstContext.viewState.isDestinationLocked)
+
+        let secondViewModel = makeViewModel(forwardingBatch: .init(firstItem: forwardingItem),
+                                            targetTimeline: targetTimeline,
+                                            ledgerStore: ledgerStore)
+        let secondContext = secondViewModel.context
+        secondContext.send(viewAction: .selectRoom(roomID: "2"))
+        #expect(secondContext.viewState.forwardingProgress?.unknownCount == 1)
+        secondContext.send(viewAction: .send)
+
+        #expect(secondContext.viewState.bindings.isUnknownOutcomeResolutionPresented)
+        #expect(targetTimeline.queueMessageEventContentCallsCount == 1)
     }
 
     @Test

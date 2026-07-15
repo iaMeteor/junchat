@@ -746,6 +746,10 @@ private final class TimelineViewModelActionEmitter: TimelineViewModelProtocol {
         actionSubject.send(action)
     }
 
+    func stop() {
+        viewModel.stop()
+    }
+
     func process(composerAction: ComposerToolbarViewModelAction) {
         viewModel.process(composerAction: composerAction)
     }

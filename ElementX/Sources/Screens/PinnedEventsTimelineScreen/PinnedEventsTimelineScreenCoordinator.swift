@@ -106,6 +106,7 @@ final class PinnedEventsTimelineScreenCoordinator: CoordinatorProtocol {
     }
     
     func stop() {
+        timelineViewModel.stop()
         viewModel.stop()
     }
         

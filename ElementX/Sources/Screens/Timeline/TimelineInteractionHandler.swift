@@ -522,11 +522,7 @@ class TimelineInteractionHandler {
         actionsSubject.send(.displayEmojiPicker(itemID: itemID, selectedEmojis: selectedEmojis))
     }
     
-    func processItemTap(_ itemID: TimelineItemIdentifier) async -> TimelineControllerAction {
-        guard let timelineItem = timelineController.timelineItems.firstUsingStableID(itemID) as? EventBasedTimelineItemProtocol else {
-            return .none
-        }
-        
+    func processItemTap(_ timelineItem: EventBasedTimelineItemProtocol) async -> TimelineControllerAction {
         switch timelineItem {
         case let item as LocationRoomTimelineItem:
             guard let geoURI = item.content.geoURI else { return .none }

@@ -246,9 +246,12 @@ struct MessageForwardingLedgerStoreTests {
         defer { testDefaults.cleanup() }
         let accountID = "@alice:example.org"
         let destinationRoomID = "!destination:example.org"
+        let otherDestinationRoomID = "!other-destination:example.org"
         let admittedItem = makeItem(eventID: "$admitted")
+        let otherAdmittedItem = makeItem(eventID: "$other-admitted")
         let newItem = makeItem(eventID: "$new")
         let owner = MessageForwardingLedgerOwner()
+        let otherOwner = MessageForwardingLedgerOwner()
         var store = MessageForwardingLedgerStore(userDefaults: testDefaults.userDefaults)
         #expect(store.reserveAdmissions(owner: owner,
                                         accountID: accountID,
@@ -259,6 +262,15 @@ struct MessageForwardingLedgerStoreTests {
                                accountID: accountID,
                                destinationRoomID: destinationRoomID,
                                item: admittedItem) == .stored)
+        #expect(store.reserveAdmissions(owner: otherOwner,
+                                        accountID: accountID,
+                                        destinationRoomID: otherDestinationRoomID,
+                                        items: [otherAdmittedItem]) == .stored)
+        #expect(store.setState(.admitted,
+                               owner: otherOwner,
+                               accountID: accountID,
+                               destinationRoomID: otherDestinationRoomID,
+                               item: otherAdmittedItem) == .stored)
         let domain = try #require(testDefaults.userDefaults.persistentDomain(forName: testDefaults.suiteName))
         let ledgerKey = try #require(domain.keys.first)
         let corruptLedger = Data("not-a-forwarding-ledger".utf8)
@@ -280,6 +292,13 @@ struct MessageForwardingLedgerStoreTests {
                                accountID: accountID,
                                destinationRoomID: destinationRoomID,
                                item: newItem) == .persistenceFailed)
+        #expect(store.state(accountID: accountID,
+                            destinationRoomID: otherDestinationRoomID,
+                            item: otherAdmittedItem) == .unknown)
+        #expect(store.apply([.remove(item: otherAdmittedItem)],
+                            owner: otherOwner,
+                            accountID: accountID,
+                            destinationRoomID: otherDestinationRoomID) == .persistenceFailed)
         #expect(testDefaults.userDefaults.data(forKey: ledgerKey) == corruptLedger)
     }
 

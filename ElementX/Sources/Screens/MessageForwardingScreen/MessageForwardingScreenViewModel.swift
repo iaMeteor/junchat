@@ -176,6 +176,12 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
             return
         }
 
+        if state.isLedgerReconciliationRequired,
+           !reconcileLedger(roomID: roomID, resendUnknown: nil) {
+            reportLedgerReconciliationFailure()
+            return
+        }
+
         beginForwarding(to: roomID)
     }
 
@@ -269,7 +275,8 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
         }
 
         guard persistQueueingResults(roomID: roomID) else {
-            markQueueingResultsAsUnknown()
+            state.isLedgerReconciliationRequired = true
+            markAcceptedQueueingResultsAsUnknown()
             updateProgress(isQueueing: false, isCancelling: false)
             return .queueingFailed
         }
@@ -365,62 +372,97 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
             MXLog.error("Failed atomically updating the message forwarding admission ledger.")
             return false
         }
+        state.isLedgerReconciliationRequired = false
         return true
     }
 
-    private func markQueueingResultsAsUnknown() {
+    private func markAcceptedQueueingResultsAsUnknown() {
         for index in forwardingOperations.indices {
-            switch forwardingOperations[index].status {
-            case .queued(let sendHandle):
+            if case .queued(let sendHandle) = forwardingOperations[index].status {
                 forwardingOperations[index].status = .queuedWithUnknownLedgerState(sendHandle)
-            case .queueingFailed:
-                forwardingOperations[index].status = .cancellationUnknown
-            default:
-                break
             }
         }
     }
 
-    private func resolveUnknownAdmissions(_ items: [MessageForwardingItem], roomID: String) -> Bool {
-        if ledgerStore.removeStates(owner: ledgerOwner,
-                                    accountID: clientProxy.userID,
-                                    destinationRoomID: roomID,
-                                    items: items,
-                                    includingPreviousLaunches: true) {
-            return true
+    private func reconcileLedger(roomID: String, resendUnknown: Bool?) -> Bool {
+        let ownedUpdates = forwardingOperations.compactMap { operation -> MessageForwardingLedgerUpdate? in
+            switch operation.status {
+            case .queuedWithUnknownLedgerState:
+                .set(.admitted, item: operation.item)
+            case .cancellationUnknown:
+                if resendUnknown == true {
+                    .remove(item: operation.item)
+                } else if resendUnknown == false {
+                    .set(.admitted, item: operation.item)
+                } else {
+                    nil
+                }
+            case .queueingFailed, .cancelled:
+                .remove(item: operation.item)
+            default:
+                nil
+            }
         }
-        guard ledgerStore.discardCorruptLedger(accountID: clientProxy.userID) else {
-            MXLog.error("Failed resolving message forwarding admissions owned by another active scene.")
+
+        if !ownedUpdates.isEmpty,
+           ledgerStore.apply(ownedUpdates,
+                             owner: ledgerOwner,
+                             accountID: clientProxy.userID,
+                             destinationRoomID: roomID) != .stored {
+            MXLog.error("Failed reconciling message forwarding admissions for the current batch.")
+            state.isLedgerReconciliationRequired = true
             return false
         }
-        MXLog.error("Discarded a corrupt message forwarding admission ledger after explicit user confirmation.")
+
+        let restoredItems = forwardingOperations.compactMap { operation in
+            operation.status.isRestoredUnknown ? operation.item : nil
+        }
+        if !restoredItems.isEmpty,
+           !ledgerStore.removeStates(owner: ledgerOwner,
+                                     accountID: clientProxy.userID,
+                                     destinationRoomID: roomID,
+                                     items: restoredItems,
+                                     includingPreviousLaunches: true) {
+            MXLog.error("Failed resolving exact restored message forwarding admissions.")
+            state.isLedgerReconciliationRequired = true
+            return false
+        }
+
+        state.isLedgerReconciliationRequired = false
         return true
     }
 
     private func continueWithoutResendingUnknownOperations() {
-        guard let roomID = state.selectedRoomID else { return }
-        let unknownItems = forwardingOperations.compactMap { operation in
-            operation.status.isUnknownOutcome ? operation.item : nil
-        }
-        guard resolveUnknownAdmissions(unknownItems, roomID: roomID) else { return }
-        state.bindings.isUnknownOutcomeResolutionPresented = false
-        for index in forwardingOperations.indices where forwardingOperations[index].status.isUnknownOutcome {
-            forwardingOperations[index].status = .acceptedByQueue
-        }
-        beginForwarding(to: roomID)
+        resolveUnknownOperations(resendUnknown: false)
     }
 
     private func resendUnknownOperations() {
+        resolveUnknownOperations(resendUnknown: true)
+    }
+
+    private func resolveUnknownOperations(resendUnknown: Bool) {
         guard let roomID = state.selectedRoomID else { return }
-        let unknownItems = forwardingOperations.compactMap { operation in
-            operation.status.isUnknownOutcome ? operation.item : nil
+        guard reconcileLedger(roomID: roomID, resendUnknown: resendUnknown) else {
+            reportLedgerReconciliationFailure()
+            return
         }
-        guard resolveUnknownAdmissions(unknownItems, roomID: roomID) else { return }
-        for index in forwardingOperations.indices where forwardingOperations[index].status.isUnknownOutcome {
-            forwardingOperations[index].status = .pending
+
+        for index in forwardingOperations.indices {
+            switch forwardingOperations[index].status {
+            case .queuedWithUnknownLedgerState(let sendHandle):
+                forwardingOperations[index].status = .queued(sendHandle)
+            case .cancellationUnknown, .restoredUnknown:
+                forwardingOperations[index].status = resendUnknown ? .pending : .acceptedByQueue
+            default:
+                break
+            }
         }
         state.bindings.isUnknownOutcomeResolutionPresented = false
         beginForwarding(to: roomID)
+    }
+
+    private func reportLedgerReconciliationFailure() {
+        userIndicatorController.submitIndicator(UserIndicator(title: UntranslatedL10n.screenMessageForwardingQueueFailed))
     }
 
     private func cancelForwarding(dismissWhenComplete: Bool, releaseOwnerWhenComplete: Bool) {
@@ -437,12 +479,13 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
 
         guard forwardingOperations.contains(where: \.status.isQueued) else {
             let shouldDismiss = shouldDismissAfterCancellation
-            if forwardingOperations.contains(where: \.status.isOwnedUnknownOutcome),
+            if state.isLedgerReconciliationRequired || forwardingOperations.contains(where: \.status.isOwnedUnknownOutcome),
                !persistCancellationResults() {
-                markCancellationResultsAsUnknown()
+                state.isLedgerReconciliationRequired = true
+                markCancelledOperationsAsRetryable()
                 updateProgress(isQueueing: false, isCancelling: false)
                 resetCancellationState()
-                userIndicatorController.submitIndicator(UserIndicator(title: UntranslatedL10n.screenMessageForwardingQueueFailed))
+                reportLedgerReconciliationFailure()
                 return
             }
             if shouldReleaseOwnerAfterCancellation, !releaseOwnedUnknownAdmissions() {
@@ -497,7 +540,8 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
         }
 
         guard persistCancellationResults() else {
-            markCancellationResultsAsUnknown()
+            state.isLedgerReconciliationRequired = true
+            markCancelledOperationsAsRetryable()
             updateProgress(isQueueing: false, isCancelling: false)
             return .queueingFailed
         }
@@ -528,16 +572,14 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
             MXLog.error("Failed atomically updating cancelled message forwarding admissions.")
             return false
         }
+        state.isLedgerReconciliationRequired = false
         return true
     }
 
-    private func markCancellationResultsAsUnknown() {
+    private func markCancelledOperationsAsRetryable() {
         for index in forwardingOperations.indices {
-            switch forwardingOperations[index].status {
-            case .cancelled, .queueingFailed:
-                forwardingOperations[index].status = .cancellationUnknown
-            default:
-                break
+            if case .cancelled = forwardingOperations[index].status {
+                forwardingOperations[index].status = .queueingFailed
             }
         }
     }
@@ -682,6 +724,14 @@ private enum MessageForwardingOperationStatus {
         case .queuedWithUnknownLedgerState, .cancellationUnknown:
             true
         default:
+            false
+        }
+    }
+
+    var isRestoredUnknown: Bool {
+        if case .restoredUnknown = self {
+            true
+        } else {
             false
         }
     }

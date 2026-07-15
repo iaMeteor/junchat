@@ -800,6 +800,111 @@ extension TimelineViewModelTests {
     }
 
     @Test
+    func mediaTapCannotResolveAReplacementEventWithTheSameProviderLocalID() async throws {
+        let uniqueID = TimelineItemIdentifier.UniqueID("media-provider-local-id")
+        let retiredItem = makeProviderLockImageItem(id: .event(uniqueID: uniqueID, eventOrTransactionID: .eventID("retired-media-event")))
+        let replacementItem = makeProviderLockImageItem(id: .event(uniqueID: uniqueID, eventOrTransactionID: .eventID("replacement-media-event")))
+        let timelineController = MockTimelineController(timelineKind: .media(.mediaFilesScreen), timelineItems: [retiredItem])
+        let viewModel = makeProviderLockViewModel(timelineController: timelineController)
+        let replacementRendered = deferFulfillment(viewModel.context.$viewState) { state in
+            state.timelineState.itemViewStates.first?.identifier == replacementItem.id
+        }
+
+        timelineController.activeProviderGeneration = 1
+        timelineController.timelineItemsProviderGeneration = 1
+        timelineController.timelineItems = [replacementItem]
+        timelineController.callbacks.send(.updatedTimelineItems(timelineItems: [replacementItem],
+                                                                isSwitchingTimelines: true,
+                                                                providerGeneration: 1,
+                                                                timelineItemsGeneration: timelineController.timelineItemsGeneration))
+        try await replacementRendered.fulfill()
+
+        let noPreview = deferFailure(viewModel.actions, timeout: .milliseconds(150)) { action in
+            guard case .displayMediaPreview = action else { return false }
+            return true
+        }
+        viewModel.process(viewAction: .mediaTapped(itemID: retiredItem.id))
+
+        try await noPreview.fulfill()
+    }
+
+    @Test
+    func providerReplacementCancelsGatedMediaFactoryAndDropsItsLateResult() async throws {
+        let originalItem = makeProviderLockImageItem(eventID: "gated-media-original")
+        let replacementItem = makeProviderLockImageItem(eventID: "gated-media-replacement")
+        let timelineController = MockTimelineController(timelineKind: .live, timelineItems: [originalItem])
+        let factoryGate = MediaTimelineFactoryGate()
+        defer { factoryGate.resume() }
+        let timelineControllerFactory = TimelineControllerFactoryMock(.init())
+        timelineControllerFactory.buildMessageFilteredTimelineControllerFocusAllowedMessageTypesPresentationRoomProxyTimelineItemFactoryMediaProviderClosure = { _, _, _, _, _, _ in
+            await factoryGate.wait()
+            return .success(MockTimelineController(timelineKind: .media(.roomScreenLive), timelineItems: [originalItem]))
+        }
+        let viewModel = makeProviderLockViewModel(timelineController: timelineController,
+                                                  timelineControllerFactory: timelineControllerFactory)
+        let factoryStarted = deferFulfillment(factoryGate.started) { _ in true }
+        viewModel.process(viewAction: .mediaTapped(itemID: originalItem.id))
+        try await factoryStarted.fulfill()
+
+        let replacementRendered = deferFulfillment(viewModel.context.$viewState) { state in
+            state.timelineState.itemViewStates.first?.identifier == replacementItem.id
+        }
+        timelineController.activeProviderGeneration = 1
+        timelineController.timelineItemsProviderGeneration = 1
+        timelineController.timelineItems = [replacementItem]
+        timelineController.callbacks.send(.updatedTimelineItems(timelineItems: [replacementItem],
+                                                                isSwitchingTimelines: true,
+                                                                providerGeneration: 1,
+                                                                timelineItemsGeneration: timelineController.timelineItemsGeneration))
+        try await replacementRendered.fulfill()
+        for _ in 0..<100 where !factoryGate.wasCancelled {
+            await Task.yield()
+        }
+        #expect(factoryGate.wasCancelled)
+
+        let noPreview = deferFailure(viewModel.actions, timeout: .milliseconds(150)) { action in
+            guard case .displayMediaPreview = action else { return false }
+            return true
+        }
+        factoryGate.resume()
+
+        try await noPreview.fulfill()
+    }
+
+    @Test
+    func stoppingTimelineCancelsGatedMediaFactoryAndDropsItsLateResult() async throws {
+        let item = makeProviderLockImageItem(eventID: "stopped-media-request")
+        let timelineController = MockTimelineController(timelineKind: .live, timelineItems: [item])
+        let factoryGate = MediaTimelineFactoryGate()
+        defer { factoryGate.resume() }
+        let timelineControllerFactory = TimelineControllerFactoryMock(.init())
+        timelineControllerFactory.buildMessageFilteredTimelineControllerFocusAllowedMessageTypesPresentationRoomProxyTimelineItemFactoryMediaProviderClosure = { _, _, _, _, _, _ in
+            await factoryGate.wait()
+            return .success(MockTimelineController(timelineKind: .media(.roomScreenLive), timelineItems: [item]))
+        }
+        let viewModel = makeProviderLockViewModel(timelineController: timelineController,
+                                                  timelineControllerFactory: timelineControllerFactory)
+        let factoryStarted = deferFulfillment(factoryGate.started) { _ in true }
+        viewModel.process(viewAction: .mediaTapped(itemID: item.id))
+        try await factoryStarted.fulfill()
+
+        viewModel.stop()
+        for _ in 0..<100 where !factoryGate.wasCancelled {
+            await Task.yield()
+        }
+        #expect(factoryGate.wasCancelled)
+
+        let noPreview = deferFailure(viewModel.actions, timeout: .milliseconds(150)) { action in
+            guard case .displayMediaPreview = action else { return false }
+            return true
+        }
+        factoryGate.resume()
+
+        try await noPreview.fulfill()
+        #expect(!viewModel.state.showLoading)
+    }
+
+    @Test
     func delayedMenuActionsCannotCrossAProviderGenerationCollision() async throws {
         let uniqueID = TimelineItemIdentifier.UniqueID("delayed-menu-provider-local-id")
         let retiredItem = makeProviderLockItem(id: .event(uniqueID: uniqueID, eventOrTransactionID: .eventID("delayed-menu-retired")))
@@ -1148,7 +1253,8 @@ extension TimelineViewModelTests {
     }
 
     private func makeProviderLockViewModel(timelineController: TimelineControllerProtocol,
-                                           focussedEventID: String? = nil) -> TimelineViewModel {
+                                           focussedEventID: String? = nil,
+                                           timelineControllerFactory: TimelineControllerFactoryProtocol? = nil) -> TimelineViewModel {
         TimelineViewModel(roomProxy: JoinedRoomProxyMock(.init(name: "")),
                           focussedEventID: focussedEventID,
                           timelineController: timelineController,
@@ -1160,7 +1266,7 @@ extension TimelineViewModelTests {
                           analyticsService: ServiceLocator.shared.analytics,
                           emojiProvider: EmojiProvider(appSettings: ServiceLocator.shared.settings),
                           linkMetadataProvider: LinkMetadataProvider(),
-                          timelineControllerFactory: TimelineControllerFactoryMock(.init()))
+                          timelineControllerFactory: timelineControllerFactory ?? TimelineControllerFactoryMock(.init()))
     }
 
     private func forwardingFulfillment(viewModel: TimelineViewModel,
@@ -1185,6 +1291,24 @@ extension TimelineViewModelTests {
                              canBeRepliedTo: true,
                              sender: .init(id: "@alice:server.com", displayName: "alice"),
                              content: .init(body: body))
+    }
+
+    private func makeProviderLockImageItem(eventID: String) -> ImageRoomTimelineItem {
+        makeProviderLockImageItem(id: .event(uniqueID: .init(UUID().uuidString), eventOrTransactionID: .eventID(eventID)))
+    }
+
+    private func makeProviderLockImageItem(id: TimelineItemIdentifier) -> ImageRoomTimelineItem {
+        ImageRoomTimelineItem(id: id,
+                              timestamp: .mock,
+                              isOutgoing: false,
+                              isEditable: false,
+                              canBeRepliedTo: true,
+                              sender: .init(id: "@alice:server.com", displayName: "alice"),
+                              content: .init(filename: "image.jpeg",
+                                             caption: nil,
+                                             imageInfo: .mockImage,
+                                             thumbnailInfo: .mockThumbnail,
+                                             contentType: .jpeg))
     }
 
     private func assertDirectContextMenuForwardingIsInvalidated(originalItem: TextRoomTimelineItem,
@@ -1365,6 +1489,32 @@ private final class CancellationAwareTimelineOperationGate {
     private func cancel() {
         wasCancelled = true
         resume()
+    }
+}
+
+@MainActor
+private final class MediaTimelineFactoryGate {
+    let started = PassthroughSubject<Void, Never>()
+    private var continuation: CheckedContinuation<Void, Never>?
+    private(set) var wasCancelled = false
+
+    func wait() async {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                self.continuation = continuation
+                started.send()
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.wasCancelled = true
+            }
+        }
+    }
+
+    func resume() {
+        let continuation = continuation
+        self.continuation = nil
+        continuation?.resume()
     }
 }
 

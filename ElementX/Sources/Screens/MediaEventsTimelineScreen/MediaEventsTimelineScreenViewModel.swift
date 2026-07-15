@@ -137,6 +137,8 @@ class MediaEventsTimelineScreenViewModel: MediaEventsTimelineScreenViewModelType
     }
     
     func stop() {
+        mediaTimelineViewModel.stop()
+        filesTimelineViewModel.stop()
         cancelMediaPreviewForwardingHandoff()
         // Work around QLPreviewController dismissal issues, see the InteractiveQuickLookModifier.
         state.bindings.mediaPreviewViewModel = nil

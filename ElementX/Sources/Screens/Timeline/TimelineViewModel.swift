@@ -56,6 +56,8 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
     private var prepareMessageForwardingTask: Task<Void, Never>?
     private var prepareDirectMessageForwardingTask: Task<Void, Never>?
     private var redactMessagesTask: Task<Void, Never>?
+    private var mediaTapTask: Task<Void, Never>?
+    private var mediaTapRequestID: UUID?
     private var messageForwardingPreparationGeneration = 0
     private var messageSelectionProviderLease: TimelineProviderLease?
     private let directMessageForwardingPreparationOwnerID = UUID()
@@ -177,6 +179,7 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
         prepareMessageForwardingTask?.cancel()
         prepareDirectMessageForwardingTask?.cancel()
         redactMessagesTask?.cancel()
+        mediaTapTask?.cancel()
         forwardingItemPreparer.cancel(preparationOwnerID: directMessageForwardingPreparationOwnerID)
         for task in sendMessageTasks.values {
             task.cancel()
@@ -187,6 +190,10 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
     }
 
     // MARK: - Public
+
+    func stop() {
+        cancelMediaTap()
+    }
 
     override func process(viewAction: TimelineViewAction) {
         if state.messageSelectionState.isActive, viewAction.isBlockedDuringMessageSelection {
@@ -200,7 +207,7 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
         case .itemDisappeared(let id):
             Task { await timelineController.processItemDisappearance(id) }
         case .mediaTapped(let id):
-            Task { await handleMediaTapped(with: id) }
+            handleMediaTapped(with: id)
         case .itemSendInfoTapped(let itemID):
             handleItemSendInfoTapped(itemID: itemID)
         case .toggleReaction(let emoji, let itemID):
@@ -525,27 +532,10 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
 
                 switch callback {
                 case .updatedTimelineItems(let updatedItems, let isSwitchingTimelines, let providerGeneration, let timelineItemsGeneration):
-                    guard providerGeneration == timelineController.activeProviderGeneration,
-                          timelineItemsGeneration == timelineController.timelineItemsGeneration,
-                          !timelineController.isTimelineItemsBuildInProgress else { return }
-                    cancelDirectMessageForwardingPreparation(releasingProviderLease: true)
-                    if prepareMessageForwardingTask != nil {
-                        cancelMessageForwardingPreparation()
-                    }
-                    if providerGeneration == renderedProviderGeneration {
-                        renderedTimelineItemsGeneration = timelineItemsGeneration
-                        refreshMessageSelectionProviderLeaseIfNeeded()
-                        reconcileMessageSelection(with: updatedItems)
-                    } else {
-                        setMessageSelectionState(.init())
-                        renderedProviderGeneration = providerGeneration
-                        renderedTimelineItemsGeneration = timelineItemsGeneration
-                    }
-                    buildTimelineViews(timelineItems: updatedItems, isSwitchingTimelines: isSwitchingTimelines)
-
-                    if !updatedItems.isEmpty {
-                        analyticsService.signpost.finishTransaction(.openRoom)
-                    }
+                    handleUpdatedTimelineItems(updatedItems,
+                                               isSwitchingTimelines: isSwitchingTimelines,
+                                               providerGeneration: providerGeneration,
+                                               timelineItemsGeneration: timelineItemsGeneration)
                 case .paginationState(let paginationState):
                     if state.timelineState.paginationState != paginationState {
                         state.timelineState.paginationState = paginationState
@@ -624,6 +614,37 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
                 }
             }
             .store(in: &cancellables)
+    }
+
+    private func handleUpdatedTimelineItems(_ updatedItems: [RoomTimelineItemProtocol],
+                                            isSwitchingTimelines: Bool,
+                                            providerGeneration: UInt,
+                                            timelineItemsGeneration: UInt) {
+        guard providerGeneration == timelineController.activeProviderGeneration,
+              timelineItemsGeneration == timelineController.timelineItemsGeneration,
+              !timelineController.isTimelineItemsBuildInProgress else { return }
+        if providerGeneration != renderedProviderGeneration ||
+            timelineItemsGeneration != renderedTimelineItemsGeneration {
+            cancelMediaTap()
+        }
+        cancelDirectMessageForwardingPreparation(releasingProviderLease: true)
+        if prepareMessageForwardingTask != nil {
+            cancelMessageForwardingPreparation()
+        }
+        if providerGeneration == renderedProviderGeneration {
+            renderedTimelineItemsGeneration = timelineItemsGeneration
+            refreshMessageSelectionProviderLeaseIfNeeded()
+            reconcileMessageSelection(with: updatedItems)
+        } else {
+            setMessageSelectionState(.init())
+            renderedProviderGeneration = providerGeneration
+            renderedTimelineItemsGeneration = timelineItemsGeneration
+        }
+        buildTimelineViews(timelineItems: updatedItems, isSwitchingTimelines: isSwitchingTimelines)
+
+        if !updatedItems.isEmpty {
+            analyticsService.signpost.finishTransaction(.openRoom)
+        }
     }
 
     func viewInRoomTimeline(eventID: String) async {
@@ -1031,9 +1052,41 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
         await timelineController.sendReadReceipt(for: lastVisibleItemID)
     }
 
-    private func handleMediaTapped(with itemID: TimelineItemIdentifier) async {
+    private func handleMediaTapped(with itemID: TimelineItemIdentifier) {
+        cancelMediaTap()
+        guard let timelineItem = timelineItem(withExactIdentifier: itemID) as? EventBasedTimelineItemProtocol else { return }
+
+        let requestID = UUID()
+        let providerGeneration = renderedProviderGeneration
+        let timelineItemsGeneration = renderedTimelineItemsGeneration
+        mediaTapRequestID = requestID
         state.showLoading = true
-        let action = await timelineInteractionHandler.processItemTap(itemID)
+        mediaTapTask = Task { [weak self] in
+            guard let self else { return }
+            let action = await timelineInteractionHandler.processItemTap(timelineItem)
+            guard !Task.isCancelled else { return }
+            handleMediaTapAction(action,
+                                 itemID: itemID,
+                                 requestID: requestID,
+                                 providerGeneration: providerGeneration,
+                                 timelineItemsGeneration: timelineItemsGeneration)
+        }
+    }
+
+    private func handleMediaTapAction(_ action: TimelineControllerAction,
+                                      itemID: TimelineItemIdentifier,
+                                      requestID: UUID,
+                                      providerGeneration: UInt,
+                                      timelineItemsGeneration: UInt) {
+        guard mediaTapRequestID == requestID,
+              renderedProviderGeneration == providerGeneration,
+              renderedTimelineItemsGeneration == timelineItemsGeneration,
+              timelineItem(withExactIdentifier: itemID)?.id == itemID else {
+            finishMediaTap(requestID: requestID)
+            return
+        }
+
+        finishMediaTap(requestID: requestID)
 
         switch action {
         case .displayMediaPreview(let item, let timelineViewModelKind):
@@ -1048,6 +1101,19 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
         case .none:
             break
         }
+    }
+
+    private func cancelMediaTap() {
+        mediaTapRequestID = nil
+        mediaTapTask?.cancel()
+        mediaTapTask = nil
+        state.showLoading = false
+    }
+
+    private func finishMediaTap(requestID: UUID) {
+        guard mediaTapRequestID == requestID else { return }
+        mediaTapRequestID = nil
+        mediaTapTask = nil
         state.showLoading = false
     }
 
