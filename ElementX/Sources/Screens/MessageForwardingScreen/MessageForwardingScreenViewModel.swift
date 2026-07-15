@@ -24,6 +24,7 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
     private var isCancellationRequested = false
     private var shouldDismissAfterCancellation = false
     private var shouldReleaseOwnerAfterCancellation = false
+    private var forwardingGeneration = 0
 
     private var actionsSubject: PassthroughSubject<MessageForwardingScreenViewModelAction, Never> = .init()
 
@@ -181,31 +182,37 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
     private func beginForwarding(to roomID: String) {
         guard forwardTask == nil else { return }
 
+        forwardingGeneration &+= 1
+        let generation = forwardingGeneration
         isCancellationRequested = false
         shouldDismissAfterCancellation = false
         shouldReleaseOwnerAfterCancellation = false
         updateProgress(isQueueing: true, isCancelling: false)
         forwardTask = Task { [weak self] in
             guard let self else { return }
-            let outcome = await forward(to: roomID)
+            let outcome = await forward(to: roomID, generation: generation)
             forwardTask = nil
             handleForwardingOutcome(outcome)
         }
     }
 
-    private func forward(to roomID: String) async -> MessageForwardingOutcome {
-        if isCancellationRequested {
+    private func forward(to roomID: String, generation: Int) async -> MessageForwardingOutcome {
+        if shouldCancelForwarding(generation: generation) {
             return await cancelQueuedOperations()
         }
 
         guard case let .joined(targetRoomProxy) = await clientProxy.roomForIdentifier(roomID) else {
-            if isCancellationRequested {
+            if shouldCancelForwarding(generation: generation) {
                 return await cancelQueuedOperations()
             }
 
             MXLog.error("Failed retrieving the destination room for message forwarding.")
             markUnqueuedOperationsAsFailed()
             return finishForwardingAttempt(roomID: roomID)
+        }
+
+        if shouldCancelForwarding(generation: generation) {
+            return await cancelQueuedOperations()
         }
 
         let reservableIndices = forwardingOperations.indices.filter { forwardingOperations[$0].status.shouldQueue }
@@ -240,7 +247,7 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
         }
 
         for index in forwardingOperations.indices where forwardingOperations[index].status.isReserved {
-            if isCancellationRequested {
+            if shouldCancelForwarding(generation: generation) {
                 return await cancelQueuedOperations()
             }
 
@@ -257,7 +264,7 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
                 MXLog.error("Failed adding a forwarded message to the send queue: \(type(of: error))")
             }
 
-            if isCancellationRequested {
+            if shouldCancelForwarding(generation: generation) {
                 updateProgress(isQueueing: false, isCancelling: true)
                 return await cancelQueuedOperations()
             }
@@ -265,8 +272,16 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
             updateProgress(isQueueing: true, isCancelling: false)
         }
 
-        persistQueueingResults(roomID: roomID)
+        guard persistQueueingResults(roomID: roomID) else {
+            markQueueingResultsAsUnknown()
+            updateProgress(isQueueing: false, isCancelling: false)
+            return .queueingFailed
+        }
         return finishForwardingAttempt(roomID: roomID)
+    }
+
+    private func shouldCancelForwarding(generation: Int) -> Bool {
+        Task.isCancelled || isCancellationRequested || generation != forwardingGeneration
     }
 
     private func finishForwardingAttempt(roomID: String) -> MessageForwardingOutcome {
@@ -321,7 +336,7 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
         }
     }
 
-    private func persistQueueingResults(roomID: String) {
+    private func persistQueueingResults(roomID: String) -> Bool {
         let updates = forwardingOperations.compactMap { operation -> MessageForwardingLedgerUpdate? in
             switch operation.status {
             case .queued:
@@ -337,7 +352,21 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
                                 accountID: clientProxy.userID,
                                 destinationRoomID: roomID) == .stored else {
             MXLog.error("Failed atomically updating the message forwarding admission ledger.")
-            return
+            return false
+        }
+        return true
+    }
+
+    private func markQueueingResultsAsUnknown() {
+        for index in forwardingOperations.indices {
+            switch forwardingOperations[index].status {
+            case .queued(let sendHandle):
+                forwardingOperations[index].status = .queuedWithUnknownLedgerState(sendHandle)
+            case .queueingFailed:
+                forwardingOperations[index].status = .cancellationUnknown
+            default:
+                break
+            }
         }
     }
 
@@ -385,6 +414,8 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
 
     private func cancelForwarding(dismissWhenComplete: Bool, releaseOwnerWhenComplete: Bool) {
         isCancellationRequested = true
+        forwardingGeneration &+= 1
+        forwardTask?.cancel()
         shouldDismissAfterCancellation = shouldDismissAfterCancellation || dismissWhenComplete
         shouldReleaseOwnerAfterCancellation = shouldReleaseOwnerAfterCancellation || releaseOwnerWhenComplete
 
@@ -395,8 +426,18 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
 
         guard forwardingOperations.contains(where: \.status.isQueued) else {
             let shouldDismiss = shouldDismissAfterCancellation
-            if shouldReleaseOwnerAfterCancellation {
-                releaseOwnedUnknownAdmissions()
+            if forwardingOperations.contains(where: \.status.isOwnedUnknownOutcome),
+               !persistCancellationResults() {
+                markCancellationResultsAsUnknown()
+                updateProgress(isQueueing: false, isCancelling: false)
+                resetCancellationState()
+                userIndicatorController.submitIndicator(UserIndicator(title: UntranslatedL10n.screenMessageForwardingQueueFailed))
+                return
+            }
+            if shouldReleaseOwnerAfterCancellation, !releaseOwnedUnknownAdmissions() {
+                resetCancellationState()
+                userIndicatorController.submitIndicator(UserIndicator(title: UntranslatedL10n.screenMessageForwardingQueueFailed))
+                return
             }
             resetCancellationState()
             if shouldDismiss {
@@ -422,7 +463,13 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
         }
 
         for index in forwardingOperations.indices {
-            guard case .queued(let sendHandle) = forwardingOperations[index].status else { continue }
+            let sendHandle: SendHandle
+            switch forwardingOperations[index].status {
+            case .queued(let handle), .queuedWithUnknownLedgerState(let handle):
+                sendHandle = handle
+            default:
+                continue
+            }
 
             do {
                 if try await sendHandle.abort() {
@@ -438,14 +485,21 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
             }
         }
 
-        persistCancellationResults()
+        guard persistCancellationResults() else {
+            markCancellationResultsAsUnknown()
+            updateProgress(isQueueing: false, isCancelling: false)
+            return .queueingFailed
+        }
         updateProgress(isQueueing: false, isCancelling: false)
         return .cancelled(unretractableCount: unretractableCount,
                           shouldDismiss: shouldDismissAfterCancellation)
     }
 
-    private func persistCancellationResults() {
-        guard let roomID = state.selectedRoomID else { return }
+    private func persistCancellationResults() -> Bool {
+        guard let roomID = state.selectedRoomID else {
+            MXLog.error("Failed updating cancelled message forwarding admissions without a destination.")
+            return false
+        }
         let updates = forwardingOperations.compactMap { operation -> MessageForwardingLedgerUpdate? in
             switch operation.status {
             case .cancelled, .queueingFailed:
@@ -461,7 +515,19 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
                                 accountID: clientProxy.userID,
                                 destinationRoomID: roomID) == .stored else {
             MXLog.error("Failed atomically updating cancelled message forwarding admissions.")
-            return
+            return false
+        }
+        return true
+    }
+
+    private func markCancellationResultsAsUnknown() {
+        for index in forwardingOperations.indices {
+            switch forwardingOperations[index].status {
+            case .cancelled, .queueingFailed:
+                forwardingOperations[index].status = .cancellationUnknown
+            default:
+                break
+            }
         }
     }
 
@@ -479,8 +545,9 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
         case .alreadyReserved:
             break
         case .cancelled(let unretractableCount, let shouldDismiss):
-            if shouldReleaseOwner {
-                releaseOwnedUnknownAdmissions()
+            if shouldReleaseOwner, !releaseOwnedUnknownAdmissions() {
+                userIndicatorController.submitIndicator(UserIndicator(title: UntranslatedL10n.screenMessageForwardingQueueFailed))
+                return
             }
             if unretractableCount > 0 {
                 userIndicatorController.submitIndicator(UserIndicator(title: UntranslatedL10n.screenMessageForwardingCancelledPartial(unretractableCount)))
@@ -493,21 +560,22 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
         }
     }
 
-    private func releaseOwnedUnknownAdmissions() {
-        guard let roomID = state.selectedRoomID else { return }
+    private func releaseOwnedUnknownAdmissions() -> Bool {
         let ownedUnknownIndices = forwardingOperations.indices.filter { forwardingOperations[$0].status.isOwnedUnknownOutcome }
-        guard !ownedUnknownIndices.isEmpty else { return }
+        guard !ownedUnknownIndices.isEmpty else { return true }
+        guard let roomID = state.selectedRoomID else { return false }
         let ownedUnknownItems = ownedUnknownIndices.map { forwardingOperations[$0].item }
         guard ledgerStore.releaseUnknownAdmissions(owner: ledgerOwner,
                                                    accountID: clientProxy.userID,
                                                    destinationRoomID: roomID,
                                                    items: ownedUnknownItems) else {
             MXLog.error("Failed releasing uncertain message forwarding admissions from a dismissed scene.")
-            return
+            return false
         }
         for index in ownedUnknownIndices {
             forwardingOperations[index].status = .restoredUnknown
         }
+        return true
     }
 
     private func resetCancelledOperationsAfterSuspension() {
@@ -539,6 +607,7 @@ private enum MessageForwardingOperationStatus {
     case reserved
     case queueing
     case queued(SendHandle)
+    case queuedWithUnknownLedgerState(SendHandle)
     case acceptedByQueue
     case queueingFailed
     case cancelled
@@ -563,9 +632,10 @@ private enum MessageForwardingOperationStatus {
     }
 
     var isQueued: Bool {
-        if case .queued = self {
+        switch self {
+        case .queued, .queuedWithUnknownLedgerState:
             true
-        } else {
+        default:
             false
         }
     }
@@ -589,7 +659,7 @@ private enum MessageForwardingOperationStatus {
 
     var isUnknownOutcome: Bool {
         switch self {
-        case .cancellationUnknown, .restoredUnknown:
+        case .queuedWithUnknownLedgerState, .cancellationUnknown, .restoredUnknown:
             true
         default:
             false
@@ -597,9 +667,10 @@ private enum MessageForwardingOperationStatus {
     }
 
     var isOwnedUnknownOutcome: Bool {
-        if case .cancellationUnknown = self {
+        switch self {
+        case .queuedWithUnknownLedgerState, .cancellationUnknown:
             true
-        } else {
+        default:
             false
         }
     }

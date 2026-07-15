@@ -12,7 +12,7 @@ import Foundation
 typealias TimelineMediaPreviewViewModelType = StateStoreViewModel<TimelineMediaPreviewViewState, TimelineMediaPreviewViewAction>
 
 class TimelineMediaPreviewViewModel: TimelineMediaPreviewViewModelType {
-    static let displayMessageForwardingDelay: TimeInterval = 1.0
+    static let displayMessageForwardingDelay: Duration = .seconds(1)
     
     let instanceID = UUID()
     
@@ -271,5 +271,46 @@ class TimelineMediaPreviewViewModel: TimelineMediaPreviewViewModelType {
     
     private var statusIndicatorID: String {
         "\(Self.self)-Status"
+    }
+}
+
+@MainActor
+final class TimelineMediaPreviewForwardingHandoff {
+    private let clock: any Clock<Duration>
+    private var generation = 0
+    private var task: Task<Void, Never>?
+
+    init(clock: any Clock<Duration> = ContinuousClock()) {
+        self.clock = clock
+    }
+
+    func schedule(_ action: @escaping @MainActor @Sendable () -> Void) {
+        cancel()
+        let generation = generation
+        let clock = clock
+        task = Task { [weak self] in
+            do {
+                try await clock.sleep(for: TimelineMediaPreviewViewModel.displayMessageForwardingDelay)
+            } catch {
+                return
+            }
+
+            guard let self, !Task.isCancelled, self.generation == generation else {
+                return
+            }
+
+            task = nil
+            action()
+        }
+    }
+
+    func cancel() {
+        generation &+= 1
+        task?.cancel()
+        task = nil
+    }
+
+    isolated deinit {
+        task?.cancel()
     }
 }

@@ -21,6 +21,8 @@ class RoomScreenViewModel: RoomScreenViewModelType, RoomScreenViewModelProtocol 
     private let appSettings: AppSettings
     private let analyticsService: AnalyticsService
     private let userIndicatorController: UserIndicatorControllerProtocol
+    private let mediaPreviewForwardingHandoff: TimelineMediaPreviewForwardingHandoff
+    private var mediaPreviewCancellable: AnyCancellable?
     private var privacyModeServiceValue = false
     private var privacyModeOperationGeneration = 0
     private var privacyModeOperationTask: Task<Void, Never>?
@@ -63,7 +65,8 @@ class RoomScreenViewModel: RoomScreenViewModelType, RoomScreenViewModelProtocol 
          appSettings: AppSettings,
          appHooks: AppHooks,
          analyticsService: AnalyticsService,
-         userIndicatorController: UserIndicatorControllerProtocol) {
+         userIndicatorController: UserIndicatorControllerProtocol,
+         mediaPreviewForwardingClock: any Clock<Duration> = ContinuousClock()) {
         clientProxy = userSession.clientProxy
         privacyModeService = userSession.privacyModeService
         self.roomProxy = roomProxy
@@ -71,6 +74,7 @@ class RoomScreenViewModel: RoomScreenViewModelType, RoomScreenViewModelProtocol 
         self.analyticsService = analyticsService
         self.userIndicatorController = userIndicatorController
         self.elementCallService = elementCallService
+        mediaPreviewForwardingHandoff = .init(clock: mediaPreviewForwardingClock)
 
         self.initialSelectedPinnedEventID = initialSelectedPinnedEventID
         pinnedEventStringBuilder = .pinnedEventStringBuilder(userID: roomProxy.ownUserID)
@@ -139,6 +143,7 @@ class RoomScreenViewModel: RoomScreenViewModelType, RoomScreenViewModelProtocol 
         // When navigating away from the room, we need to mark the room as fully read.
         // This does not affect the read receipts only the notification count.
         Task { await roomProxy.markAsRead(receiptType: .fullyRead) }
+        cancelMediaPreviewForwardingHandoff()
         // Work around QLPreviewController dismissal issues, see the InteractiveQuickLookModifier.
         state.bindings.mediaPreviewViewModel = nil
     }
@@ -152,27 +157,35 @@ class RoomScreenViewModel: RoomScreenViewModelType, RoomScreenViewModelProtocol 
     }
 
     func displayMediaPreview(_ mediaPreviewViewModel: TimelineMediaPreviewViewModel) {
-        mediaPreviewViewModel.actions.sink { [weak self] action in
+        cancelMediaPreviewForwardingHandoff()
+        mediaPreviewCancellable = mediaPreviewViewModel.actions.sink { [weak self] action in
             guard let self else { return }
             switch action {
             case .dismiss:
                 state.bindings.mediaPreviewViewModel = nil
+                cancelMediaPreviewForwardingHandoff()
             case .displayMessageForwarding(let forwardingBatch):
                 state.bindings.mediaPreviewViewModel = nil
-                // We need a small delay because we need to wait for the media preview to be fully dismissed.
-                DispatchQueue.main.asyncAfter(deadline: .now() + TimelineMediaPreviewViewModel.displayMessageForwardingDelay) {
-                    self.actionsSubject.send(.displayMessageForwarding(forwardingBatch))
+                mediaPreviewForwardingHandoff.schedule { [weak self] in
+                    guard let self else { return }
+                    mediaPreviewCancellable = nil
+                    actionsSubject.send(.displayMessageForwarding(forwardingBatch))
                 }
             case .viewInRoomTimeline:
                 fatalError("\(action) should not be visible on a room preview.")
             }
         }
-        .store(in: &cancellables)
 
         state.bindings.mediaPreviewViewModel = mediaPreviewViewModel
     }
 
     // MARK: - Private
+
+    private func cancelMediaPreviewForwardingHandoff() {
+        mediaPreviewForwardingHandoff.cancel()
+        mediaPreviewCancellable?.cancel()
+        mediaPreviewCancellable = nil
+    }
 
     private func setupSubscriptions(ongoingCallRoomIDPublisher: CurrentValuePublisher<String?, Never>) {
         appSettings.$roomThreadListEnabled

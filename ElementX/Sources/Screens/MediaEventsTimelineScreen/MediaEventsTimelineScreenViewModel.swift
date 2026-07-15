@@ -17,6 +17,7 @@ class MediaEventsTimelineScreenViewModel: MediaEventsTimelineScreenViewModelType
     private let mediaProvider: MediaProviderProtocol
     private let userIndicatorController: UserIndicatorControllerProtocol
     private let appMediator: AppMediatorProtocol
+    private let mediaPreviewForwardingHandoff: TimelineMediaPreviewForwardingHandoff
     
     private var isOldestItemVisible = false
     
@@ -41,12 +42,14 @@ class MediaEventsTimelineScreenViewModel: MediaEventsTimelineScreenViewModelType
          initialScreenMode: MediaEventsTimelineScreenMode = .media,
          mediaProvider: MediaProviderProtocol,
          userIndicatorController: UserIndicatorControllerProtocol,
-         appMediator: AppMediatorProtocol) {
+         appMediator: AppMediatorProtocol,
+         mediaPreviewForwardingClock: any Clock<Duration> = ContinuousClock()) {
         self.mediaTimelineViewModel = mediaTimelineViewModel
         self.filesTimelineViewModel = filesTimelineViewModel
         self.mediaProvider = mediaProvider
         self.userIndicatorController = userIndicatorController
         self.appMediator = appMediator
+        mediaPreviewForwardingHandoff = .init(clock: mediaPreviewForwardingClock)
         
         let activeTimelineContext = switch initialScreenMode {
         case .media: mediaTimelineViewModel.context
@@ -134,31 +137,36 @@ class MediaEventsTimelineScreenViewModel: MediaEventsTimelineScreenViewModelType
     }
     
     func stop() {
+        cancelMediaPreviewForwardingHandoff()
         // Work around QLPreviewController dismissal issues, see the InteractiveQuickLookModifier.
         state.bindings.mediaPreviewViewModel = nil
+        state.bindings.mediaPreviewSheetViewModel = nil
     }
     
     // MARK: - Private
     
     private func displayMediaPreviewSheet(for item: EventBasedMessageTimelineItemProtocol) {
+        cancelMediaPreviewForwardingHandoff()
         let sheetModel = TimelineMediaPreviewViewModel(initialItem: item,
                                                        timelineViewModel: activeTimelineViewModel,
                                                        mediaProvider: mediaProvider,
                                                        photoLibraryManager: PhotoLibraryManager(),
                                                        userIndicatorController: userIndicatorController,
                                                        appMediator: appMediator)
-        sheetModel.actions.sink { [weak self] action in
+        mediaPreviewCancellable = sheetModel.actions.sink { [weak self] action in
             guard let self else { return }
             switch action {
             case .displayMessageForwarding(let forwardingBatch):
                 displayMessageForwarding(forwardingBatch: forwardingBatch)
             case .viewInRoomTimeline(let itemID):
+                cancelMediaPreviewForwardingHandoff()
+                state.bindings.mediaPreviewSheetViewModel = nil
                 actionsSubject.send(.viewInRoomTimeline(itemID))
             case .dismiss:
                 state.bindings.mediaPreviewSheetViewModel = nil
+                cancelMediaPreviewForwardingHandoff()
             }
         }
-        .store(in: &cancellables)
         
         // Triggers a download of the item so that can be shared/saved
         sheetModel.context.send(viewAction: .updateCurrentItem(sheetModel.state.currentItem))
@@ -216,19 +224,21 @@ class MediaEventsTimelineScreenViewModel: MediaEventsTimelineScreenViewModelType
     }
     
     private func displayMediaPreview(_ viewModel: TimelineMediaPreviewViewModel) {
-        viewModel.actions.sink { [weak self] action in
+        cancelMediaPreviewForwardingHandoff()
+        mediaPreviewCancellable = viewModel.actions.sink { [weak self] action in
             guard let self else { return }
             switch action {
             case .displayMessageForwarding(let forwardingBatch):
                 displayMessageForwarding(forwardingBatch: forwardingBatch)
             case .viewInRoomTimeline(let itemID):
                 state.bindings.mediaPreviewViewModel = nil
+                cancelMediaPreviewForwardingHandoff()
                 actionsSubject.send(.viewInRoomTimeline(itemID))
             case .dismiss:
                 state.bindings.mediaPreviewViewModel = nil
+                cancelMediaPreviewForwardingHandoff()
             }
         }
-        .store(in: &cancellables)
         
         state.bindings.mediaPreviewViewModel = viewModel
     }
@@ -244,9 +254,16 @@ class MediaEventsTimelineScreenViewModel: MediaEventsTimelineScreenViewModelType
     private func displayMessageForwarding(forwardingBatch: MessageForwardingBatch) {
         state.bindings.mediaPreviewViewModel = nil
         state.bindings.mediaPreviewSheetViewModel = nil
-        // We need a small delay because we need to wait for the presented sheet to be fully dismissed.
-        DispatchQueue.main.asyncAfter(deadline: .now() + TimelineMediaPreviewViewModel.displayMessageForwardingDelay) {
-            self.actionsSubject.send(.displayMessageForwarding(forwardingBatch))
+        mediaPreviewForwardingHandoff.schedule { [weak self] in
+            guard let self else { return }
+            mediaPreviewCancellable = nil
+            actionsSubject.send(.displayMessageForwarding(forwardingBatch))
         }
+    }
+
+    private func cancelMediaPreviewForwardingHandoff() {
+        mediaPreviewForwardingHandoff.cancel()
+        mediaPreviewCancellable?.cancel()
+        mediaPreviewCancellable = nil
     }
 }

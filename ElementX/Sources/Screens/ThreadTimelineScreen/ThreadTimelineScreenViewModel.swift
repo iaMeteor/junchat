@@ -14,6 +14,8 @@ typealias ThreadTimelineScreenViewModelType = StateStoreViewModel<ThreadTimeline
 class ThreadTimelineScreenViewModel: ThreadTimelineScreenViewModelType, ThreadTimelineScreenViewModelProtocol {
     private let roomProxy: JoinedRoomProxyProtocol
     private let userSession: UserSessionProtocol
+    private let mediaPreviewForwardingHandoff: TimelineMediaPreviewForwardingHandoff
+    private var mediaPreviewCancellable: AnyCancellable?
     
     private let actionsSubject: PassthroughSubject<ThreadTimelineScreenViewModelAction, Never> = .init()
     var actionsPublisher: AnyPublisher<ThreadTimelineScreenViewModelAction, Never> {
@@ -21,9 +23,11 @@ class ThreadTimelineScreenViewModel: ThreadTimelineScreenViewModelType, ThreadTi
     }
     
     init(roomProxy: JoinedRoomProxyProtocol,
-         userSession: UserSessionProtocol) {
+         userSession: UserSessionProtocol,
+         mediaPreviewForwardingClock: any Clock<Duration> = ContinuousClock()) {
         self.roomProxy = roomProxy
         self.userSession = userSession
+        mediaPreviewForwardingHandoff = .init(clock: mediaPreviewForwardingClock)
         
         super.init(initialViewState: ThreadTimelineScreenViewState(roomTitle: roomProxy.infoPublisher.value.displayName ?? roomProxy.id,
                                                                    roomAvatar: roomProxy.infoPublisher.value.avatar), mediaProvider: userSession.mediaProvider)
@@ -56,32 +60,41 @@ class ThreadTimelineScreenViewModel: ThreadTimelineScreenViewModelType, ThreadTi
     override func process(viewAction: ThreadTimelineScreenViewAction) { }
     
     func stop() {
+        cancelMediaPreviewForwardingHandoff()
         // Work around QLPreviewController dismissal issues, see the InteractiveQuickLookModifier.
         state.bindings.mediaPreviewViewModel = nil
     }
     
     func displayMediaPreview(_ mediaPreviewViewModel: TimelineMediaPreviewViewModel) {
-        mediaPreviewViewModel.actions.sink { [weak self] action in
+        cancelMediaPreviewForwardingHandoff()
+        mediaPreviewCancellable = mediaPreviewViewModel.actions.sink { [weak self] action in
             guard let self else { return }
             switch action {
             case .viewInRoomTimeline:
                 fatalError("\(action) should not be visible on a thread preview.")
             case .displayMessageForwarding(let forwardingBatch):
                 state.bindings.mediaPreviewViewModel = nil
-                // We need a small delay because we need to wait for the media preview to be fully dismissed.
-                DispatchQueue.main.asyncAfter(deadline: .now() + TimelineMediaPreviewViewModel.displayMessageForwardingDelay) {
-                    self.actionsSubject.send(.displayMessageForwarding(forwardingBatch))
+                mediaPreviewForwardingHandoff.schedule { [weak self] in
+                    guard let self else { return }
+                    mediaPreviewCancellable = nil
+                    actionsSubject.send(.displayMessageForwarding(forwardingBatch))
                 }
             case .dismiss:
                 state.bindings.mediaPreviewViewModel = nil
+                cancelMediaPreviewForwardingHandoff()
             }
         }
-        .store(in: &cancellables)
         
         state.bindings.mediaPreviewViewModel = mediaPreviewViewModel
     }
     
     // MARK: - Private
+
+    private func cancelMediaPreviewForwardingHandoff() {
+        mediaPreviewForwardingHandoff.cancel()
+        mediaPreviewCancellable?.cancel()
+        mediaPreviewCancellable = nil
+    }
     
     private func updateVerificationBadge() async {
         guard roomProxy.isDirectOneToOneRoom,

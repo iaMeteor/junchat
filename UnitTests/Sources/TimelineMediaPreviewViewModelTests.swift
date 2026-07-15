@@ -6,6 +6,7 @@
 // Please see LICENSE files in the repository root for full details.
 //
 
+import Clocks
 import Combine
 @testable import ElementX
 import MatrixRustSDK
@@ -513,6 +514,164 @@ struct TimelineMediaPreviewViewModelTests {
     }
 }
 
+extension TimelineMediaPreviewViewModelTests {
+    @Test
+    func roomStopsAndReleasesReplacedMediaForwardingHandoffs() async {
+        let clock = TestClock<Duration>()
+        let firstPreview = TimelineMediaPreviewViewModelActionEmitter()
+        let replacementPreview = TimelineMediaPreviewViewModelActionEmitter()
+        var viewModel: RoomScreenViewModel? = RoomScreenViewModel(userSession: UserSessionMock(.init()),
+                                                                  roomProxy: JoinedRoomProxyMock(.init(id: "room")),
+                                                                  initialSelectedPinnedEventID: nil,
+                                                                  ongoingCallRoomIDPublisher: .init(.init(nil)),
+                                                                  appSettings: ServiceLocator.shared.settings,
+                                                                  appHooks: AppHooks(),
+                                                                  analyticsService: ServiceLocator.shared.analytics,
+                                                                  userIndicatorController: UserIndicatorControllerMock(),
+                                                                  mediaPreviewForwardingClock: clock)
+        weak let weakViewModel = viewModel
+        var forwardingActionCount = 0
+        let cancellable = viewModel?.actions.sink { action in
+            guard case .displayMessageForwarding = action else { return }
+            forwardingActionCount += 1
+        }
+
+        viewModel?.displayMediaPreview(firstPreview)
+        firstPreview.send(.displayMessageForwarding(makeForwardingBatch()))
+        viewModel?.displayMediaPreview(replacementPreview)
+        replacementPreview.send(.displayMessageForwarding(makeForwardingBatch()))
+        viewModel?.stop()
+        viewModel = nil
+        await yieldForMediaHandoffCancellation()
+        await clock.advance(by: .seconds(1))
+        await yieldForMediaHandoffCancellation()
+
+        #expect(weakViewModel == nil)
+        #expect(forwardingActionCount == 0)
+        withExtendedLifetime(cancellable) { }
+    }
+
+    @Test
+    func threadStopsAndReleasesDismissedMediaForwardingHandoffs() async {
+        let clock = TestClock<Duration>()
+        let dismissedPreview = TimelineMediaPreviewViewModelActionEmitter()
+        let activePreview = TimelineMediaPreviewViewModelActionEmitter()
+        var viewModel: ThreadTimelineScreenViewModel? = ThreadTimelineScreenViewModel(roomProxy: JoinedRoomProxyMock(.init(id: "room")),
+                                                                                      userSession: UserSessionMock(.init()),
+                                                                                      mediaPreviewForwardingClock: clock)
+        weak let weakViewModel = viewModel
+        var forwardingActionCount = 0
+        let cancellable = viewModel?.actionsPublisher.sink { action in
+            guard case .displayMessageForwarding = action else { return }
+            forwardingActionCount += 1
+        }
+
+        viewModel?.displayMediaPreview(dismissedPreview)
+        dismissedPreview.send(.displayMessageForwarding(makeForwardingBatch()))
+        dismissedPreview.send(.dismiss)
+        viewModel?.displayMediaPreview(activePreview)
+        activePreview.send(.displayMessageForwarding(makeForwardingBatch()))
+        viewModel?.stop()
+        viewModel = nil
+        await yieldForMediaHandoffCancellation()
+        await clock.advance(by: .seconds(1))
+        await yieldForMediaHandoffCancellation()
+
+        #expect(weakViewModel == nil)
+        #expect(forwardingActionCount == 0)
+        withExtendedLifetime(cancellable) { }
+    }
+
+    @Test
+    func pinnedTimelineDismissalStopsAndReleasesMediaForwardingHandoff() async {
+        let clock = TestClock<Duration>()
+        let preview = TimelineMediaPreviewViewModelActionEmitter()
+        var viewModel: PinnedEventsTimelineScreenViewModel? = PinnedEventsTimelineScreenViewModel(roomProxy: JoinedRoomProxyMock(.init(id: "room")),
+                                                                                                  userIndicatorController: UserIndicatorControllerMock(),
+                                                                                                  appSettings: ServiceLocator.shared.settings,
+                                                                                                  analyticsService: ServiceLocator.shared.analytics,
+                                                                                                  mediaPreviewForwardingClock: clock)
+        weak let weakViewModel = viewModel
+        var forwardingActionCount = 0
+        let cancellable = viewModel?.actionsPublisher.sink { action in
+            guard case .displayMessageForwarding = action else { return }
+            forwardingActionCount += 1
+        }
+
+        viewModel?.displayMediaPreview(preview)
+        preview.send(.displayMessageForwarding(makeForwardingBatch()))
+        viewModel?.context.send(viewAction: .close)
+        viewModel = nil
+        await yieldForMediaHandoffCancellation()
+        await clock.advance(by: .seconds(1))
+        await yieldForMediaHandoffCancellation()
+
+        #expect(weakViewModel == nil)
+        #expect(forwardingActionCount == 0)
+        withExtendedLifetime(cancellable) { }
+    }
+
+    @Test
+    func mediaTimelineStopReleasesPendingMediaForwardingHandoff() async {
+        let clock = TestClock<Duration>()
+        let mediaTimeline = TimelineViewModelActionEmitter(timelineKind: .media(.mediaFilesScreen))
+        let filesTimeline = TimelineViewModelActionEmitter(timelineKind: .media(.mediaFilesScreen))
+        let preview = TimelineMediaPreviewViewModelActionEmitter()
+        var viewModel: MediaEventsTimelineScreenViewModel? = MediaEventsTimelineScreenViewModel(mediaTimelineViewModel: mediaTimeline,
+                                                                                                filesTimelineViewModel: filesTimeline,
+                                                                                                mediaProvider: MediaProviderMock(configuration: .init()),
+                                                                                                userIndicatorController: UserIndicatorControllerMock(),
+                                                                                                appMediator: AppMediatorMock(),
+                                                                                                mediaPreviewForwardingClock: clock)
+        weak let weakViewModel = viewModel
+        var forwardingActionCount = 0
+        let cancellable = viewModel?.actionsPublisher.sink { action in
+            guard case .displayMessageForwarding = action else { return }
+            forwardingActionCount += 1
+        }
+
+        mediaTimeline.send(.displayMediaPreview(preview))
+        preview.send(.displayMessageForwarding(makeForwardingBatch()))
+        viewModel?.stop()
+        viewModel = nil
+        await yieldForMediaHandoffCancellation()
+        await clock.advance(by: .seconds(1))
+        await yieldForMediaHandoffCancellation()
+
+        #expect(weakViewModel == nil)
+        #expect(forwardingActionCount == 0)
+        withExtendedLifetime(cancellable) { }
+    }
+
+    @Test
+    func mediaForwardingHandoffEmitsOnlyTheNewestGeneration() async {
+        let clock = TestClock<Duration>()
+        let handoff = TimelineMediaPreviewForwardingHandoff(clock: clock)
+        var emittedValues = [String]()
+
+        handoff.schedule { emittedValues.append("stale") }
+        handoff.schedule { emittedValues.append("current") }
+        await yieldForMediaHandoffCancellation()
+        await clock.advance(by: .seconds(1))
+        await yieldForMediaHandoffCancellation()
+
+        #expect(emittedValues == ["current"])
+    }
+
+    private func makeForwardingBatch() -> MessageForwardingBatch {
+        let item = MessageForwardingItem(id: .event(uniqueID: .init("event"), eventOrTransactionID: .eventID("event")),
+                                         roomID: "source",
+                                         content: .init(noHandle: .init()))
+        return .init(firstItem: item)
+    }
+
+    private func yieldForMediaHandoffCancellation() async {
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+    }
+}
+
 @MainActor
 private final class MediaPreviewForwardingContentGate {
     let requests = PassthroughSubject<TimelineItemIdentifier, Never>()
@@ -529,5 +688,85 @@ private final class MediaPreviewForwardingContentGate {
         let continuation = continuation
         self.continuation = nil
         continuation?.resume(returning: .init(noHandle: .init()))
+    }
+}
+
+@MainActor
+private final class TimelineMediaPreviewViewModelActionEmitter: TimelineMediaPreviewViewModel {
+    private let actionSubject = PassthroughSubject<TimelineMediaPreviewViewModelAction, Never>()
+
+    override var actions: AnyPublisher<TimelineMediaPreviewViewModelAction, Never> {
+        actionSubject.eraseToAnyPublisher()
+    }
+
+    init() {
+        let item = ImageRoomTimelineItem(id: .randomEvent,
+                                         timestamp: .mock,
+                                         isOutgoing: false,
+                                         isEditable: false,
+                                         canBeRepliedTo: true,
+                                         sender: .init(id: "sender"),
+                                         content: .init(filename: "image.jpeg",
+                                                        imageInfo: .mockImage,
+                                                        thumbnailInfo: .mockThumbnail,
+                                                        contentType: .jpeg))
+        let timelineController = MockTimelineController(timelineKind: .media(.mediaFilesScreen))
+        timelineController.timelineItems = [item]
+        super.init(initialItem: item,
+                   timelineViewModel: TimelineViewModel.mock(timelineKind: .media(.mediaFilesScreen), timelineController: timelineController),
+                   mediaProvider: MediaProviderMock(configuration: .init()),
+                   photoLibraryManager: PhotoLibraryManagerMock(.init()),
+                   userIndicatorController: UserIndicatorControllerMock(),
+                   appMediator: AppMediatorMock())
+    }
+
+    func send(_ action: TimelineMediaPreviewViewModelAction) {
+        actionSubject.send(action)
+    }
+}
+
+@MainActor
+private final class TimelineViewModelActionEmitter: TimelineViewModelProtocol {
+    private let viewModel: TimelineViewModel
+    private let actionSubject = PassthroughSubject<TimelineViewModelAction, Never>()
+
+    var actions: AnyPublisher<TimelineViewModelAction, Never> {
+        actionSubject.eraseToAnyPublisher()
+    }
+
+    var context: TimelineViewModel.Context {
+        viewModel.context
+    }
+
+    init(timelineKind: TimelineKind) {
+        viewModel = .mock(timelineKind: timelineKind)
+    }
+
+    func send(_ action: TimelineViewModelAction) {
+        actionSubject.send(action)
+    }
+
+    func process(composerAction: ComposerToolbarViewModelAction) {
+        viewModel.process(composerAction: composerAction)
+    }
+
+    func focusOnEvent(eventID: String) async {
+        await viewModel.focusOnEvent(eventID: eventID)
+    }
+
+    func stopLiveLocationSharing() async {
+        await viewModel.stopLiveLocationSharing()
+    }
+
+    func makeForwardingItem(for itemID: TimelineItemIdentifier,
+                            requestID: UUID,
+                            preparationOwnerID: UUID) async -> MessageForwardingItem? {
+        await viewModel.makeForwardingItem(for: itemID,
+                                           requestID: requestID,
+                                           preparationOwnerID: preparationOwnerID)
+    }
+
+    func cancelForwardingItemPreparation(preparationOwnerID: UUID) {
+        viewModel.cancelForwardingItemPreparation(preparationOwnerID: preparationOwnerID)
     }
 }

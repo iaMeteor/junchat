@@ -16,6 +16,8 @@ class PinnedEventsTimelineScreenViewModel: PinnedEventsTimelineScreenViewModelTy
     private let userIndicatorController: UserIndicatorControllerProtocol
     private let appSettings: AppSettings
     private let analyticsService: AnalyticsService
+    private let mediaPreviewForwardingHandoff: TimelineMediaPreviewForwardingHandoff
+    private var mediaPreviewCancellable: AnyCancellable?
     
     private let actionsSubject: PassthroughSubject<PinnedEventsTimelineScreenViewModelAction, Never> = .init()
     var actionsPublisher: AnyPublisher<PinnedEventsTimelineScreenViewModelAction, Never> {
@@ -25,11 +27,13 @@ class PinnedEventsTimelineScreenViewModel: PinnedEventsTimelineScreenViewModelTy
     init(roomProxy: JoinedRoomProxyProtocol,
          userIndicatorController: UserIndicatorControllerProtocol,
          appSettings: AppSettings,
-         analyticsService: AnalyticsService) {
+         analyticsService: AnalyticsService,
+         mediaPreviewForwardingClock: any Clock<Duration> = ContinuousClock()) {
         self.roomProxy = roomProxy
         self.userIndicatorController = userIndicatorController
         self.appSettings = appSettings
         self.analyticsService = analyticsService
+        mediaPreviewForwardingHandoff = .init(clock: mediaPreviewForwardingClock)
         super.init(initialViewState: PinnedEventsTimelineScreenViewState())
     }
     
@@ -41,37 +45,50 @@ class PinnedEventsTimelineScreenViewModel: PinnedEventsTimelineScreenViewModelTy
         switch viewAction {
         case .close:
             analyticsService.trackInteraction(name: .PinnedMessageBannerCloseListButton)
+            cancelMediaPreviewForwardingHandoff()
+            state.bindings.mediaPreviewViewModel = nil
             actionsSubject.send(.dismiss)
         }
     }
     
     func stop() {
+        cancelMediaPreviewForwardingHandoff()
         // Work around QLPreviewController dismissal issues, see the InteractiveQuickLookModifier.
         state.bindings.mediaPreviewViewModel = nil
     }
     
     func displayMediaPreview(_ mediaPreviewViewModel: TimelineMediaPreviewViewModel) {
-        mediaPreviewViewModel.actions.sink { [weak self] action in
+        cancelMediaPreviewForwardingHandoff()
+        mediaPreviewCancellable = mediaPreviewViewModel.actions.sink { [weak self] action in
             guard let self else { return }
             switch action {
             case .displayMessageForwarding(let forwardingBatch):
                 state.bindings.mediaPreviewViewModel = nil
-                // We need a small delay because we need to wait for the media preview to be fully dismissed.
-                DispatchQueue.main.asyncAfter(deadline: .now() + TimelineMediaPreviewViewModel.displayMessageForwardingDelay) {
-                    self.actionsSubject.send(.displayMessageForwarding(forwardingBatch))
+                mediaPreviewForwardingHandoff.schedule { [weak self] in
+                    guard let self else { return }
+                    mediaPreviewCancellable = nil
+                    actionsSubject.send(.displayMessageForwarding(forwardingBatch))
                 }
             case .viewInRoomTimeline(let itemID):
                 guard let eventID = itemID.eventID else {
                     return
                 }
+                cancelMediaPreviewForwardingHandoff()
+                state.bindings.mediaPreviewViewModel = nil
                 Task { await self.viewInRoomTimeline(eventID: eventID) }
             case .dismiss:
                 state.bindings.mediaPreviewViewModel = nil
+                cancelMediaPreviewForwardingHandoff()
             }
         }
-        .store(in: &cancellables)
         
         state.bindings.mediaPreviewViewModel = mediaPreviewViewModel
+    }
+
+    private func cancelMediaPreviewForwardingHandoff() {
+        mediaPreviewForwardingHandoff.cancel()
+        mediaPreviewCancellable?.cancel()
+        mediaPreviewCancellable = nil
     }
     
     private func viewInRoomTimeline(eventID: String) async {
