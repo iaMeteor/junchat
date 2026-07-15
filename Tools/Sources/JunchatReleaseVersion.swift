@@ -105,12 +105,7 @@ struct JunchatReleaseVersion: Equatable {
                                              allowExactNoOp: allowExactNoOp)
         guard updated != source else { return false }
 
-        let fileManager = FileManager.default
-        let attributes = try fileManager.attributesOfItem(atPath: url.path)
-        try Data(updated.utf8).write(to: url, options: .atomic)
-        if let permissions = attributes[.posixPermissions] {
-            try fileManager.setAttributes([.posixPermissions: permissions], ofItemAtPath: url.path)
-        }
+        try JunchatReleaseFile.write(updated, to: url)
         return true
     }
 

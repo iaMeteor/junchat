@@ -182,6 +182,15 @@ struct CI: ParsableCommand {
         return output.split(separator: "\0").map(String.init)
     }
 
+    static func gitFileContents(path: String, commit: String) async throws -> String {
+        guard let output = try await CI.run(.name("git"),
+                                            ["show", "\(commit):\(path)"],
+                                            output: .string(limit: 5_242_880)).standardOutput else {
+            throw ValidationError("Could not read \(path) from the archived release commit.")
+        }
+        return output
+    }
+
     static func gitPush(tagName: String? = nil) async throws {
         guard let apiToken = ProcessInfo.processInfo.environment["GITHUB_TOKEN"], !apiToken.isEmpty
         else {

@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import Subprocess
 
 struct UploadDSYMs: AsyncParsableCommand {
     static let configuration = CommandConfiguration(commandName: "upload-dsyms",
@@ -22,26 +23,25 @@ struct UploadDSYMs: AsyncParsableCommand {
     var maxRetries = 5
 
     func run() async throws {
-        guard let authToken = ProcessInfo.processInfo.environment["SENTRY_AUTH_TOKEN"],
-              !authToken.isEmpty else {
+        guard ProcessInfo.processInfo.environment["SENTRY_AUTH_TOKEN"]?.isEmpty == false else {
             throw ValidationError("SENTRY_AUTH_TOKEN environment variable is not set.")
         }
 
-        let command = """
-        sentry-cli --url "\(url)" dif upload \
-            --auth-token "\(authToken)" \
-            --org "\(orgSlug)" \
-            --project "\(projectSlug)" \
-            --log-level debug \
-            "\(dsymPath)"
-        """
+        let arguments: Arguments = [
+            "--url", url,
+            "dif", "upload",
+            "--org", orgSlug,
+            "--project", projectSlug,
+            "--log-level", "debug",
+            dsymPath
+        ]
 
         var lastError: Swift.Error?
 
         for attempt in 1...maxRetries {
             do {
                 logger.info("\n📡 Uploading dSYMs to Sentry (attempt \(attempt)/\(maxRetries))…\n")
-                try await CI.run(.path("/bin/zsh"), ["-cu", command])
+                try await CI.run(.name("sentry-cli"), arguments)
                 logger.info("\n✅ Successfully uploaded dSYMs to Sentry.\n")
                 return
             } catch {

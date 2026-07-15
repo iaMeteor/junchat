@@ -71,6 +71,54 @@ final class JunchatReleasePreparationTests: XCTestCase {
                                                        changedPaths: ["project.yml"]))
     }
 
+    func testResumeRejectsUnrelatedContentWithinEveryAllowedFile() throws {
+        let marker = try makeMarker()
+        let archivedProject = """
+        settings:
+          MARKETING_VERSION: 1.8.2
+          CURRENT_PROJECT_VERSION: 37
+        """
+        let preparedProject = """
+        settings:
+          MARKETING_VERSION: 1.8.3
+          CURRENT_PROJECT_VERSION: 38
+        """
+        let archivedChangelog = "# JunChat iOS Changes\n\nJunChat fork release notes are recorded here."
+        let preparedChangelog = try JunchatReleaseNotes.updatedChangelog(existingContent: archivedChangelog,
+                                                                         version: marker.releaseVersion.name,
+                                                                         generatedNotes: "- Fixed retry",
+                                                                         releaseDate: marker.releaseDate)
+        let archivedXcodeProject = """
+        buildSettings = {
+            CURRENT_PROJECT_VERSION = 37;
+            MARKETING_VERSION = 1.8.2;
+        };
+        """
+        let preparedXcodeProject = """
+        buildSettings = {
+            CURRENT_PROJECT_VERSION = 38;
+            MARKETING_VERSION = 1.8.3;
+        };
+        """
+
+        func validate(project: String = preparedProject,
+                      changelog: String = preparedChangelog,
+                      xcodeProject: String = preparedXcodeProject) throws {
+            try marker.validatePreparedContents(archivedProjectYAML: archivedProject,
+                                                preparedProjectYAML: project,
+                                                archivedChangelog: archivedChangelog,
+                                                preparedChangelog: changelog,
+                                                archivedXcodeProject: archivedXcodeProject,
+                                                preparedXcodeProject: xcodeProject,
+                                                generatedNotes: "- Fixed retry")
+        }
+
+        XCTAssertNoThrow(try validate())
+        XCTAssertThrowsError(try validate(project: preparedProject + "# unrelated\n"))
+        XCTAssertThrowsError(try validate(changelog: preparedChangelog + "Unrelated\n"))
+        XCTAssertThrowsError(try validate(xcodeProject: preparedXcodeProject + "// unrelated\n"))
+    }
+
     private func makeMarker() throws -> JunchatReleasePreparation {
         try JunchatReleasePreparation(releaseVersion: JunchatReleaseVersion(name: "1.8.2", build: 37),
                                       releaseCommit: releaseCommit,

@@ -61,4 +61,24 @@ final class JunchatReleaseNotesTests: XCTestCase {
                                                                       generatedNotes: "## Highlights\n- Different notes",
                                                                       releaseDate: "2026-07-13"))
     }
+
+    func testAtomicChangelogReplacementPreservesTheExactMode() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let changelogURL = directory.appending(path: "JUNCHAT_CHANGES.md")
+        try "# JunChat iOS Changes\n".write(to: changelogURL, atomically: false, encoding: .utf8)
+        let expectedMode = 0o751
+        try FileManager.default.setAttributes([.posixPermissions: expectedMode], ofItemAtPath: changelogURL.path)
+
+        XCTAssertTrue(try JunchatReleaseNotes.updateChangelogFile(at: changelogURL,
+                                                                  version: "1.8.2",
+                                                                  generatedNotes: "- Fixed retry",
+                                                                  releaseDate: "2026-07-16"))
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: changelogURL.path)
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, expectedMode)
+    }
 }

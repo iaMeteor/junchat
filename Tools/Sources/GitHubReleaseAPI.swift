@@ -100,19 +100,16 @@ struct GitHubReleaseAPI {
             throw APIError.incompatibleExistingPreparation
         }
 
-        // Rebuild both mutable files from the archived parent so a matching marker cannot bless unrelated edits.
-        let releaseProject = try await repositoryContent(path: "project.yml",
+        // Rebuild every allowlisted file from the archived parent so a matching marker cannot bless unrelated edits.
+        let releaseProject = try await repositoryContent(path: JunchatReleasePreparation.projectYAMLPath,
                                                          commit: releaseCommit,
                                                          repository: repository,
                                                          token: token)
-        let preparedProject = try await repositoryContent(path: "project.yml",
+        let preparedProject = try await repositoryContent(path: JunchatReleasePreparation.projectYAMLPath,
                                                           commit: commit.sha,
                                                           repository: repository,
                                                           token: token)
-        let nextVersion = try releaseVersion.nextPatch()
-        let expectedProject = try JunchatReleaseVersion.updatedProjectYAML(releaseProject,
-                                                                           name: nextVersion.name,
-                                                                           build: nextVersion.build)
+        let expectedProject = try preparation.expectedProjectYAML(releaseProject)
         guard preparedProject == expectedProject else {
             throw APIError.incompatibleExistingPreparation
         }
@@ -121,19 +118,30 @@ struct GitHubReleaseAPI {
                                        currentVersion: JunchatReleaseVersion.parse(preparedProject),
                                        changedPaths: commit.files.map(\.filename))
 
-        let releaseChangelog = try await repositoryContent(path: "JUNCHAT_CHANGES.md",
+        let releaseChangelog = try await repositoryContent(path: JunchatReleasePreparation.changelogPath,
                                                            commit: releaseCommit,
                                                            repository: repository,
                                                            token: token)
-        let preparedChangelog = try await repositoryContent(path: "JUNCHAT_CHANGES.md",
+        let preparedChangelog = try await repositoryContent(path: JunchatReleasePreparation.changelogPath,
                                                             commit: commit.sha,
                                                             repository: repository,
                                                             token: token)
-        let expectedChangelog = try JunchatReleaseNotes.updatedChangelog(existingContent: releaseChangelog,
-                                                                         version: releaseVersion.name,
-                                                                         generatedNotes: generatedNotes,
-                                                                         releaseDate: preparation.releaseDate)
+        let expectedChangelog = try preparation.expectedChangelog(releaseChangelog,
+                                                                  generatedNotes: generatedNotes)
         guard preparedChangelog == expectedChangelog else {
+            throw APIError.incompatibleExistingPreparation
+        }
+
+        let releaseXcodeProject = try await repositoryContent(path: JunchatReleasePreparation.xcodeProjectPath,
+                                                              commit: releaseCommit,
+                                                              repository: repository,
+                                                              token: token)
+        let preparedXcodeProject = try await repositoryContent(path: JunchatReleasePreparation.xcodeProjectPath,
+                                                               commit: commit.sha,
+                                                               repository: repository,
+                                                               token: token)
+        let expectedXcodeProject = try preparation.expectedXcodeProject(releaseXcodeProject)
+        guard preparedXcodeProject == expectedXcodeProject else {
             throw APIError.incompatibleExistingPreparation
         }
         return true
@@ -208,8 +216,12 @@ struct GitHubReleaseAPI {
                                    commit: String,
                                    repository: GitHubRepository,
                                    token: String) async throws -> String {
+        let contentPath = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard !contentPath.isEmpty, contentPath.allSatisfy({ !$0.isEmpty }) else {
+            throw APIError.invalidResponse
+        }
         let url = try repositoryAPIURL(repository: repository,
-                                       pathComponents: ["contents", path],
+                                       pathComponents: ["contents"] + contentPath,
                                        queryItems: [URLQueryItem(name: "ref", value: commit)])
         let data = try await successfulData(for: authenticatedRequest(url: url, token: token))
         return try JSONDecoder().decode(GitHubContentRecord.self, from: data).decodedContent()

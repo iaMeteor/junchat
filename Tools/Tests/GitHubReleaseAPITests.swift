@@ -144,7 +144,9 @@ final class GitHubReleaseAPITests: XCTestCase {
             .json(200, contentRecord(releaseProjectYAML)),
             .json(200, contentRecord(preparedProject)),
             .json(200, contentRecord(releaseChangelog)),
-            .json(200, contentRecord(preparedChanges))
+            .json(200, contentRecord(preparedChanges)),
+            .json(200, contentRecord(releaseXcodeProject)),
+            .json(200, contentRecord(preparedXcodeProject))
         ])
         let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
 
@@ -156,8 +158,15 @@ final class GitHubReleaseAPITests: XCTestCase {
                                                                   token: "secret")
 
         XCTAssertTrue(isPrepared)
-        XCTAssertEqual(stub.requests.count, 6)
+        XCTAssertEqual(stub.requests.count, 8)
         XCTAssertTrue(try XCTUnwrap(stub.requests.first?.url?.absoluteString).contains("heads/release/ios"))
+        let xcodeProjectPaths = stub.requests.suffix(2).compactMap { request in
+            request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.percentEncodedPath }
+        }
+        XCTAssertEqual(xcodeProjectPaths, [
+            "/repos/acme/junchat-ios/contents/ElementX.xcodeproj/project.pbxproj",
+            "/repos/acme/junchat-ios/contents/ElementX.xcodeproj/project.pbxproj"
+        ])
     }
 
     func testRemoteBranchAtTheArchivedCommitStillNeedsPreparation() async throws {
@@ -249,6 +258,46 @@ final class GitHubReleaseAPITests: XCTestCase {
             }
         }
     }
+
+    func testRejectsPreparationWithUnexpectedXcodeProjectContent() async throws {
+        let releaseCommit = String(repeating: "2", count: 40)
+        let preparationCommit = String(repeating: "3", count: 40)
+        let releaseVersion = JunchatReleaseVersion(name: "1.8.2", build: 37)
+        let preparation = try JunchatReleasePreparation(releaseVersion: releaseVersion,
+                                                        releaseCommit: releaseCommit,
+                                                        releaseDate: "2026-07-14")
+        let preparedProject = try JunchatReleaseVersion.updatedProjectYAML(releaseProjectYAML,
+                                                                           name: "1.8.3",
+                                                                           build: 38)
+        let preparedChanges = try JunchatReleaseNotes.updatedChangelog(existingContent: releaseChangelog,
+                                                                       version: releaseVersion.name,
+                                                                       generatedNotes: "- Fixed retry",
+                                                                       releaseDate: preparation.releaseDate)
+        let stub = GitHubHTTPStub(responses: [
+            .json(200, referenceRecord(commit: preparationCommit)),
+            .json(200, preparationCommitRecord(commit: preparationCommit,
+                                               preparation: preparation)),
+            .json(200, contentRecord(releaseProjectYAML)),
+            .json(200, contentRecord(preparedProject)),
+            .json(200, contentRecord(releaseChangelog)),
+            .json(200, contentRecord(preparedChanges)),
+            .json(200, contentRecord(releaseXcodeProject)),
+            .json(200, contentRecord(preparedXcodeProject + "Unrelated mutation\n"))
+        ])
+        let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+
+        do {
+            _ = try await api.isPreparationAlreadyPushed(branch: "junchat",
+                                                         releaseVersion: releaseVersion,
+                                                         releaseCommit: releaseCommit,
+                                                         generatedNotes: "- Fixed retry",
+                                                         repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
+                                                         token: "secret")
+            XCTFail("Expected modified Xcode project content to fail closed")
+        } catch {
+            XCTAssertEqual(stub.requests.count, 8)
+        }
+    }
 }
 
 private let releaseProjectYAML = """
@@ -261,6 +310,20 @@ private let releaseChangelog = """
 # JunChat iOS Changes
 
 JunChat fork release notes are recorded here.
+"""
+
+private let releaseXcodeProject = """
+buildSettings = {
+    CURRENT_PROJECT_VERSION = 37;
+    MARKETING_VERSION = 1.8.2;
+};
+"""
+
+private let preparedXcodeProject = """
+buildSettings = {
+    CURRENT_PROJECT_VERSION = 38;
+    MARKETING_VERSION = 1.8.3;
+};
 """
 
 private func releaseRecord(version: String = "1.8.2",

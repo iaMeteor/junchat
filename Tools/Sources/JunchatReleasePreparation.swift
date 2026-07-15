@@ -7,6 +7,7 @@ struct JunchatReleasePreparation: Equatable {
         case unexpectedParent
         case unexpectedVersion
         case unexpectedChangedPaths
+        case unexpectedPreparedContents
 
         var errorDescription: String? {
             switch self {
@@ -20,15 +21,20 @@ struct JunchatReleasePreparation: Equatable {
                 "The release preparation commit does not contain the expected next version and build."
             case .unexpectedChangedPaths:
                 "The release preparation commit changed files outside the release metadata boundary."
+            case .unexpectedPreparedContents:
+                "The release preparation commit contains unexpected release metadata changes."
             }
         }
     }
 
     static let subject = "Prepare next release"
+    static let changelogPath = "JUNCHAT_CHANGES.md"
+    static let projectYAMLPath = "project.yml"
+    static let xcodeProjectPath = "ElementX.xcodeproj/project.pbxproj"
     static let expectedChangedPaths = Set([
-        "JUNCHAT_CHANGES.md",
-        "project.yml",
-        "ElementX.xcodeproj/project.pbxproj"
+        changelogPath,
+        projectYAMLPath,
+        xcodeProjectPath
     ])
 
     let releaseVersion: JunchatReleaseVersion
@@ -100,6 +106,55 @@ struct JunchatReleasePreparation: Equatable {
               Set(changedPaths) == Self.expectedChangedPaths else {
             throw PreparationError.unexpectedChangedPaths
         }
+    }
+
+    func validatePreparedContents(archivedProjectYAML: String,
+                                  preparedProjectYAML: String,
+                                  archivedChangelog: String,
+                                  preparedChangelog: String,
+                                  archivedXcodeProject: String,
+                                  preparedXcodeProject: String,
+                                  generatedNotes: String) throws {
+        try validatePreparedMetadata(archivedProjectYAML: archivedProjectYAML,
+                                     preparedProjectYAML: preparedProjectYAML,
+                                     archivedXcodeProject: archivedXcodeProject,
+                                     preparedXcodeProject: preparedXcodeProject)
+        let expectedChangelog = try expectedChangelog(archivedChangelog, generatedNotes: generatedNotes)
+        guard preparedChangelog == expectedChangelog else {
+            throw PreparationError.unexpectedPreparedContents
+        }
+    }
+
+    func validatePreparedMetadata(archivedProjectYAML: String,
+                                  preparedProjectYAML: String,
+                                  archivedXcodeProject: String,
+                                  preparedXcodeProject: String) throws {
+        let expectedProjectYAML = try expectedProjectYAML(archivedProjectYAML)
+        let expectedXcodeProject = try expectedXcodeProject(archivedXcodeProject)
+        guard preparedProjectYAML == expectedProjectYAML,
+              preparedXcodeProject == expectedXcodeProject else {
+            throw PreparationError.unexpectedPreparedContents
+        }
+    }
+
+    func expectedProjectYAML(_ archivedProjectYAML: String) throws -> String {
+        let nextVersion = try releaseVersion.nextPatch()
+        return try JunchatReleaseVersion.updatedProjectYAML(archivedProjectYAML,
+                                                            name: nextVersion.name,
+                                                            build: nextVersion.build)
+    }
+
+    func expectedChangelog(_ archivedChangelog: String, generatedNotes: String) throws -> String {
+        try JunchatReleaseNotes.updatedChangelog(existingContent: archivedChangelog,
+                                                 version: releaseVersion.name,
+                                                 generatedNotes: generatedNotes,
+                                                 releaseDate: releaseDate)
+    }
+
+    func expectedXcodeProject(_ archivedXcodeProject: String) throws -> String {
+        try JunchatReleaseXcodeProject.updatedContent(archivedXcodeProject,
+                                                      from: releaseVersion,
+                                                      to: releaseVersion.nextPatch())
     }
 
     private static func value(in line: String, after prefix: String) -> String? {

@@ -95,6 +95,22 @@ enum JunchatReleaseNotes {
         return sections.joined(separator: "\n\n") + "\n"
     }
 
+    @discardableResult
+    static func updateChangelogFile(at url: URL,
+                                    version: String,
+                                    generatedNotes: String,
+                                    releaseDate: String) throws -> Bool {
+        let existingContent = try String(contentsOf: url, encoding: .utf8)
+        let updatedContent = try updatedChangelog(existingContent: existingContent,
+                                                  version: version,
+                                                  generatedNotes: generatedNotes,
+                                                  releaseDate: releaseDate)
+        guard updatedContent != existingContent else { return false }
+
+        try JunchatReleaseFile.write(updatedContent, to: url)
+        return true
+    }
+
     static func isValidISODate(_ value: String) -> Bool {
         let parts = value.split(separator: "-", omittingEmptySubsequences: false)
         guard parts.count == 3,
