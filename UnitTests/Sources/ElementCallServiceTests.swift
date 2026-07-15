@@ -5,6 +5,7 @@
 // Please see LICENSE files in the repository root for full details.
 //
 
+import AVFoundation
 import CallKit
 import Clocks
 import Combine
@@ -159,6 +160,37 @@ final class ElementCallServiceTests {
     }
 
     @Test
+    func videoAnswerWaitsForCallKitAudioSessionDeactivationBeforeStartingWebKit() async throws {
+        let roomID = "!video:example.com"
+        await receiveIncomingPush(PKPushPayloadMock()
+            .updatingExpiration(currentDate, lifetime: 30)
+            .updatingRoomID(roomID)
+            .updatingRTCNotificationID("$video"))
+        let incomingCallIdentity = try #require(service.incomingCallIdentityPublisher.value)
+        var startedRoomID: String?
+        let cancellable = service.actions.sink { action in
+            if case .startCall(let roomID, _, _) = action {
+                startedRoomID = roomID
+            }
+        }
+        let action = CXAnswerCallAction(call: incomingCallIdentity.callKitID)
+        let provider = CXProvider(configuration: CXProviderConfiguration())
+
+        service.provider(provider, perform: action)
+        await Task.yield()
+        await testClock.advance(by: .seconds(1))
+        await waitUntil { self.callProvider.reportCallWithEndedAtReasonCalled }
+
+        #expect(startedRoomID == nil)
+
+        service.provider(provider, didDeactivate: AVAudioSession.sharedInstance())
+        await waitUntil { startedRoomID != nil }
+
+        #expect(startedRoomID == roomID)
+        withExtendedLifetime((cancellable, provider)) { }
+    }
+
+    @Test
     func matchingAnswerUsesAndPublishesTheExactCallKitIdentity() async throws {
         let roomID = "!answered:example.com"
         await receiveIncomingPush(PKPushPayloadMock()
@@ -179,6 +211,7 @@ final class ElementCallServiceTests {
         service.provider(provider, perform: action)
         await Task.yield()
         await testClock.advance(by: .seconds(1))
+        service.provider(provider, didDeactivate: AVAudioSession.sharedInstance())
         await waitUntil { startedIncomingCallIdentity != nil }
 
         #expect(callKitActionRecorder.fulfilledActionIDs.filter { $0 == action.uuid }.count == 1)
@@ -186,6 +219,68 @@ final class ElementCallServiceTests {
         #expect(service.acceptedIncomingCallIdentity == incomingCallIdentity)
         #expect(service.incomingCallIdentityPublisher.value == nil)
         #expect(callProvider.reportCallWithEndedAtReasonReceivedArguments?.uuid == incomingCallIdentity.callKitID)
+        withExtendedLifetime((cancellable, provider)) { }
+    }
+
+    @Test
+    func answerStartsWebKitAfterBoundedCallKitAudioSessionDeactivationTimeout() async throws {
+        let roomID = "!timeout:example.com"
+        await receiveIncomingPush(PKPushPayloadMock()
+            .updatingExpiration(currentDate, lifetime: 30)
+            .updatingRoomID(roomID)
+            .updatingRTCNotificationID("$timeout"))
+        let incomingCallIdentity = try #require(service.incomingCallIdentityPublisher.value)
+        var startedRoomID: String?
+        let cancellable = service.actions.sink { action in
+            if case .startCall(let roomID, _, _) = action {
+                startedRoomID = roomID
+            }
+        }
+        let action = CXAnswerCallAction(call: incomingCallIdentity.callKitID)
+        let provider = CXProvider(configuration: CXProviderConfiguration())
+
+        service.provider(provider, perform: action)
+        await Task.yield()
+        await testClock.advance(by: .seconds(3))
+        await waitUntil { startedRoomID != nil }
+
+        #expect(startedRoomID == roomID)
+        withExtendedLifetime((cancellable, provider)) { }
+    }
+
+    @Test
+    func answerWaitingForCallKitDeactivationCannotStartAfterIncomingReplacement() async throws {
+        let firstRoomID = "!first:example.com"
+        await receiveIncomingPush(PKPushPayloadMock()
+            .updatingExpiration(currentDate, lifetime: 30)
+            .updatingRoomID(firstRoomID)
+            .updatingRTCNotificationID("$first"))
+        let incomingCallIdentity = try #require(service.incomingCallIdentityPublisher.value)
+        var startedRooms = [String]()
+        let cancellable = service.actions.sink { action in
+            if case .startCall(let roomID, _, _) = action {
+                startedRooms.append(roomID)
+            }
+        }
+        let action = CXAnswerCallAction(call: incomingCallIdentity.callKitID)
+        let provider = CXProvider(configuration: CXProviderConfiguration())
+
+        service.provider(provider, perform: action)
+        await Task.yield()
+        await testClock.advance(by: .seconds(1))
+        await waitUntil { self.callProvider.reportCallWithEndedAtReasonCalled }
+        #expect(startedRooms.isEmpty)
+
+        let replacementRoomID = "!replacement:example.com"
+        await receiveIncomingPush(PKPushPayloadMock()
+            .updatingExpiration(currentDate, lifetime: 30)
+            .updatingRoomID(replacementRoomID)
+            .updatingRTCNotificationID("$replacement"))
+        service.provider(provider, didDeactivate: AVAudioSession.sharedInstance())
+        await testClock.advance(by: .seconds(2))
+
+        #expect(startedRooms.isEmpty)
+        #expect(service.incomingCallRoomIDPublisher.value == replacementRoomID)
         withExtendedLifetime((cancellable, provider)) { }
     }
 

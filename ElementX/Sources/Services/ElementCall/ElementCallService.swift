@@ -52,6 +52,12 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
         let ringDuration: Duration
     }
 
+    private struct CallProviderAudioSessionDeactivationWaiter {
+        let id: UUID
+        let continuation: CheckedContinuation<Bool, Never>
+        let timeoutTask: Task<Void, Never>
+    }
+
     private let pushRegistry: PKPushRegistry
     private let callController = CXCallController()
     private var callProvider: CXProviderProtocol
@@ -98,6 +104,8 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
 
     private var endUnansweredCallTask: Task<Void, Never>?
     private var answerCallTask: Task<Void, Never>?
+    private var callProviderAudioSessionDeactivationGeneration = UUID()
+    private var callProviderAudioSessionDeactivationWaiter: CallProviderAudioSessionDeactivationWaiter?
     private var latestCallSessionGeneration: ElementCallSessionGeneration?
     private var ongoingCallSessionGeneration: ElementCallSessionGeneration?
 
@@ -435,6 +443,8 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
 
     func provider(_ provider: CXProvider, didDeactivate audioSession: AVAudioSession) {
         MXLog.info("Call provider did deactivate audio session")
+        callProviderAudioSessionDeactivationGeneration = UUID()
+        resumeCallProviderAudioSessionDeactivationWaiter(result: true)
     }
 
     func providerDidReset(_ provider: CXProvider) {
@@ -456,10 +466,10 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
         //
         // Reporting an ongoing call through `reportNewIncomingCall` + `CXAnswerCallAction`
         // or `reportOutgoingCall:connectedAt:` will give exclusive access for media to the
-        // ongoing process, which is different than the WKWebKit is running on, making EC
-        // unable to aquire media streams.
-        // Reporting the call as ended imediately after answering it works around that
-        // as EC gets access to media again and EX builds the right UI in `setupCallSession`
+        // ongoing process, which is different from the process WKWebView is running in, making EC
+        // unable to acquire media streams.
+        // Reporting the call as ended after answering it works around that as EC gets access to
+        // media again and EX builds the right UI in `setupCallSession`.
         //
         // https://developer.apple.com/forums//thread/767949?answerId=812951022#812951022
         //
@@ -470,9 +480,10 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
         // First fulfill the action
         fulfillCallKitAction(action)
 
-        // And delay ending the call so that the app has enough time
-        // to get deeplinked into
-        answerCallTask = Task { [weak self] in
+        // And delay ending the call so that the app has enough time to get deep-linked into.
+        answerCallTask?.cancel()
+        resumeCallProviderAudioSessionDeactivationWaiter(result: false)
+        answerCallTask = Task { @MainActor [weak self] in
             try? await self?.timeProvider.clock.sleep(for: .seconds(1))
 
             guard let self,
@@ -481,16 +492,69 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
                 return
             }
 
-            // Then end the call and rely on `setupCallSession` to create a new one.
-            acceptedIncomingCallID = incomingCallID
+            // Then end CallKit ownership and wait for its audio session to be released before
+            // asking WKWebView to acquire the camera and microphone.
+            let audioSessionDeactivationGeneration = callProviderAudioSessionDeactivationGeneration
             reportedIncomingCallKitIDs.remove(incomingCallID.callKitID)
             callProvider.reportCall(with: incomingCallID.callKitID, endedAt: nil, reason: .remoteEnded)
 
+            let didDeactivate = await waitForCallProviderAudioSessionDeactivation(after: audioSessionDeactivationGeneration)
+            guard !Task.isCancelled,
+                  isCurrentIncomingCall(incomingCallIdentity) else {
+                return
+            }
+
+            if !didDeactivate {
+                MXLog.warning("[JunchatCall] CallKit audio session deactivation timed out")
+            }
+
+            acceptedIncomingCallID = incomingCallID
             clearIncomingCall(ifMatches: incomingCallIdentity)
             actionsSubject.send(.startCall(roomID: incomingCallID.roomID,
                                            isVoiceCall: incomingCallID.isVoiceCall,
                                            incomingCallIdentity: incomingCallID.incomingCallIdentity))
         }
+    }
+
+    private func waitForCallProviderAudioSessionDeactivation(after generation: UUID) async -> Bool {
+        let waiterID = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                guard !Task.isCancelled else {
+                    continuation.resume(returning: false)
+                    return
+                }
+
+                guard callProviderAudioSessionDeactivationGeneration == generation else {
+                    continuation.resume(returning: true)
+                    return
+                }
+
+                let timeoutTask = Task { @MainActor [weak self] in
+                    try? await self?.timeProvider.clock.sleep(for: .seconds(2))
+                    guard let self, !Task.isCancelled else { return }
+                    resumeCallProviderAudioSessionDeactivationWaiter(id: waiterID, result: false)
+                }
+                callProviderAudioSessionDeactivationWaiter = .init(id: waiterID,
+                                                                    continuation: continuation,
+                                                                    timeoutTask: timeoutTask)
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.resumeCallProviderAudioSessionDeactivationWaiter(id: waiterID, result: false)
+            }
+        }
+    }
+
+    private func resumeCallProviderAudioSessionDeactivationWaiter(id: UUID? = nil, result: Bool) {
+        guard let waiter = callProviderAudioSessionDeactivationWaiter,
+              id == nil || waiter.id == id else {
+            return
+        }
+
+        callProviderAudioSessionDeactivationWaiter = nil
+        waiter.timeoutTask.cancel()
+        waiter.continuation.resume(returning: result)
     }
 
     func provider(_ provider: CXProvider, perform action: CXSetMutedCallAction) {
