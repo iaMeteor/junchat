@@ -318,6 +318,11 @@ struct MessageForwardingLedgerStoreTests {
                                              accountID: accountID,
                                              destinationRoomID: destinationRoomID,
                                              items: [item]) == .stored)
+        #expect(firstStore.setState(.admitting,
+                                    owner: firstOwner,
+                                    accountID: accountID,
+                                    destinationRoomID: destinationRoomID,
+                                    item: item) == .stored)
         #expect(secondStore.reserveAdmissions(owner: secondOwner,
                                               accountID: accountID,
                                               destinationRoomID: destinationRoomID,
@@ -340,6 +345,41 @@ struct MessageForwardingLedgerStoreTests {
         #expect(firstStore.state(accountID: accountID,
                                  destinationRoomID: destinationRoomID,
                                  item: item) == .admitting)
+    }
+
+    @Test
+    func previousLaunchCanReclaimAdmissionsThatNeverReachedTheSDK() throws {
+        let testDefaults = try makeTestDefaults()
+        defer { testDefaults.cleanup() }
+        let firstItem = makeItem(eventID: "$first-safe-reservation")
+        let secondItem = makeItem(eventID: "$second-safe-reservation")
+        let accountID = "@alice:example.org"
+        let destinationRoomID = "!destination:example.org"
+        let previousOwner = MessageForwardingLedgerOwner(launchID: "previous-launch", reservationID: "previous-reservation")
+        let currentOwner = MessageForwardingLedgerOwner(launchID: "current-launch", reservationID: "current-reservation")
+        var store = MessageForwardingLedgerStore(userDefaults: testDefaults.userDefaults)
+
+        #expect(store.reserveAdmissions(owner: previousOwner,
+                                        accountID: accountID,
+                                        destinationRoomID: destinationRoomID,
+                                        items: [firstItem, secondItem]) == .stored)
+        #expect(store.states(accountID: accountID,
+                             destinationRoomID: destinationRoomID,
+                             items: [firstItem, secondItem]) == [nil, nil])
+
+        store = MessageForwardingLedgerStore(userDefaults: testDefaults.userDefaults)
+        #expect(store.reserveAdmissions(owner: currentOwner,
+                                        accountID: accountID,
+                                        destinationRoomID: destinationRoomID,
+                                        items: [firstItem, secondItem]) == .stored)
+        #expect(store.setState(.admitting,
+                               owner: currentOwner,
+                               accountID: accountID,
+                               destinationRoomID: destinationRoomID,
+                               item: firstItem) == .stored)
+        #expect(store.states(accountID: accountID,
+                             destinationRoomID: destinationRoomID,
+                             items: [firstItem, secondItem]) == [.admitting, nil])
     }
 
     @Test

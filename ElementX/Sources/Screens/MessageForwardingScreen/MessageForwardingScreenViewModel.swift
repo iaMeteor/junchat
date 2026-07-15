@@ -176,6 +176,12 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
             return
         }
 
+        if state.isRestoredCompletionPending {
+            state.isRestoredCompletionPending = false
+            actionsSubject.send(.queued(roomID: roomID))
+            return
+        }
+
         if state.isLedgerReconciliationRequired,
            !reconcileLedger(roomID: roomID, resendUnknown: nil) {
             reportLedgerReconciliationFailure()
@@ -221,6 +227,71 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
             return await cancelQueuedOperations()
         }
 
+        if let outcome = reserveOperations(for: roomID) {
+            return outcome
+        }
+
+        if let outcome = await queueReservedOperations(in: targetRoomProxy,
+                                                       roomID: roomID,
+                                                       generation: generation) {
+            return outcome
+        }
+
+        return finishForwardingAttempt(roomID: roomID)
+    }
+
+    private func queueReservedOperations(in targetRoomProxy: JoinedRoomProxyProtocol,
+                                         roomID: String,
+                                         generation: Int) async -> MessageForwardingOutcome? {
+        for index in forwardingOperations.indices where forwardingOperations[index].status.isReserved {
+            if shouldCancelForwarding(generation: generation) {
+                return await cancelQueuedOperations()
+            }
+
+            guard ledgerStore.setState(.admitting,
+                                       owner: ledgerOwner,
+                                       accountID: clientProxy.userID,
+                                       destinationRoomID: roomID,
+                                       item: forwardingOperations[index].item) == .stored else {
+                markReservedOperationsAsFailed()
+                state.isLedgerReconciliationRequired = true
+                updateProgress(isQueueing: false, isCancelling: false)
+                MXLog.error("Failed marking a message forwarding admission as in flight.")
+                return .queueingFailed
+            }
+
+            forwardingOperations[index].status = .queueing
+            updateProgress(isQueueing: true, isCancelling: false)
+
+            let result = await targetRoomProxy.timeline.queueMessageEventContent(forwardingOperations[index].item.content)
+            let shouldContinueQueueing = applyQueueingResult(result, at: index)
+
+            guard persistQueueingResult(at: index, roomID: roomID) else {
+                state.isLedgerReconciliationRequired = true
+                markAcceptedQueueingResultsAsUnknown()
+                markReservedOperationsAsFailed()
+                if shouldCancelForwarding(generation: generation) {
+                    updateProgress(isQueueing: false, isCancelling: true)
+                    return await cancelQueuedOperations()
+                }
+                updateProgress(isQueueing: false, isCancelling: false)
+                return .queueingFailed
+            }
+
+            if shouldCancelForwarding(generation: generation) {
+                updateProgress(isQueueing: false, isCancelling: true)
+                return await cancelQueuedOperations()
+            }
+
+            updateProgress(isQueueing: true, isCancelling: false)
+            if !shouldContinueQueueing {
+                break
+            }
+        }
+        return nil
+    }
+
+    private func reserveOperations(for roomID: String) -> MessageForwardingOutcome? {
         let reservableIndices = forwardingOperations.indices.filter { forwardingOperations[$0].status.shouldQueue }
         let reservableItems = reservableIndices.map { forwardingOperations[$0].item }
         switch ledgerStore.reserveAdmissions(owner: ledgerOwner,
@@ -231,6 +302,7 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
             for index in reservableIndices {
                 forwardingOperations[index].status = .reserved
             }
+            return nil
         case .capacityExceeded:
             markUnqueuedOperationsAsFailed()
             MXLog.error("Message forwarding queue admission capacity was exceeded.")
@@ -251,36 +323,6 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
             updateProgress(isQueueing: false, isCancelling: false)
             return .queueingFailed
         }
-
-        for index in forwardingOperations.indices where forwardingOperations[index].status.isReserved {
-            if shouldCancelForwarding(generation: generation) {
-                return await cancelQueuedOperations()
-            }
-
-            forwardingOperations[index].status = .queueing
-            updateProgress(isQueueing: true, isCancelling: false)
-
-            let result = await targetRoomProxy.timeline.queueMessageEventContent(forwardingOperations[index].item.content)
-            let shouldContinueQueueing = applyQueueingResult(result, at: index)
-
-            if shouldCancelForwarding(generation: generation) {
-                updateProgress(isQueueing: false, isCancelling: true)
-                return await cancelQueuedOperations()
-            }
-
-            updateProgress(isQueueing: true, isCancelling: false)
-            if !shouldContinueQueueing {
-                break
-            }
-        }
-
-        guard persistQueueingResults(roomID: roomID) else {
-            state.isLedgerReconciliationRequired = true
-            markAcceptedQueueingResultsAsUnknown()
-            updateProgress(isQueueing: false, isCancelling: false)
-            return .queueingFailed
-        }
-        return finishForwardingAttempt(roomID: roomID)
     }
 
     private func applyQueueingResult(_ result: Result<SendHandle, TimelineProxyError>, at index: Int) -> Bool {
@@ -330,6 +372,12 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
         }
     }
 
+    private func markReservedOperationsAsFailed() {
+        for index in forwardingOperations.indices where forwardingOperations[index].status.isReserved {
+            forwardingOperations[index].status = .queueingFailed
+        }
+    }
+
     private func resetFailedOperations() {
         guard !state.isDestinationLocked else { return }
 
@@ -340,36 +388,51 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
     }
 
     private func restorePersistedOperations(for roomID: String) {
+        state.isRestoredCompletionPending = false
         let restorableIndices = forwardingOperations.indices.filter { forwardingOperations[$0].status.shouldQueue }
         let restorableItems = restorableIndices.map { forwardingOperations[$0].item }
         let persistedStates = ledgerStore.states(accountID: clientProxy.userID,
                                                  destinationRoomID: roomID,
                                                  items: restorableItems)
-        for (index, persistedState) in zip(restorableIndices, persistedStates) where persistedState != nil {
-            forwardingOperations[index].status = .restoredUnknown
+        var didRestoreOperation = false
+        for (index, persistedState) in zip(restorableIndices, persistedStates) {
+            switch persistedState {
+            case .admitted:
+                forwardingOperations[index].status = .acceptedByQueue
+                didRestoreOperation = true
+            case .admitting, .unknown:
+                forwardingOperations[index].status = .restoredUnknown
+                didRestoreOperation = true
+            case nil:
+                break
+            }
         }
 
-        if forwardingOperations.contains(where: \.status.isUnknownOutcome) {
+        if didRestoreOperation {
             updateProgress(isQueueing: false, isCancelling: false)
+            state.isRestoredCompletionPending = forwardingOperations.allSatisfy(\.status.isAcceptedByQueue)
         }
     }
 
-    private func persistQueueingResults(roomID: String) -> Bool {
-        let updates = forwardingOperations.compactMap { operation -> MessageForwardingLedgerUpdate? in
-            switch operation.status {
-            case .queued:
-                .set(.admitted, item: operation.item)
-            case .queueingFailed:
-                .remove(item: operation.item)
-            default:
-                nil
+    private func persistQueueingResult(at index: Int, roomID: String) -> Bool {
+        let updates: [MessageForwardingLedgerUpdate]
+        switch forwardingOperations[index].status {
+        case .queued:
+            updates = [.set(.admitted, item: forwardingOperations[index].item)]
+        case .queueingFailed:
+            updates = forwardingOperations.compactMap { operation in
+                operation.status.isQueueingFailure ? .remove(item: operation.item) : nil
             }
+        default:
+            MXLog.error("Refused to persist a message forwarding operation without a terminal queueing result.")
+            return false
         }
+
         guard ledgerStore.apply(updates,
                                 owner: ledgerOwner,
                                 accountID: clientProxy.userID,
                                 destinationRoomID: roomID) == .stored else {
-            MXLog.error("Failed atomically updating the message forwarding admission ledger.")
+            MXLog.error("Failed persisting a message forwarding queueing result.")
             return false
         }
         state.isLedgerReconciliationRequired = false

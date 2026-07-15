@@ -689,7 +689,8 @@ extension TimelineMediaPreviewViewModelTests {
     @Test
     func pinnedTimelineDismissalStopsAndReleasesMediaForwardingHandoff() async {
         let clock = TestClock<Duration>()
-        let preview = TimelineMediaPreviewViewModelActionEmitter()
+        let item = Self.makeImageItem()
+        let preview = TimelineMediaPreviewViewModelActionEmitter(item: item)
         var viewModel: PinnedEventsTimelineScreenViewModel? = PinnedEventsTimelineScreenViewModel(roomProxy: JoinedRoomProxyMock(.init(id: "room")),
                                                                                                   userIndicatorController: UserIndicatorControllerMock(),
                                                                                                   appSettings: ServiceLocator.shared.settings,
@@ -718,9 +719,10 @@ extension TimelineMediaPreviewViewModelTests {
     @Test
     func mediaTimelineStopReleasesPendingMediaForwardingHandoff() async {
         let clock = TestClock<Duration>()
+        let item = Self.makeImageItem()
         let mediaTimeline = TimelineViewModelActionEmitter(timelineKind: .media(.mediaFilesScreen))
         let filesTimeline = TimelineViewModelActionEmitter(timelineKind: .media(.mediaFilesScreen))
-        let preview = TimelineMediaPreviewViewModelActionEmitter()
+        let preview = TimelineMediaPreviewViewModelActionEmitter(item: item)
         var viewModel: MediaEventsTimelineScreenViewModel? = MediaEventsTimelineScreenViewModel(mediaTimelineViewModel: mediaTimeline,
                                                                                                 filesTimelineViewModel: filesTimeline,
                                                                                                 mediaProvider: MediaProviderMock(configuration: .init()),
@@ -733,8 +735,6 @@ extension TimelineMediaPreviewViewModelTests {
             guard case .displayMessageForwarding = action else { return }
             forwardingActionCount += 1
         }
-
-        let item = Self.makeImageItem()
         viewModel?.context.send(viewAction: .tappedItem(item: .init(item: item, groupStyle: .single)))
         mediaTimeline.send(.displayMediaPreview(preview))
         preview.send(.displayMessageForwarding(makeForwardingBatch()))
@@ -745,6 +745,44 @@ extension TimelineMediaPreviewViewModelTests {
         await yieldForMediaHandoffCancellation()
 
         #expect(weakViewModel == nil)
+        #expect(forwardingActionCount == 0)
+        withExtendedLifetime(cancellable) { }
+    }
+
+    @Test
+    func mediaTimelineModeChangeCancelsPendingForwardingHandoff() async throws {
+        let clock = TestClock<Duration>()
+        let item = Self.makeImageItem()
+        let mediaTimeline = TimelineViewModelActionEmitter(timelineKind: .media(.mediaFilesScreen))
+        let filesTimeline = TimelineViewModelActionEmitter(timelineKind: .media(.mediaFilesScreen))
+        let preview = TimelineMediaPreviewViewModelActionEmitter(item: item)
+        let viewModel = MediaEventsTimelineScreenViewModel(mediaTimelineViewModel: mediaTimeline,
+                                                           filesTimelineViewModel: filesTimeline,
+                                                           mediaProvider: MediaProviderMock(configuration: .init()),
+                                                           userIndicatorController: UserIndicatorControllerMock(),
+                                                           appMediator: AppMediatorMock(),
+                                                           mediaPreviewForwardingClock: clock)
+        var forwardingActionCount = 0
+        let cancellable = viewModel.actionsPublisher.sink { action in
+            guard case .displayMessageForwarding = action else { return }
+            forwardingActionCount += 1
+        }
+        viewModel.context.send(viewAction: .tappedItem(item: .init(item: item, groupStyle: .single)))
+        mediaTimeline.send(.displayMediaPreview(preview))
+        #expect(viewModel.context.viewState.bindings.mediaPreviewViewModel === preview)
+        preview.send(.displayMessageForwarding(makeForwardingBatch()))
+        await yieldForMediaHandoffCancellation()
+        do {
+            try await clock.checkSuspension()
+            Issue.record("Expected the forwarding handoff delay to be active.")
+        } catch { }
+
+        viewModel.context.screenMode = .files
+        viewModel.context.send(viewAction: .changedScreenMode)
+        try await clock.checkSuspension()
+        await clock.advance(by: .seconds(1))
+        await yieldForMediaHandoffCancellation()
+
         #expect(forwardingActionCount == 0)
         withExtendedLifetime(cancellable) { }
     }

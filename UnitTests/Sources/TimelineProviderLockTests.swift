@@ -1252,6 +1252,30 @@ extension TimelineViewModelTests {
         #expect(!actions.secondaryActions.contains(.selectMessages))
     }
 
+    @Test
+    func pinnedAndMediaTimelinesOfferSingleMessageForwardingWithoutMessageSelection() throws {
+        let item = makeProviderLockItem(eventID: "single-message-forwarding")
+        let timelineKinds: [TimelineKind] = [.pinned, .media(.mediaFilesScreen), .media(.pinnedEventsScreen)]
+
+        for timelineKind in timelineKinds {
+            let actions = try #require(TimelineItemMenuActionProvider(timelineItem: item,
+                                                                      canCurrentUserSendMessage: true,
+                                                                      canCurrentUserRedactSelf: true,
+                                                                      canCurrentUserRedactOthers: true,
+                                                                      canCurrentUserPin: true,
+                                                                      pinnedEventIDs: [],
+                                                                      isDM: false,
+                                                                      isViewSourceEnabled: false,
+                                                                      areThreadsEnabled: true,
+                                                                      timelineKind: timelineKind,
+                                                                      emojiProvider: EmojiProvider(appSettings: ServiceLocator.shared.settings))
+                    .makeActions())
+
+            #expect(actions.actions.contains(.forward(itemID: item.id)))
+            #expect(!actions.secondaryActions.contains(.selectMessages))
+        }
+    }
+
     private func makeProviderLockViewModel(timelineController: TimelineControllerProtocol,
                                            focussedEventID: String? = nil,
                                            timelineControllerFactory: TimelineControllerFactoryProtocol? = nil) -> TimelineViewModel {

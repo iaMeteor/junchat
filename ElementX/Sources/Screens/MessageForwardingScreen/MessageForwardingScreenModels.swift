@@ -19,6 +19,7 @@ struct MessageForwardingScreenViewState: BindableState {
     var selectedRoomID: String?
     var forwardingProgress: MessageForwardingProgress?
     var isLedgerReconciliationRequired = false
+    var isRestoredCompletionPending = false
     var bindings = MessageForwardingScreenViewStateBindings()
 
     var isDestinationLocked: Bool {
@@ -38,7 +39,7 @@ struct MessageForwardingScreenViewState: BindableState {
             return true
         }
 
-        return forwardingProgress.queuedCount < forwardingProgress.totalCount
+        return forwardingProgress.queuedCount < forwardingProgress.totalCount || isRestoredCompletionPending
     }
 }
 

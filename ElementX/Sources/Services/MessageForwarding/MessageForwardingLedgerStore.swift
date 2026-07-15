@@ -158,7 +158,7 @@ struct MessageForwardingLedgerStore: MessageForwardingLedgerStoreProtocol {
                 return Array(repeating: nil, count: items.count)
             case .loaded(let ledger):
                 let destination = ledger.destinations[fingerprint([destinationRoomID])]
-                return items.map { destination?[itemFingerprint($0)]?.state }
+                return items.map { destination?[itemFingerprint($0)]?.visibleState }
             case .corrupt:
                 return Array(repeating: .unknown, count: items.count)
             }
@@ -186,16 +186,23 @@ struct MessageForwardingLedgerStore: MessageForwardingLedgerStoreProtocol {
             }
 
             let itemKeys = Set(items.map(itemFingerprint))
-            let existingItemKeys = Set(ledger.destinations[destinationKey]?.keys.map(\.self) ?? [])
-            guard itemKeys.isDisjoint(with: existingItemKeys) else {
+            let destination = ledger.destinations[destinationKey] ?? [:]
+            let existingEntries = itemKeys.compactMap { destination[$0] }
+            guard existingEntries.allSatisfy({ entry in
+                entry.isSafeReservation && entry.owner?.launchID != owner.launchID
+            }) else {
                 return .alreadyReserved
             }
-            guard ledger.entryCount <= maximumEntryCount - itemKeys.count else {
+
+            let newEntryCount = itemKeys.count - existingEntries.count
+            guard ledger.entryCount <= maximumEntryCount - newEntryCount else {
                 return .capacityExceeded
             }
 
             for itemKey in itemKeys {
-                ledger.destinations[destinationKey, default: [:]][itemKey] = .init(state: .admitting, owner: owner)
+                ledger.destinations[destinationKey, default: [:]][itemKey] = .init(state: .admitting,
+                                                                                   owner: owner,
+                                                                                   admissionStarted: false)
             }
             return persist(ledger, forKey: key) ? .stored : .persistenceFailed
         }
@@ -225,6 +232,7 @@ struct MessageForwardingLedgerStore: MessageForwardingLedgerStoreProtocol {
             }
 
             entry.state = state
+            entry.admissionStarted = true
             ledger.destinations[destinationKey]?[itemKey] = entry
             return persist(ledger, forKey: key) ? .stored : .persistenceFailed
         }
@@ -267,6 +275,7 @@ struct MessageForwardingLedgerStore: MessageForwardingLedgerStoreProtocol {
                 switch update {
                 case .set(let state, _):
                     ledger.destinations[destinationKey]?[itemKey]?.state = state
+                    ledger.destinations[destinationKey]?[itemKey]?.admissionStarted = true
                 case .remove:
                     ledger.destinations[destinationKey]?.removeValue(forKey: itemKey)
                 }
@@ -415,10 +424,22 @@ private struct Ledger: Codable, Equatable {
 private struct LedgerEntry: Codable, Equatable {
     var state: MessageForwardingLedgerState
     var owner: MessageForwardingLedgerOwner?
+    var admissionStarted: Bool
 
-    init(state: MessageForwardingLedgerState, owner: MessageForwardingLedgerOwner?) {
+    var isSafeReservation: Bool {
+        state == .admitting && !admissionStarted
+    }
+
+    var visibleState: MessageForwardingLedgerState? {
+        isSafeReservation ? nil : state
+    }
+
+    init(state: MessageForwardingLedgerState,
+         owner: MessageForwardingLedgerOwner?,
+         admissionStarted: Bool = true) {
         self.state = state
         self.owner = owner
+        self.admissionStarted = admissionStarted
     }
 
     init(from decoder: Decoder) throws {
@@ -430,6 +451,7 @@ private struct LedgerEntry: Codable, Equatable {
 
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try self.init(state: container.decode(MessageForwardingLedgerState.self, forKey: .state),
-                      owner: container.decodeIfPresent(MessageForwardingLedgerOwner.self, forKey: .owner))
+                      owner: container.decodeIfPresent(MessageForwardingLedgerOwner.self, forKey: .owner),
+                      admissionStarted: container.decodeIfPresent(Bool.self, forKey: .admissionStarted) ?? true)
     }
 }

@@ -113,7 +113,7 @@ struct TimelineItemMenuActionProvider {
             secondaryActions.append(.report)
         }
 
-        if !timelineKind.isThread, canRedactItem(item) || item.isForwardable {
+        if timelineKind.supportsMessageSelection, canRedactItem(item) || item.isForwardable {
             secondaryActions.append(.selectMessages)
         }
 
@@ -164,5 +164,16 @@ struct TimelineItemMenuActionProvider {
 
     private func canRedactItem(_ item: EventBasedTimelineItemProtocol) -> Bool {
         item.isOutgoing ? canCurrentUserRedactSelf : canCurrentUserRedactOthers
+    }
+}
+
+private extension TimelineKind {
+    var supportsMessageSelection: Bool {
+        switch self {
+        case .live, .detached:
+            true
+        case .pinned, .thread, .media:
+            false
+        }
     }
 }

@@ -166,6 +166,7 @@ class MediaEventsTimelineScreenViewModel: MediaEventsTimelineScreenViewModelType
         let newSource = currentTimelineActionSource
         if newSource != activeTimelineActionSource {
             invalidatePendingMediaAction()
+            cancelMediaPreviewForwardingHandoff()
             timelineViewModel(for: activeTimelineActionSource).stop()
             activeTimelineActionSource = newSource
         }
