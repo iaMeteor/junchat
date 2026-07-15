@@ -14,7 +14,7 @@ unset JUNCHAT_FIRST_RELEASE_BASELINE_COMMIT
 
 resolve_with_first_release_baseline() {
     JUNCHAT_FIRST_RELEASE_BASELINE_COMMIT="$1" \
-        resolve_junchat_release_notes_baseline "$2" "$3"
+        resolve_junchat_release_notes_baseline "$2" "$3" "$4"
 }
 
 assert_version_before() {
@@ -77,7 +77,7 @@ test ! -e semver-injection
 create_history first-release
 if (
     cd "$SCENARIO_REPOSITORY"
-    resolve_junchat_release_notes_baseline "1.8.2" "$ARCHIVED_COMMIT"
+    resolve_junchat_release_notes_baseline "1.8.2" "$ARCHIVED_COMMIT" ""
 ); then
     printf '%s\n' 'A first release without an explicit baseline succeeded.' >&2
     exit 81
@@ -85,7 +85,7 @@ fi
 
 (
     cd "$SCENARIO_REPOSITORY"
-    resolve_with_first_release_baseline "$BASELINE_COMMIT" "1.8.2" "$ARCHIVED_COMMIT"
+    resolve_with_first_release_baseline "$BASELINE_COMMIT" "1.8.2" "$ARCHIVED_COMMIT" ""
     test -z "$JUNCHAT_PREVIOUS_RELEASE_TAG"
     test "$JUNCHAT_RELEASE_NOTES_START_COMMIT" = "$BASELINE_COMMIT"
     CI_APP_STORE_SIGNED_APP_PATH="$SCENARIO_REPOSITORY/signed-app" \
@@ -96,7 +96,7 @@ fi
 
 if (
     cd "$SCENARIO_REPOSITORY"
-    resolve_with_first_release_baseline "$BASELINE_COMMIT" "01.8.2" "$ARCHIVED_COMMIT"
+    resolve_with_first_release_baseline "$BASELINE_COMMIT" "01.8.2" "$ARCHIVED_COMMIT" ""
 ); then
     printf '%s\n' 'A noncanonical current release version accepted a first-release baseline.' >&2
     exit 85
@@ -107,7 +107,7 @@ git -C "$SCENARIO_REPOSITORY" tag release/1.8.2 "$ARCHIVED_COMMIT"
 git -C "$SCENARIO_REPOSITORY" tag release/18446744073709551616.0.0 "$BASELINE_COMMIT"
 if (
     cd "$SCENARIO_REPOSITORY"
-    resolve_junchat_release_notes_baseline "1.8.2" "$ARCHIVED_COMMIT"
+    resolve_junchat_release_notes_baseline "1.8.2" "$ARCHIVED_COMMIT" $'release/1.8.2\nrelease/18446744073709551616.0.0'
 ); then
     printf '%s\n' 'A current or huge future release tag was accepted as the previous baseline.' >&2
     exit 82
@@ -120,7 +120,7 @@ git -C "$SCENARIO_REPOSITORY" tag release/1.8.01 "$BASELINE_COMMIT"
 git -C "$SCENARIO_REPOSITORY" tag release/1.8.1-rc.1 "$BASELINE_COMMIT"
 if (
     cd "$SCENARIO_REPOSITORY"
-    resolve_junchat_release_notes_baseline "1.8.2" "$ARCHIVED_COMMIT"
+    resolve_junchat_release_notes_baseline "1.8.2" "$ARCHIVED_COMMIT" $'release/01.8.1\nrelease/1.08.1\nrelease/1.8.01\nrelease/1.8.1-rc.1'
 ); then
     printf '%s\n' 'A noncanonical formal release tag was accepted as the previous baseline.' >&2
     exit 86
@@ -135,7 +135,8 @@ git -C "$SCENARIO_REPOSITORY" tag "release/$HUGE_CURRENT_VERSION" "$ARCHIVED_COM
 git -C "$SCENARIO_REPOSITORY" tag "release/$HUGE_FUTURE_VERSION" "$BASELINE_COMMIT"
 (
     cd "$SCENARIO_REPOSITORY"
-    resolve_junchat_release_notes_baseline "$HUGE_CURRENT_VERSION" "$ARCHIVED_COMMIT"
+    resolve_junchat_release_notes_baseline "$HUGE_CURRENT_VERSION" "$ARCHIVED_COMMIT" \
+        "$(printf 'release/%s\nrelease/%s\nrelease/%s\n' "$HUGE_CURRENT_VERSION" "$HUGE_FUTURE_VERSION" "$HUGE_PREVIOUS_VERSION")"
     test "$JUNCHAT_PREVIOUS_RELEASE_TAG" = "release/$HUGE_PREVIOUS_VERSION"
     test "$JUNCHAT_RELEASE_NOTES_START_COMMIT" = "$BASELINE_COMMIT"
 )
@@ -146,7 +147,7 @@ UNRELATED_COMMIT=$(printf '%s\n' 'Unrelated release' | git -C "$SCENARIO_REPOSIT
 git -C "$SCENARIO_REPOSITORY" tag release/1.8.1 "$UNRELATED_COMMIT"
 if (
     cd "$SCENARIO_REPOSITORY"
-    resolve_with_first_release_baseline "$BASELINE_COMMIT" "1.8.2" "$ARCHIVED_COMMIT"
+    resolve_with_first_release_baseline "$BASELINE_COMMIT" "1.8.2" "$ARCHIVED_COMMIT" "release/1.8.1"
 ); then
     printf '%s\n' 'A non-ancestor formal release tag was accepted.' >&2
     exit 83
@@ -156,17 +157,27 @@ create_history previous-release
 git -C "$SCENARIO_REPOSITORY" tag -a release/1.8.1 -m 'Previous release' "$BASELINE_COMMIT"
 (
     cd "$SCENARIO_REPOSITORY"
-    resolve_junchat_release_notes_baseline "1.8.2" "$ARCHIVED_COMMIT"
+    resolve_junchat_release_notes_baseline "1.8.2" "$ARCHIVED_COMMIT" "release/1.8.1"
     test "$JUNCHAT_PREVIOUS_RELEASE_TAG" = 'release/1.8.1'
     test "$JUNCHAT_RELEASE_NOTES_START_COMMIT" = "$BASELINE_COMMIT"
 )
+
+create_history draft-tag-is-not-a-baseline
+git -C "$SCENARIO_REPOSITORY" tag release/1.8.1 "$BASELINE_COMMIT"
+if (
+    cd "$SCENARIO_REPOSITORY"
+    resolve_junchat_release_notes_baseline "1.8.2" "$ARCHIVED_COMMIT" ""
+); then
+    printf '%s\n' 'A local tag without a published release was accepted as the previous baseline.' >&2
+    exit 87
+fi
 
 git -C "$SCENARIO_REPOSITORY" tag release/1.8.2 "$ARCHIVED_COMMIT"
 git -C "$SCENARIO_REPOSITORY" tag release/26.06.0 "$ARCHIVED_COMMIT"
 git -C "$SCENARIO_REPOSITORY" tag release/18446744073709551616.0.0 "$BASELINE_COMMIT"
 (
     cd "$SCENARIO_REPOSITORY"
-    resolve_junchat_release_notes_baseline "1.8.2" "$ARCHIVED_COMMIT"
+    resolve_junchat_release_notes_baseline "1.8.2" "$ARCHIVED_COMMIT" "release/1.8.1"
     test "$JUNCHAT_PREVIOUS_RELEASE_TAG" = 'release/1.8.1'
     test "$JUNCHAT_RELEASE_NOTES_START_COMMIT" = "$BASELINE_COMMIT"
     CI_APP_STORE_SIGNED_APP_PATH="$SCENARIO_REPOSITORY/signed-app" \
@@ -174,6 +185,17 @@ git -C "$SCENARIO_REPOSITORY" tag release/18446744073709551616.0.0 "$BASELINE_CO
         generate_what_to_test_notes "$JUNCHAT_RELEASE_NOTES_START_COMMIT" "$ARCHIVED_COMMIT"
     grep -Fq 'Feature change' TestFlight/WhatToTest.en-US.txt
     grep -Fq 'Archived change' TestFlight/WhatToTest.en-US.txt
+)
+
+create_history newer-draft-does-not-hide-published-release
+FEATURE_COMMIT=$(git -C "$SCENARIO_REPOSITORY" rev-parse "$ARCHIVED_COMMIT^")
+git -C "$SCENARIO_REPOSITORY" tag release/1.8.0 "$BASELINE_COMMIT"
+git -C "$SCENARIO_REPOSITORY" tag release/1.8.1 "$FEATURE_COMMIT"
+(
+    cd "$SCENARIO_REPOSITORY"
+    resolve_junchat_release_notes_baseline "1.8.2" "$ARCHIVED_COMMIT" "release/1.8.0"
+    test "$JUNCHAT_PREVIOUS_RELEASE_TAG" = 'release/1.8.0'
+    test "$JUNCHAT_RELEASE_NOTES_START_COMMIT" = "$BASELINE_COMMIT"
 )
 
 if (

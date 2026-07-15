@@ -99,4 +99,44 @@ final class JunchatReleaseVersionTests: XCTestCase {
                                                                    name: "1.8.3",
                                                                    build: 38))
     }
+
+    func testSetCommandRegeneratesTheXcodeProjectWhenMetadataAlreadyMatches() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let projectURL = directory.appending(path: "project.yml")
+        try projectYAML.write(to: projectURL, atomically: true, encoding: .utf8)
+        var generationCount = 0
+
+        let changed = try SetJunchatReleaseVersion.updateProject(at: projectURL,
+                                                                 versionName: "1.8.2",
+                                                                 buildNumber: 37) {
+            generationCount += 1
+        }
+
+        XCTAssertFalse(changed)
+        XCTAssertEqual(generationCount, 1)
+    }
+
+    func testSetCommandDoesNotReportSuccessWhenRetryGenerationFails() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let projectURL = directory.appending(path: "project.yml")
+        try projectYAML.write(to: projectURL, atomically: true, encoding: .utf8)
+
+        XCTAssertThrowsError(try SetJunchatReleaseVersion.updateProject(at: projectURL,
+                                                                        versionName: "1.8.2",
+                                                                        buildNumber: 37) {
+                throw StubError.xcodeGenFailed
+            })
+    }
+
+    private enum StubError: Error {
+        case xcodeGenFailed
+    }
 }

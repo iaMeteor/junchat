@@ -80,13 +80,18 @@ is_junchat_release_version_before() {
 resolve_junchat_release_notes_baseline() {
     local current_version="$1"
     local archived_revision="$2"
+    local published_release_tags="${3-}"
     local current_tag="release/$current_version"
-    local release_tags candidate_tag candidate_version previous_tag=""
+    local candidate_tag candidate_version previous_tag="" previous_version=""
     local archived_commit previous_commit first_release_baseline resolved_baseline
 
     export JUNCHAT_PREVIOUS_RELEASE_TAG=""
     export JUNCHAT_RELEASE_NOTES_START_COMMIT=""
 
+    if [[ $# -ne 3 ]]; then
+        printf '%s\n' 'resolve_junchat_release_notes_baseline: A frozen published-release tag snapshot is required.' >&2
+        return 1
+    fi
     if ! is_canonical_junchat_release_version "$current_version"; then
         printf '%s\n' "resolve_junchat_release_notes_baseline: $current_version is not a canonical release version." >&2
         return 1
@@ -95,20 +100,17 @@ resolve_junchat_release_notes_baseline() {
         printf '%s\n' "resolve_junchat_release_notes_baseline: Could not resolve archived commit $archived_revision." >&2
         return 1
     fi
-    if ! release_tags=$(git tag --list 'release/*' --sort=-version:refname); then
-        printf '%s\n' 'resolve_junchat_release_notes_baseline: Could not list formal release tags.' >&2
-        return 1
-    fi
-
     while IFS= read -r candidate_tag; do
         [[ -n "$candidate_tag" ]] || continue
         [[ "$candidate_tag" != "$current_tag" ]] || continue
         candidate_version=${candidate_tag#release/}
-        if is_junchat_release_version_before "$candidate_version" "$current_version"; then
+        if [[ "$candidate_tag" = "release/$candidate_version" ]] &&
+           is_junchat_release_version_before "$candidate_version" "$current_version" &&
+           { [[ -z "$previous_tag" ]] || is_junchat_release_version_before "$previous_version" "$candidate_version"; }; then
             previous_tag="$candidate_tag"
-            break
+            previous_version="$candidate_version"
         fi
-    done <<< "$release_tags"
+    done <<< "$published_release_tags"
 
     if [[ -n "$previous_tag" ]]; then
         if ! previous_commit=$(git rev-parse --verify "$previous_tag^{commit}"); then

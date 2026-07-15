@@ -12,7 +12,9 @@ RELEASE_NOTES_START_COMMIT=""
 
 if [ "$CI_WORKFLOW" = "Release" ]; then
     CURRENT_RELEASE_VERSION=$(swift run -q tools ci current-release-version)
-    resolve_junchat_release_notes_baseline "$CURRENT_RELEASE_VERSION" "$ARCHIVED_COMMIT"
+    REPOSITORY_URL=$(git remote get-url origin)
+    PUBLISHED_RELEASE_TAGS=$(swift run -q tools ci published-junchat-release-tags --repository-url "$REPOSITORY_URL")
+    resolve_junchat_release_notes_baseline "$CURRENT_RELEASE_VERSION" "$ARCHIVED_COMMIT" "$PUBLISHED_RELEASE_TAGS"
     RELEASE_NOTES_START_COMMIT="$JUNCHAT_RELEASE_NOTES_START_COMMIT"
     validate_what_to_test_notes_range "$RELEASE_NOTES_START_COMMIT" "$ARCHIVED_COMMIT"
 fi

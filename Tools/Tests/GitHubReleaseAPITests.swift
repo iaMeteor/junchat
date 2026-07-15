@@ -3,6 +3,43 @@ import Foundation
 import XCTest
 
 final class GitHubReleaseAPITests: XCTestCase {
+    func testListsOnlyPublishedFormalReleaseTagsAcrossEveryPage() async throws {
+        var firstPage = (0..<96).map { index in
+            releaseRecord(version: "9.9.\(index)", targetCommit: String(repeating: "a", count: 40))
+        }
+        firstPage.append(releaseRecord(version: "1.8.1",
+                                       targetCommit: String(repeating: "b", count: 40),
+                                       draft: false,
+                                       publishedAt: "2026-07-01T00:00:00Z"))
+        firstPage.append(releaseRecord(version: "1.8.0",
+                                       targetCommit: String(repeating: "c", count: 40),
+                                       draft: false,
+                                       prerelease: true,
+                                       publishedAt: "2026-06-01T00:00:00Z"))
+        firstPage.append(releaseRecord(version: "1.7.9",
+                                       targetCommit: String(repeating: "d", count: 40),
+                                       draft: false))
+        firstPage.append(releaseRecord(version: "notes-only",
+                                       targetCommit: String(repeating: "e", count: 40),
+                                       draft: false,
+                                       publishedAt: "2026-05-01T00:00:00Z",
+                                       tagPrefix: "notes/"))
+        let stub = GitHubHTTPStub(responses: [
+            .json(200, firstPage),
+            .json(200, [releaseRecord(version: "1.7.8",
+                                      targetCommit: String(repeating: "f", count: 40),
+                                      draft: false,
+                                      publishedAt: "2026-04-01T00:00:00Z")])
+        ])
+        let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+
+        let tags = try await api.publishedReleaseTags(repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
+                                                      token: "secret")
+
+        XCTAssertEqual(tags, ["release/1.8.1", "release/1.7.8"])
+        XCTAssertEqual(stub.requests.map { $0.url?.query }, ["per_page=100&page=1", "per_page=100&page=2"])
+    }
+
     func testReusesAnExistingMatchingDraftWithoutCreatingAnotherRelease() async throws {
         let targetCommit = String(repeating: "a", count: 40)
         let stub = GitHubHTTPStub(responses: [
@@ -55,6 +92,7 @@ final class GitHubReleaseAPITests: XCTestCase {
         let targetCommit = String(repeating: "b", count: 40)
         let stub = GitHubHTTPStub(responses: [
             .json(200, []),
+            .json(404, ["message": "Not Found"]),
             .json(201, releaseRecord(targetCommit: targetCommit)),
             .json(200, referenceRecord(commit: targetCommit))
         ])
@@ -67,11 +105,11 @@ final class GitHubReleaseAPITests: XCTestCase {
 
         XCTAssertEqual(body, "Generated notes")
         let requests = stub.requests
-        XCTAssertEqual(requests.map(\.httpMethod), ["GET", "POST", "GET"])
-        let payload = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(requests[1].httpBody)) as? [String: Any])
+        XCTAssertEqual(requests.map(\.httpMethod), ["GET", "GET", "POST", "GET"])
+        let payload = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(requests[2].httpBody)) as? [String: Any])
         XCTAssertEqual(payload["draft"] as? Bool, true)
         XCTAssertEqual(payload["target_commitish"] as? String, targetCommit)
-        let tagRequest = try XCTUnwrap(requests.dropFirst(2).first)
+        let tagRequest = try XCTUnwrap(requests.last)
         XCTAssertEqual(tagRequest.url?.path, "/repos/acme/junchat-ios/git/ref/tags/release/1.8.2")
     }
 
@@ -80,6 +118,7 @@ final class GitHubReleaseAPITests: XCTestCase {
         let tagObject = String(repeating: "4", count: 40)
         let stub = GitHubHTTPStub(responses: [
             .json(200, []),
+            .json(404, ["message": "Not Found"]),
             .json(201, releaseRecord(targetCommit: targetCommit)),
             .json(200, referenceRecord(commit: tagObject, type: "tag")),
             .json(200, tagObjectRecord(commit: targetCommit))
@@ -94,6 +133,7 @@ final class GitHubReleaseAPITests: XCTestCase {
         XCTAssertEqual(body, "Generated notes")
         XCTAssertEqual(stub.requests.map(\.url?.path), [
             "/repos/acme/junchat-ios/releases",
+            "/repos/acme/junchat-ios/git/ref/tags/release/1.8.2",
             "/repos/acme/junchat-ios/releases",
             "/repos/acme/junchat-ios/git/ref/tags/release/1.8.2",
             "/repos/acme/junchat-ios/git/tags/\(tagObject)"
@@ -115,6 +155,7 @@ final class GitHubReleaseAPITests: XCTestCase {
         for tagResponse in tagResponses {
             let stub = GitHubHTTPStub(responses: [
                 .json(200, []),
+                .json(404, ["message": "Not Found"]),
                 .json(201, releaseRecord(targetCommit: targetCommit))
             ] + tagResponse)
             let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
@@ -126,8 +167,79 @@ final class GitHubReleaseAPITests: XCTestCase {
                                                      token: "secret")
                 XCTFail("Expected the created draft's actual tag target to fail closed")
             } catch GitHubReleaseAPI.APIError.incompatibleExistingRelease {
-                XCTAssertEqual(stub.requests.count, 2 + tagResponse.count)
+                XCTAssertEqual(stub.requests.count, 3 + tagResponse.count)
             }
+        }
+    }
+
+    func testRejectsAPreexistingMismatchedTagBeforeCreatingADraft() async throws {
+        let targetCommit = String(repeating: "5", count: 40)
+        let wrongCommit = String(repeating: "6", count: 40)
+        let tagObject = String(repeating: "7", count: 40)
+        let tagResponses: [[GitHubHTTPStub.Response]] = [
+            [.json(200, referenceRecord(commit: wrongCommit))],
+            [
+                .json(200, referenceRecord(commit: tagObject, type: "tag")),
+                .json(200, tagObjectRecord(commit: wrongCommit))
+            ]
+        ]
+
+        for tagResponse in tagResponses {
+            let stub = GitHubHTTPStub(responses: [
+                .json(200, [])
+            ] + tagResponse)
+            let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+
+            do {
+                _ = try await api.createOrReuseDraft(version: "1.8.2",
+                                                     targetCommit: targetCommit,
+                                                     repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
+                                                     token: "secret")
+                XCTFail("Expected a preexisting mismatched tag to fail closed")
+            } catch {
+                XCTAssertFalse(stub.requests.contains { $0.httpMethod == "POST" })
+            }
+        }
+    }
+
+    func testCreatesADraftWhenAPreexistingAnnotatedTagPeelsToTheArchivedCommit() async throws {
+        let targetCommit = String(repeating: "5", count: 40)
+        let tagObject = String(repeating: "7", count: 40)
+        let stub = GitHubHTTPStub(responses: [
+            .json(200, []),
+            .json(200, referenceRecord(commit: tagObject, type: "tag")),
+            .json(200, tagObjectRecord(commit: targetCommit)),
+            .json(201, releaseRecord(targetCommit: targetCommit)),
+            .json(200, referenceRecord(commit: targetCommit))
+        ])
+        let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+
+        _ = try await api.createOrReuseDraft(version: "1.8.2",
+                                             targetCommit: targetCommit,
+                                             repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
+                                             token: "secret")
+
+        XCTAssertEqual(stub.requests.map(\.httpMethod), ["GET", "GET", "GET", "POST", "GET"])
+    }
+
+    func testRejectsAnUnreadablePreexistingAnnotatedTagBeforeCreatingADraft() async throws {
+        let targetCommit = String(repeating: "5", count: 40)
+        let tagObject = String(repeating: "7", count: 40)
+        let stub = GitHubHTTPStub(responses: [
+            .json(200, []),
+            .json(200, referenceRecord(commit: tagObject, type: "tag")),
+            .json(404, ["message": "Not Found"])
+        ])
+        let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+
+        do {
+            _ = try await api.createOrReuseDraft(version: "1.8.2",
+                                                 targetCommit: targetCommit,
+                                                 repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
+                                                 token: "secret")
+            XCTFail("Expected an unreadable annotated tag to fail closed")
+        } catch {
+            XCTAssertFalse(stub.requests.contains { $0.httpMethod == "POST" })
         }
     }
 
@@ -135,6 +247,7 @@ final class GitHubReleaseAPITests: XCTestCase {
         let targetCommit = String(repeating: "8", count: 40)
         let stub = GitHubHTTPStub(responses: [
             .json(200, []),
+            .json(404, ["message": "Not Found"]),
             .json(201, releaseRecord(targetCommit: targetCommit)),
             .json(404, ["message": "Not Found"])
         ])
@@ -147,7 +260,7 @@ final class GitHubReleaseAPITests: XCTestCase {
                                                  token: "secret")
             XCTFail("Expected a missing post-create tag ref to fail closed")
         } catch GitHubReleaseAPI.APIError.failedRequest(statusCode: 404, message: _) {
-            XCTAssertEqual(stub.requests.count, 3)
+            XCTAssertEqual(stub.requests.count, 4)
         }
     }
 
@@ -234,6 +347,7 @@ final class GitHubReleaseAPITests: XCTestCase {
         let targetCommit = String(repeating: "f", count: 40)
         let stub = GitHubHTTPStub(responses: [
             .json(200, []),
+            .json(404, ["message": "Not Found"]),
             .json(422, ["message": "already_exists"]),
             .json(200, [releaseRecord(targetCommit: targetCommit)]),
             .json(200, referenceRecord(commit: targetCommit))
@@ -246,7 +360,7 @@ final class GitHubReleaseAPITests: XCTestCase {
                                                     token: "secret")
 
         XCTAssertEqual(body, "Generated notes")
-        XCTAssertEqual(stub.requests.map(\.httpMethod), ["GET", "POST", "GET", "GET"])
+        XCTAssertEqual(stub.requests.map(\.httpMethod), ["GET", "GET", "POST", "GET", "GET"])
     }
 
     func testRecognizesAnAlreadyPushedPreparationWhenRebuildingTheArchivedCommit() async throws {
@@ -487,15 +601,21 @@ private let preparationTree = String(repeating: "8", count: 40)
 private func releaseRecord(version: String = "1.8.2",
                            targetCommit: String,
                            draft: Bool = true,
-                           prerelease: Bool = false) -> [String: Any] {
-    [
-        "tag_name": "release/\(version)",
+                           prerelease: Bool = false,
+                           publishedAt: String? = nil,
+                           tagPrefix: String = "release/") -> [String: Any] {
+    var record: [String: Any] = [
+        "tag_name": "\(tagPrefix)\(version)",
         "name": version,
         "target_commitish": targetCommit,
         "body": "Generated notes",
         "draft": draft,
         "prerelease": prerelease
     ]
+    if let publishedAt {
+        record["published_at"] = publishedAt
+    }
+    return record
 }
 
 private func referenceRecord(commit: String, type: String = "commit") -> [String: Any] {

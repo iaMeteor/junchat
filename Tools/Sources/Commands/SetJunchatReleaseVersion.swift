@@ -27,15 +27,33 @@ struct SetJunchatReleaseVersion: ParsableCommand {
             return
         }
 
+        let changed = try Self.updateProject(at: projectURL,
+                                             versionName: versionName,
+                                             buildNumber: buildNumber) {
+            try Zsh.run(command: "xcodegen")
+        }
+        if changed {
+            logger.info("Updated JunChat iOS to \(versionName) (\(buildNumber)).")
+        } else {
+            logger.info("Regenerated the Xcode project for existing JunChat iOS version \(versionName) (\(buildNumber)).")
+        }
+    }
+
+    @discardableResult
+    static func updateProject(at projectURL: URL,
+                              versionName: String,
+                              buildNumber: Int,
+                              generateXcodeProject: () throws -> Void) throws -> Bool {
         let changed = try JunchatReleaseVersion.updateProjectFile(at: projectURL,
                                                                   name: versionName,
                                                                   build: buildNumber)
-        guard changed else {
-            logger.info("JunChat iOS version metadata already matches the requested values.")
-            return
-        }
+        try generateXcodeProject()
 
-        try Zsh.run(command: "xcodegen")
-        logger.info("Updated JunChat iOS to \(versionName) (\(buildNumber)).")
+        let generatedProjectYAML = try String(contentsOf: projectURL, encoding: .utf8)
+        guard try JunchatReleaseVersion.parse(generatedProjectYAML) == JunchatReleaseVersion(name: versionName,
+                                                                                             build: buildNumber) else {
+            throw JunchatReleaseVersion.VersionError.roundTripFailed
+        }
+        return changed
     }
 }

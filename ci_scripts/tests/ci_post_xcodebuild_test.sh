@@ -15,8 +15,10 @@ ARCHIVED_SHA_MARKER="$TEST_ROOT/archived-sha-captured"
 BASELINE_SHA_MARKER="$TEST_ROOT/baseline-sha-captured"
 NOTES_RANGE_MARKER="$TEST_ROOT/notes-range-validated"
 VERSION_COMMAND_MARKER="$TEST_ROOT/version-command-ran"
+PUBLISHED_RELEASE_SNAPSHOT_MARKER="$TEST_ROOT/published-release-snapshot-captured"
 ARCHIVED_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 PREVIOUS_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+REPOSITORY_URL=git@github.com:acme/junchat-ios.git
 mkdir -p "$FIXTURE_ROOT/ci_scripts" "$FIXTURE_ROOT/signed-app" "$FAKE_BIN"
 cp "$REPOSITORY_ROOT/ci_scripts/ci_common.sh" "$FIXTURE_ROOT/ci_scripts/"
 cp "$REPOSITORY_ROOT/ci_scripts/ci_post_xcodebuild.sh" "$FIXTURE_ROOT/ci_scripts/"
@@ -46,9 +48,9 @@ case "${1:-}" in
                 ;;
         esac
         ;;
-    tag)
-        test "$*" = "tag --list release/* --sort=-version:refname"
-        printf '%s\n' 'release/26.06.0' 'release/1.8.2' 'release/1.8.1'
+    remote)
+        test "$*" = "remote get-url origin"
+        printf '%s\n' "$REPOSITORY_URL"
         ;;
     merge-base)
         test "$*" = "merge-base --is-ancestor $PREVIOUS_SHA $ARCHIVED_SHA"
@@ -76,9 +78,16 @@ if [[ "$*" == 'run -q tools ci current-release-version' ]]; then
     exit 0
 fi
 
+if [[ "$*" == "run -q tools ci published-junchat-release-tags --repository-url $REPOSITORY_URL" ]]; then
+    printf '%s\n' 'release/1.8.1'
+    printf '%s\n' captured > "$PUBLISHED_RELEASE_SNAPSHOT_MARKER"
+    exit 0
+fi
+
 printf '%s\n' "$*" >> "$COMMAND_LOG"
 if [[ "$*" == *"upload-dsyms"* || "$*" == *"release-to-github"* ]] &&
-   [[ ! -e "$ARCHIVED_SHA_MARKER" || ! -e "$BASELINE_SHA_MARKER" || ! -e "$NOTES_RANGE_MARKER" ]]; then
+   [[ ! -e "$ARCHIVED_SHA_MARKER" || ! -e "$PUBLISHED_RELEASE_SNAPSHOT_MARKER" ||
+      ! -e "$BASELINE_SHA_MARKER" || ! -e "$NOTES_RANGE_MARKER" ]]; then
     printf '%s\n' 'A remote-capable command ran before release notes were validated and frozen.' >&2
     exit 93
 fi
@@ -93,7 +102,7 @@ chmod +x "$FAKE_BIN/git" "$FAKE_BIN/swift"
 
 (
     cd "$FIXTURE_ROOT/ci_scripts"
-    export ARCHIVED_SHA ARCHIVED_SHA_MARKER BASELINE_SHA_MARKER COMMAND_LOG FIXTURE_ROOT GIT_LOG_ARGUMENTS NOTES_RANGE_MARKER PREVIOUS_SHA VERSION_COMMAND_MARKER
+    export ARCHIVED_SHA ARCHIVED_SHA_MARKER BASELINE_SHA_MARKER COMMAND_LOG FIXTURE_ROOT GIT_LOG_ARGUMENTS NOTES_RANGE_MARKER PREVIOUS_SHA PUBLISHED_RELEASE_SNAPSHOT_MARKER REPOSITORY_URL VERSION_COMMAND_MARKER
     PATH="$FAKE_BIN:$PATH" \
         CI_ARCHIVE_PATH="$TEST_ROOT/archive" \
         CI_APP_STORE_SIGNED_APP_PATH="$FIXTURE_ROOT/signed-app" \
@@ -103,6 +112,7 @@ chmod +x "$FAKE_BIN/git" "$FAKE_BIN/swift"
 
 test -f "$FIXTURE_ROOT/TestFlight/WhatToTest.en-US.txt"
 test -f "$VERSION_COMMAND_MARKER"
+test -f "$PUBLISHED_RELEASE_SNAPSHOT_MARKER"
 test -f "$BASELINE_SHA_MARKER"
 test -f "$NOTES_RANGE_MARKER"
 test "$(sed -n '1p' "$COMMAND_LOG")" = "run -q tools ci upload-dsyms --dsym-path $TEST_ROOT/archive/dSYMs"

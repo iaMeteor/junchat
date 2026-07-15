@@ -45,6 +45,28 @@ struct GitHubReleaseAPI {
         self.dataLoader = dataLoader
     }
 
+    func publishedReleaseTags(repository: GitHubRepository,
+                              token: String) async throws -> [String] {
+        var tags = [String]()
+        var seenTags = Set<String>()
+
+        for page in 1...Self.maximumPages {
+            let releases = try await listReleases(repository: repository,
+                                                  token: token,
+                                                  page: page)
+            for release in releases where release.isPublishedFormalRelease {
+                guard seenTags.insert(release.tagName).inserted else {
+                    throw APIError.duplicateExistingRelease
+                }
+                tags.append(release.tagName)
+            }
+            if releases.count < Self.pageSize {
+                return tags
+            }
+        }
+        throw APIError.releaseSearchLimitExceeded
+    }
+
     func createOrReuseDraft(version: String,
                             targetCommit: String,
                             repository: GitHubRepository,
@@ -224,6 +246,14 @@ struct GitHubReleaseAPI {
     private func createDraft(_ releaseRequest: GitHubReleaseRequest,
                              repository: GitHubRepository,
                              token: String) async throws -> String {
+        if let existingTagCommit = try await releaseTagCommitIfPresent(tagName: releaseRequest.tagName,
+                                                                       repository: repository,
+                                                                       token: token) {
+            guard existingTagCommit == releaseRequest.targetCommit else {
+                throw APIError.incompatibleExistingRelease
+            }
+        }
+
         var request = authenticatedRequest(url: repository.releasesAPIURL, token: token)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -244,6 +274,18 @@ struct GitHubReleaseAPI {
     private func releaseTagCommit(tagName: String,
                                   repository: GitHubRepository,
                                   token: String) async throws -> String {
+        guard let commit = try await releaseTagCommitIfPresent(tagName: tagName,
+                                                               repository: repository,
+                                                               token: token) else {
+            throw APIError.failedRequest(statusCode: 404,
+                                         message: "The release tag does not exist.")
+        }
+        return commit
+    }
+
+    private func releaseTagCommitIfPresent(tagName: String,
+                                           repository: GitHubRepository,
+                                           token: String) async throws -> String? {
         let tagComponents = tagName.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
         guard !tagComponents.isEmpty, tagComponents.allSatisfy({ !$0.isEmpty }) else {
             throw APIError.invalidResponse
@@ -251,7 +293,12 @@ struct GitHubReleaseAPI {
 
         let referenceURL = try repositoryAPIURL(repository: repository,
                                                 pathComponents: ["git", "ref", "tags"] + tagComponents)
-        let referenceData = try await successfulData(for: authenticatedRequest(url: referenceURL, token: token))
+        let referenceData: Data
+        do {
+            referenceData = try await successfulData(for: authenticatedRequest(url: referenceURL, token: token))
+        } catch APIError.failedRequest(statusCode: 404, message: _) {
+            return nil
+        }
         var object = try JSONDecoder().decode(GitHubReferenceRecord.self, from: referenceData).object
         var visitedTags = Set<String>()
 
@@ -364,6 +411,7 @@ private struct GitHubReleaseRecord: Decodable {
     let body: String?
     let draft: Bool
     let prerelease: Bool
+    let publishedAt: String?
 
     private enum CodingKeys: String, CodingKey {
         case tagName = "tag_name"
@@ -372,6 +420,11 @@ private struct GitHubReleaseRecord: Decodable {
         case body
         case draft
         case prerelease
+        case publishedAt = "published_at"
+    }
+
+    var isPublishedFormalRelease: Bool {
+        !draft && !prerelease && publishedAt != nil && tagName.hasPrefix("release/")
     }
 
     func validatedDraftBody(for request: GitHubReleaseRequest,

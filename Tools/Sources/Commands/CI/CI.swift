@@ -14,6 +14,7 @@ struct CI: ParsableCommand {
                                                         ConfigureNightly.self,
                                                         ConfigureProduction.self,
                                                         CurrentReleaseVersion.self,
+                                                        PublishedJunchatReleaseTags.self,
                                                         TagNightly.self,
                                                         UploadDSYMs.self,
                                                         ReleaseToGitHub.self
@@ -216,9 +217,31 @@ struct CI: ParsableCommand {
     static func gitPush(tagName: String) async throws {
         let repository = try await CI.gitRepository()
         let environment = try authenticatedGitEnvironment()
-        try await CI.run(.name("git"), ["tag", tagName])
-        try await authenticatedGitPush(["push", repository.httpsURL.absoluteString, "refs/tags/\(tagName)"],
-                                       environment: environment)
+        let expectedCommit = try await gitCurrentCommit()
+        try await gitPushTag(tagName: tagName,
+                             expectedCommit: expectedCommit,
+                             remoteURL: repository.httpsURL.absoluteString,
+                             environment: environment,
+                             gitExecutable: .name("git"),
+                             argumentPrefix: [])
+    }
+
+    static func gitPushTagForTesting(tagName: String,
+                                     expectedCommit: String,
+                                     remoteURL: String,
+                                     repositoryPath: String,
+                                     gitExecutablePath: String? = nil) async throws {
+        let executable: Executable = if let gitExecutablePath {
+            .name(gitExecutablePath)
+        } else {
+            .path("/usr/bin/git")
+        }
+        try await gitPushTag(tagName: tagName,
+                             expectedCommit: expectedCommit,
+                             remoteURL: remoteURL,
+                             environment: .inherit,
+                             gitExecutable: executable,
+                             argumentPrefix: ["-C", repositoryPath])
     }
 
     static func gitPush(branch: String, expectedRemoteCommit: String) async throws {
@@ -260,6 +283,158 @@ struct CI: ParsableCommand {
         } catch {
             throw ValidationError("Authenticated git push failed.")
         }
+    }
+
+    private static func gitPushTag(tagName: String,
+                                   expectedCommit: String,
+                                   remoteURL: String,
+                                   environment: Environment,
+                                   gitExecutable: Executable,
+                                   argumentPrefix: [String]) async throws {
+        let tagReference = "refs/tags/\(tagName)"
+        try await runGit(gitExecutable,
+                         arguments: argumentPrefix + ["check-ref-format", tagReference],
+                         environment: environment)
+
+        let resolvedExpectedCommit = try await gitOutput(gitExecutable,
+                                                         arguments: argumentPrefix + ["rev-parse", "--verify", "\(expectedCommit)^{commit}"],
+                                                         environment: environment)
+        guard resolvedExpectedCommit == expectedCommit else {
+            throw ValidationError("The nightly tag target is not the exact current commit.")
+        }
+
+        let localCommit = try await localTagCommit(tagReference,
+                                                   gitExecutable: gitExecutable,
+                                                   argumentPrefix: argumentPrefix,
+                                                   environment: environment)
+        if let localCommit, localCommit != expectedCommit {
+            throw ValidationError("The local nightly tag already points to another commit.")
+        }
+
+        let remoteCommit = try await remoteTagCommit(tagReference,
+                                                     remoteURL: remoteURL,
+                                                     gitExecutable: gitExecutable,
+                                                     argumentPrefix: argumentPrefix,
+                                                     environment: environment)
+        if let remoteCommit, remoteCommit != expectedCommit {
+            throw ValidationError("The remote nightly tag already points to another commit.")
+        }
+
+        if localCommit == nil {
+            do {
+                try await runGit(gitExecutable,
+                                 arguments: argumentPrefix + ["tag", tagName, expectedCommit],
+                                 environment: environment)
+            } catch {
+                guard try await localTagCommit(tagReference,
+                                               gitExecutable: gitExecutable,
+                                               argumentPrefix: argumentPrefix,
+                                               environment: environment) == expectedCommit else {
+                    throw error
+                }
+            }
+        }
+
+        guard try await localTagCommit(tagReference,
+                                       gitExecutable: gitExecutable,
+                                       argumentPrefix: argumentPrefix,
+                                       environment: environment) == expectedCommit else {
+            throw ValidationError("The local nightly tag does not point to the exact current commit.")
+        }
+        guard remoteCommit == nil else { return }
+
+        let pushArguments = argumentPrefix + ["push", remoteURL, "\(tagReference):\(tagReference)"]
+        do {
+            try await runGit(gitExecutable,
+                             arguments: pushArguments,
+                             environment: environment)
+        } catch {
+            guard try await remoteTagCommit(tagReference,
+                                            remoteURL: remoteURL,
+                                            gitExecutable: gitExecutable,
+                                            argumentPrefix: argumentPrefix,
+                                            environment: environment) == expectedCommit else {
+                throw ValidationError("Authenticated git push failed.")
+            }
+            return
+        }
+
+        guard try await remoteTagCommit(tagReference,
+                                        remoteURL: remoteURL,
+                                        gitExecutable: gitExecutable,
+                                        argumentPrefix: argumentPrefix,
+                                        environment: environment) == expectedCommit else {
+            throw ValidationError("The pushed nightly tag could not be verified on the remote.")
+        }
+    }
+
+    private static func localTagCommit(_ tagReference: String,
+                                       gitExecutable: Executable,
+                                       argumentPrefix: [String],
+                                       environment: Environment) async throws -> String? {
+        let output = try await gitOutput(gitExecutable,
+                                         arguments: argumentPrefix + ["for-each-ref", "--format=%(refname)", tagReference],
+                                         environment: environment)
+        guard !output.isEmpty else { return nil }
+        guard output == tagReference else {
+            throw ValidationError("Git returned an ambiguous local nightly tag reference.")
+        }
+        return try await gitOutput(gitExecutable,
+                                   arguments: argumentPrefix + ["rev-parse", "--verify", "\(tagReference)^{commit}"],
+                                   environment: environment)
+    }
+
+    private static func remoteTagCommit(_ tagReference: String,
+                                        remoteURL: String,
+                                        gitExecutable: Executable,
+                                        argumentPrefix: [String],
+                                        environment: Environment) async throws -> String? {
+        let output = try await gitOutput(gitExecutable,
+                                         arguments: argumentPrefix + ["ls-remote", remoteURL, tagReference, "\(tagReference)^{}"],
+                                         environment: environment)
+        guard !output.isEmpty else { return nil }
+
+        var tagObject: String?
+        var peeledCommit: String?
+        for line in output.split(whereSeparator: \.isNewline) {
+            let fields = line.split(whereSeparator: \.isWhitespace)
+            guard fields.count == 2 else {
+                throw ValidationError("Git returned a malformed remote nightly tag reference.")
+            }
+            let commit = String(fields[0])
+            switch String(fields[1]) {
+            case tagReference where tagObject == nil:
+                tagObject = commit
+            case "\(tagReference)^{}" where peeledCommit == nil:
+                peeledCommit = commit
+            default:
+                throw ValidationError("Git returned an ambiguous remote nightly tag reference.")
+            }
+        }
+        guard let tagObject else {
+            throw ValidationError("Git returned a peeled nightly tag without its tag reference.")
+        }
+        return peeledCommit ?? tagObject
+    }
+
+    private static func runGit(_ executable: Executable,
+                               arguments: [String],
+                               environment: Environment) async throws {
+        try await CI.run(executable,
+                         Arguments(arguments),
+                         environment: environment)
+    }
+
+    private static func gitOutput(_ executable: Executable,
+                                  arguments: [String],
+                                  environment: Environment) async throws -> String {
+        guard let output = try await CI.run(executable,
+                                            Arguments(arguments),
+                                            environment: environment,
+                                            output: .string(limit: 1_048_576)).standardOutput else {
+            throw ValidationError("Git returned no output.")
+        }
+        return output.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     static func gitCurrentBranchName() async throws -> String {
