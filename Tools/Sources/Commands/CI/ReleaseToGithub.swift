@@ -32,7 +32,7 @@ struct ReleaseToGitHub: AsyncParsableCommand {
         if let preparation = try JunchatReleasePreparation.parseIfPresent(currentCommitMessage) {
             try await preparation.validateResume(parentCommits: CI.gitCurrentCommitParents(),
                                                  currentVersion: currentVersion,
-                                                 changedPaths: CI.gitCurrentCommitChangedPaths())
+                                                 changedFiles: CI.gitCurrentCommitChangedFiles())
             let archivedContents = try await archivedReleaseContents(commit: preparation.releaseCommit)
             try preparation.validatePreparedMetadata(archivedProjectYAML: archivedContents.projectYAML,
                                                      preparedProjectYAML: currentContents.projectYAML,
@@ -146,7 +146,7 @@ struct ReleaseToGitHub: AsyncParsableCommand {
         }
         try await committedPreparation.validateResume(parentCommits: CI.gitCurrentCommitParents(),
                                                       currentVersion: localPreparation.nextVersion,
-                                                      changedPaths: CI.gitCurrentCommitChangedPaths())
+                                                      changedFiles: CI.gitCurrentCommitChangedFiles())
         let committedContents = try localReleaseContents()
         try committedPreparation.validatePreparedContents(archivedProjectYAML: currentContents.projectYAML,
                                                           preparedProjectYAML: committedContents.projectYAML,
@@ -193,7 +193,8 @@ struct ReleaseToGitHub: AsyncParsableCommand {
                                                releaseAPI: GitHubReleaseAPI,
                                                apiToken: String) async throws {
         do {
-            try await CI.gitPush()
+            try await CI.gitPush(branch: branch,
+                                 expectedRemoteCommit: preparation.releaseCommit)
         } catch {
             guard try await releaseAPI.isPreparationAlreadyPushed(branch: branch,
                                                                   releaseVersion: preparation.releaseVersion,

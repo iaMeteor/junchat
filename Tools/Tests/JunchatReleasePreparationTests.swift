@@ -39,11 +39,7 @@ final class JunchatReleasePreparationTests: XCTestCase {
 
         XCTAssertNoThrow(try marker.validateResume(parentCommits: [releaseCommit],
                                                    currentVersion: JunchatReleaseVersion(name: "1.8.3", build: 38),
-                                                   changedPaths: [
-                                                       "JUNCHAT_CHANGES.md",
-                                                       "project.yml",
-                                                       "ElementX.xcodeproj/project.pbxproj"
-                                                   ]))
+                                                   changedFiles: regularChangedFiles))
     }
 
     func testResumeRejectsTheWrongParentVersionOrChangedPath() throws {
@@ -51,24 +47,34 @@ final class JunchatReleasePreparationTests: XCTestCase {
 
         XCTAssertThrowsError(try marker.validateResume(parentCommits: [String(repeating: "b", count: 40)],
                                                        currentVersion: JunchatReleaseVersion(name: "1.8.3", build: 38),
-                                                       changedPaths: ["project.yml"]))
+                                                       changedFiles: regularChangedFiles))
         XCTAssertThrowsError(try marker.validateResume(parentCommits: [releaseCommit],
                                                        currentVersion: JunchatReleaseVersion(name: "1.8.4", build: 39),
-                                                       changedPaths: ["project.yml"]))
+                                                       changedFiles: regularChangedFiles))
         XCTAssertThrowsError(try marker.validateResume(parentCommits: [releaseCommit],
                                                        currentVersion: JunchatReleaseVersion(name: "1.8.3", build: 38),
-                                                       changedPaths: ["Unrelated.swift"]))
+                                                       changedFiles: [.init(path: "Unrelated.swift", mode: "100644")]))
         XCTAssertThrowsError(try marker.validateResume(parentCommits: [releaseCommit],
                                                        currentVersion: JunchatReleaseVersion(name: "1.8.3", build: 38),
-                                                       changedPaths: [
-                                                           "JUNCHAT_CHANGES.md",
-                                                           "project.yml",
-                                                           "ElementX.xcodeproj/project.pbxproj",
-                                                           "ElementX.xcodeproj/unexpected.txt"
+                                                       changedFiles: regularChangedFiles + [
+                                                           .init(path: "ElementX.xcodeproj/unexpected.txt", mode: "100644")
                                                        ]))
         XCTAssertThrowsError(try marker.validateResume(parentCommits: [releaseCommit, String(repeating: "c", count: 40)],
                                                        currentVersion: JunchatReleaseVersion(name: "1.8.3", build: 38),
-                                                       changedPaths: ["project.yml"]))
+                                                       changedFiles: regularChangedFiles))
+    }
+
+    func testResumeRejectsExecutableOrSymlinkedReleaseFiles() throws {
+        let marker = try makeMarker()
+
+        for invalidMode in ["100755", "120000"] {
+            var changedFiles = regularChangedFiles
+            changedFiles[1] = .init(path: changedFiles[1].path, mode: invalidMode)
+
+            XCTAssertThrowsError(try marker.validateResume(parentCommits: [releaseCommit],
+                                                           currentVersion: JunchatReleaseVersion(name: "1.8.3", build: 38),
+                                                           changedFiles: changedFiles))
+        }
     }
 
     func testResumeRejectsUnrelatedContentWithinEveryAllowedFile() throws {
@@ -123,5 +129,13 @@ final class JunchatReleasePreparationTests: XCTestCase {
         try JunchatReleasePreparation(releaseVersion: JunchatReleaseVersion(name: "1.8.2", build: 37),
                                       releaseCommit: releaseCommit,
                                       releaseDate: "2026-07-14")
+    }
+
+    private var regularChangedFiles: [JunchatReleasePreparation.ChangedFile] {
+        [
+            .init(path: "JUNCHAT_CHANGES.md", mode: "100644"),
+            .init(path: "project.yml", mode: "100644"),
+            .init(path: "ElementX.xcodeproj/project.pbxproj", mode: "100644")
+        ]
     }
 }

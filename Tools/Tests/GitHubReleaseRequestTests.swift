@@ -14,5 +14,6 @@ final class GitHubReleaseRequestTests: XCTestCase {
         XCTAssertEqual(payload["target_commitish"] as? String, String(repeating: "a", count: 40))
         XCTAssertEqual(payload["generate_release_notes"] as? Bool, true)
         XCTAssertEqual(payload["draft"] as? Bool, true)
+        XCTAssertEqual(payload["prerelease"] as? Bool, false)
     }
 }

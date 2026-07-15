@@ -34,6 +34,7 @@ struct GitHubReleaseAPI {
 
     private static let pageSize = 100
     private static let maximumPages = 100
+    private static let maximumTagDepth = 10
     private static let apiVersion = "2026-03-10"
 
     private let dataLoader: DataLoader
@@ -100,6 +101,14 @@ struct GitHubReleaseAPI {
             throw APIError.incompatibleExistingPreparation
         }
 
+        let changedFiles = try await repositoryChangedFiles(tree: commit.commit.tree.sha,
+                                                            repository: repository,
+                                                            token: token)
+        guard changedFiles.count == JunchatReleasePreparation.expectedChangedFiles.count,
+              Set(changedFiles) == JunchatReleasePreparation.expectedChangedFiles else {
+            throw APIError.incompatibleExistingPreparation
+        }
+
         // Rebuild every allowlisted file from the archived parent so a matching marker cannot bless unrelated edits.
         let releaseProject = try await repositoryContent(path: JunchatReleasePreparation.projectYAMLPath,
                                                          commit: releaseCommit,
@@ -116,7 +125,7 @@ struct GitHubReleaseAPI {
 
         try preparation.validateResume(parentCommits: commit.parents.map(\.sha),
                                        currentVersion: JunchatReleaseVersion.parse(preparedProject),
-                                       changedPaths: commit.files.map(\.filename))
+                                       changedFiles: changedFiles)
 
         let releaseChangelog = try await repositoryContent(path: JunchatReleasePreparation.changelogPath,
                                                            commit: releaseCommit,
@@ -157,7 +166,11 @@ struct GitHubReleaseAPI {
         let referenceURL = try repositoryAPIURL(repository: repository,
                                                 pathComponents: ["git", "ref", "heads"] + branchComponents)
         let referenceData = try await successfulData(for: authenticatedRequest(url: referenceURL, token: token))
-        return try JSONDecoder().decode(GitHubReferenceRecord.self, from: referenceData).object.sha
+        let object = try JSONDecoder().decode(GitHubReferenceRecord.self, from: referenceData).object
+        guard object.type == "commit" else {
+            throw APIError.invalidResponse
+        }
+        return object.sha
     }
 
     private func reusableDraftBody(for releaseRequest: GitHubReleaseRequest,
@@ -172,7 +185,15 @@ struct GitHubReleaseAPI {
                 throw APIError.duplicateExistingRelease
             }
             if let release = matchingReleases.first {
-                return try release.validatedDraftBody(for: releaseRequest)
+                let body = try release.validatedDraftBody(for: releaseRequest,
+                                                          validateTargetCommitish: false)
+                let tagCommit = try await releaseTagCommit(tagName: releaseRequest.tagName,
+                                                           repository: repository,
+                                                           token: token)
+                guard tagCommit == releaseRequest.targetCommit else {
+                    throw APIError.incompatibleExistingRelease
+                }
+                return body
             }
             if releases.count < Self.pageSize {
                 return nil
@@ -209,7 +230,62 @@ struct GitHubReleaseAPI {
         request.httpBody = try JSONEncoder().encode(releaseRequest)
         let data = try await successfulData(for: request)
         let release = try JSONDecoder().decode(GitHubReleaseRecord.self, from: data)
-        return try release.validatedDraftBody(for: releaseRequest)
+        return try release.validatedDraftBody(for: releaseRequest,
+                                              validateTargetCommitish: true)
+    }
+
+    private func releaseTagCommit(tagName: String,
+                                  repository: GitHubRepository,
+                                  token: String) async throws -> String {
+        let tagComponents = tagName.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard !tagComponents.isEmpty, tagComponents.allSatisfy({ !$0.isEmpty }) else {
+            throw APIError.invalidResponse
+        }
+
+        let referenceURL = try repositoryAPIURL(repository: repository,
+                                                pathComponents: ["git", "ref", "tags"] + tagComponents)
+        let referenceData = try await successfulData(for: authenticatedRequest(url: referenceURL, token: token))
+        var object = try JSONDecoder().decode(GitHubReferenceRecord.self, from: referenceData).object
+        var visitedTags = Set<String>()
+
+        for _ in 0..<Self.maximumTagDepth {
+            switch object.type {
+            case "commit":
+                return object.sha
+            case "tag":
+                guard visitedTags.insert(object.sha).inserted else {
+                    throw APIError.incompatibleExistingRelease
+                }
+                let tagURL = try repositoryAPIURL(repository: repository,
+                                                  pathComponents: ["git", "tags", object.sha])
+                let tagData = try await successfulData(for: authenticatedRequest(url: tagURL, token: token))
+                object = try JSONDecoder().decode(GitHubTagRecord.self, from: tagData).object
+            default:
+                throw APIError.incompatibleExistingRelease
+            }
+        }
+        throw APIError.incompatibleExistingRelease
+    }
+
+    private func repositoryChangedFiles(tree: String,
+                                        repository: GitHubRepository,
+                                        token: String) async throws -> [JunchatReleasePreparation.ChangedFile] {
+        let treeURL = try repositoryAPIURL(repository: repository,
+                                           pathComponents: ["git", "trees", tree],
+                                           queryItems: [URLQueryItem(name: "recursive", value: "1")])
+        let data = try await successfulData(for: authenticatedRequest(url: treeURL, token: token))
+        let record = try JSONDecoder().decode(GitHubTreeRecord.self, from: data)
+        guard !record.truncated else {
+            throw APIError.incompatibleExistingPreparation
+        }
+
+        return try record.tree.compactMap { entry in
+            guard JunchatReleasePreparation.expectedChangedPaths.contains(entry.path) else { return nil }
+            guard entry.type == "blob" else {
+                throw APIError.incompatibleExistingPreparation
+            }
+            return JunchatReleasePreparation.ChangedFile(path: entry.path, mode: entry.mode)
+        }
     }
 
     private func repositoryContent(path: String,
@@ -280,6 +356,7 @@ private struct GitHubReleaseRecord: Decodable {
     let targetCommitish: String
     let body: String?
     let draft: Bool
+    let prerelease: Bool
 
     private enum CodingKeys: String, CodingKey {
         case tagName = "tag_name"
@@ -287,13 +364,16 @@ private struct GitHubReleaseRecord: Decodable {
         case targetCommitish = "target_commitish"
         case body
         case draft
+        case prerelease
     }
 
-    func validatedDraftBody(for request: GitHubReleaseRequest) throws -> String {
+    func validatedDraftBody(for request: GitHubReleaseRequest,
+                            validateTargetCommitish: Bool) throws -> String {
         guard draft,
+              !prerelease,
               tagName == request.tagName,
               name == request.name,
-              targetCommitish == request.targetCommit,
+              !validateTargetCommitish || targetCommitish == request.targetCommit,
               let body else {
             throw GitHubReleaseAPI.APIError.incompatibleExistingRelease
         }
@@ -302,16 +382,26 @@ private struct GitHubReleaseRecord: Decodable {
 }
 
 private struct GitHubReferenceRecord: Decodable {
-    let object: GitHubCommitPointer
+    let object: GitHubObjectPointer
+}
+
+private struct GitHubObjectPointer: Decodable {
+    let sha: String
+    let type: String
 }
 
 private struct GitHubCommitPointer: Decodable {
     let sha: String
 }
 
+private struct GitHubTagRecord: Decodable {
+    let object: GitHubObjectPointer
+}
+
 private struct GitHubCommitRecord: Decodable {
     struct Commit: Decodable {
         let message: String
+        let tree: GitHubCommitPointer
     }
 
     struct File: Decodable {
@@ -323,6 +413,17 @@ private struct GitHubCommitRecord: Decodable {
     let commit: Commit
     let parents: [GitHubCommitPointer]
     let files: [File]
+}
+
+private struct GitHubTreeRecord: Decodable {
+    struct Entry: Decodable {
+        let path: String
+        let mode: String
+        let type: String
+    }
+
+    let tree: [Entry]
+    let truncated: Bool
 }
 
 private struct GitHubContentRecord: Decodable {

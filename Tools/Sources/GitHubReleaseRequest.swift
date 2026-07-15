@@ -6,6 +6,7 @@ struct GitHubReleaseRequest: Encodable, Equatable {
     let targetCommit: String
     let generateReleaseNotes = true
     let draft = true
+    let prerelease = false
 
     init(version: String, targetCommit: String) {
         tagName = "release/\(version)"
@@ -19,5 +20,6 @@ struct GitHubReleaseRequest: Encodable, Equatable {
         case targetCommit = "target_commitish"
         case generateReleaseNotes = "generate_release_notes"
         case draft
+        case prerelease
     }
 }

@@ -1,6 +1,11 @@
 import Foundation
 
 struct JunchatReleasePreparation: Equatable {
+    struct ChangedFile: Hashable {
+        let path: String
+        let mode: String
+    }
+
     enum PreparationError: LocalizedError {
         case malformedMarker
         case dirtyTrackedState
@@ -20,7 +25,7 @@ struct JunchatReleasePreparation: Equatable {
             case .unexpectedVersion:
                 "The release preparation commit does not contain the expected next version and build."
             case .unexpectedChangedPaths:
-                "The release preparation commit changed files outside the release metadata boundary."
+                "The release preparation commit changed paths or file modes outside the release metadata boundary."
             case .unexpectedPreparedContents:
                 "The release preparation commit contains unexpected release metadata changes."
             }
@@ -36,6 +41,7 @@ struct JunchatReleasePreparation: Equatable {
         projectYAMLPath,
         xcodeProjectPath
     ])
+    static let expectedChangedFiles = Set(expectedChangedPaths.map { ChangedFile(path: $0, mode: "100644") })
 
     let releaseVersion: JunchatReleaseVersion
     let releaseCommit: String
@@ -94,7 +100,7 @@ struct JunchatReleasePreparation: Equatable {
 
     func validateResume(parentCommits: [String],
                         currentVersion: JunchatReleaseVersion,
-                        changedPaths: [String]) throws {
+                        changedFiles: [ChangedFile]) throws {
         guard parentCommits == [releaseCommit] else {
             throw PreparationError.unexpectedParent
         }
@@ -102,8 +108,8 @@ struct JunchatReleasePreparation: Equatable {
             throw PreparationError.unexpectedVersion
         }
 
-        guard changedPaths.count == Self.expectedChangedPaths.count,
-              Set(changedPaths) == Self.expectedChangedPaths else {
+        guard changedFiles.count == Self.expectedChangedFiles.count,
+              Set(changedFiles) == Self.expectedChangedFiles else {
             throw PreparationError.unexpectedChangedPaths
         }
     }

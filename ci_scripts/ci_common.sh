@@ -35,6 +35,8 @@ xcode_select_for_github_actions() {
 }
 
 generate_what_to_test_notes() {
+    local range_end_commit="$1"
+
     if [[ -d "$CI_APP_STORE_SIGNED_APP_PATH" ]]; then
         TESTFLIGHT_DIR_PATH=TestFlight
         TESTFLIGHT_NOTES_FILE_NAME=WhatToTest.en-US.txt
@@ -56,7 +58,7 @@ generate_what_to_test_notes() {
 
         mkdir $TESTFLIGHT_DIR_PATH
 
-        NOTES="$(git log --pretty='- %an: %s' "$LATEST_TAG"..HEAD)"
+        NOTES="$(git log --pretty='- %an: %s' "$LATEST_TAG".."$range_end_commit")"
 
         printf "generate_what_to_test_notes: Generated notes:\n%s\n" "$NOTES"
 

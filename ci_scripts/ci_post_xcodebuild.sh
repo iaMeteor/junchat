@@ -7,6 +7,7 @@ cd ..
 
 # Xcode Cloud shallow clones the repo. We need full tags and commit history for release notes.
 fetch_unshallow_repository
+ARCHIVED_COMMIT=$(git rev-parse --verify HEAD)
 
 # Upload dsyms no matter the workflow
 # Perform this step before releasing to github in case it fails.
@@ -18,4 +19,4 @@ elif [ "$CI_WORKFLOW" = "Nightly" ]; then
     swift run -q tools ci tag-nightly --build-number "$CI_BUILD_NUMBER"
 fi
 
-generate_what_to_test_notes
+generate_what_to_test_notes "$ARCHIVED_COMMIT"

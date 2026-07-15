@@ -6,7 +6,8 @@ final class GitHubReleaseAPITests: XCTestCase {
     func testReusesAnExistingMatchingDraftWithoutCreatingAnotherRelease() async throws {
         let targetCommit = String(repeating: "a", count: 40)
         let stub = GitHubHTTPStub(responses: [
-            .json(200, [releaseRecord(targetCommit: targetCommit)])
+            .json(200, [releaseRecord(targetCommit: targetCommit)]),
+            .json(200, referenceRecord(commit: targetCommit))
         ])
         let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
 
@@ -17,12 +18,37 @@ final class GitHubReleaseAPITests: XCTestCase {
 
         XCTAssertEqual(body, "Generated notes")
         let requests = stub.requests
-        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests.count, 2)
         XCTAssertEqual(requests[0].httpMethod, "GET")
         XCTAssertEqual(requests[0].url?.query, "per_page=100&page=1")
         XCTAssertEqual(requests[0].value(forHTTPHeaderField: "Authorization"), "Bearer secret")
         XCTAssertEqual(requests[0].value(forHTTPHeaderField: "X-GitHub-Api-Version"), "2026-03-10")
         XCTAssertFalse(try XCTUnwrap(requests[0].url?.absoluteString).contains("secret"))
+        let tagRequest = try XCTUnwrap(requests.dropFirst().first)
+        XCTAssertEqual(tagRequest.url?.path, "/repos/acme/junchat-ios/git/ref/tags/release/1.8.2")
+    }
+
+    func testReusesAnExistingDraftByItsPeeledTagInsteadOfTargetCommitish() async throws {
+        let targetCommit = String(repeating: "1", count: 40)
+        let tagObject = String(repeating: "2", count: 40)
+        let stub = GitHubHTTPStub(responses: [
+            .json(200, [releaseRecord(targetCommit: "release-candidate")]),
+            .json(200, referenceRecord(commit: tagObject, type: "tag")),
+            .json(200, tagObjectRecord(commit: targetCommit))
+        ])
+        let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+
+        let body = try await api.createOrReuseDraft(version: "1.8.2",
+                                                    targetCommit: targetCommit,
+                                                    repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
+                                                    token: "secret")
+
+        XCTAssertEqual(body, "Generated notes")
+        XCTAssertEqual(stub.requests.map(\.url?.path), [
+            "/repos/acme/junchat-ios/releases",
+            "/repos/acme/junchat-ios/git/ref/tags/release/1.8.2",
+            "/repos/acme/junchat-ios/git/tags/\(tagObject)"
+        ])
     }
 
     func testCreatesADraftOnlyWhenNoExistingReleaseMatches() async throws {
@@ -63,11 +89,11 @@ final class GitHubReleaseAPITests: XCTestCase {
         }
     }
 
-    func testRejectsAnExistingPublishedOrMisdirectedRelease() async throws {
+    func testRejectsAnExistingPublishedOrPrereleaseDraft() async throws {
         let targetCommit = String(repeating: "c", count: 40)
         let invalidRecords = [
             releaseRecord(targetCommit: targetCommit, draft: false),
-            releaseRecord(targetCommit: String(repeating: "d", count: 40))
+            releaseRecord(targetCommit: targetCommit, prerelease: true)
         ]
 
         for record in invalidRecords {
@@ -85,6 +111,25 @@ final class GitHubReleaseAPITests: XCTestCase {
         }
     }
 
+    func testRejectsAnExistingDraftWhoseTagPeelsToAnotherCommit() async throws {
+        let targetCommit = String(repeating: "c", count: 40)
+        let stub = GitHubHTTPStub(responses: [
+            .json(200, [releaseRecord(targetCommit: targetCommit)]),
+            .json(200, referenceRecord(commit: String(repeating: "d", count: 40)))
+        ])
+        let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+
+        do {
+            _ = try await api.createOrReuseDraft(version: "1.8.2",
+                                                 targetCommit: targetCommit,
+                                                 repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
+                                                 token: "secret")
+            XCTFail("Expected an existing draft with a mismatched tag to fail closed")
+        } catch {
+            XCTAssertEqual(stub.requests.count, 2)
+        }
+    }
+
     func testSearchesAdditionalReleasePagesBeforeCreating() async throws {
         let targetCommit = String(repeating: "e", count: 40)
         let firstPage = (0..<100).map { index in
@@ -92,7 +137,8 @@ final class GitHubReleaseAPITests: XCTestCase {
         }
         let stub = GitHubHTTPStub(responses: [
             .json(200, firstPage),
-            .json(200, [releaseRecord(targetCommit: targetCommit)])
+            .json(200, [releaseRecord(targetCommit: targetCommit)]),
+            .json(200, referenceRecord(commit: targetCommit))
         ])
         let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
 
@@ -101,8 +147,8 @@ final class GitHubReleaseAPITests: XCTestCase {
                                              repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
                                              token: "secret")
 
-        XCTAssertEqual(stub.requests.map { $0.url?.query }, ["per_page=100&page=1", "per_page=100&page=2"])
-        XCTAssertEqual(stub.requests.map(\.httpMethod), ["GET", "GET"])
+        XCTAssertEqual(stub.requests.map { $0.url?.query }, ["per_page=100&page=1", "per_page=100&page=2", ""])
+        XCTAssertEqual(stub.requests.map(\.httpMethod), ["GET", "GET", "GET"])
     }
 
     func testReusesACompatibleDraftCreatedByAConcurrentRetry() async throws {
@@ -110,7 +156,8 @@ final class GitHubReleaseAPITests: XCTestCase {
         let stub = GitHubHTTPStub(responses: [
             .json(200, []),
             .json(422, ["message": "already_exists"]),
-            .json(200, [releaseRecord(targetCommit: targetCommit)])
+            .json(200, [releaseRecord(targetCommit: targetCommit)]),
+            .json(200, referenceRecord(commit: targetCommit))
         ])
         let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
 
@@ -120,7 +167,7 @@ final class GitHubReleaseAPITests: XCTestCase {
                                                     token: "secret")
 
         XCTAssertEqual(body, "Generated notes")
-        XCTAssertEqual(stub.requests.map(\.httpMethod), ["GET", "POST", "GET"])
+        XCTAssertEqual(stub.requests.map(\.httpMethod), ["GET", "POST", "GET", "GET"])
     }
 
     func testRecognizesAnAlreadyPushedPreparationWhenRebuildingTheArchivedCommit() async throws {
@@ -141,6 +188,7 @@ final class GitHubReleaseAPITests: XCTestCase {
             .json(200, referenceRecord(commit: preparationCommit)),
             .json(200, preparationCommitRecord(commit: preparationCommit,
                                                preparation: preparation)),
+            .json(200, preparationTreeRecord()),
             .json(200, contentRecord(releaseProjectYAML)),
             .json(200, contentRecord(preparedProject)),
             .json(200, contentRecord(releaseChangelog)),
@@ -158,7 +206,7 @@ final class GitHubReleaseAPITests: XCTestCase {
                                                                   token: "secret")
 
         XCTAssertTrue(isPrepared)
-        XCTAssertEqual(stub.requests.count, 8)
+        XCTAssertEqual(stub.requests.count, 9)
         XCTAssertTrue(try XCTUnwrap(stub.requests.first?.url?.absoluteString).contains("heads/release/ios"))
         let xcodeProjectPaths = stub.requests.suffix(2).compactMap { request in
             request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.percentEncodedPath }
@@ -167,6 +215,33 @@ final class GitHubReleaseAPITests: XCTestCase {
             "/repos/acme/junchat-ios/contents/ElementX.xcodeproj/project.pbxproj",
             "/repos/acme/junchat-ios/contents/ElementX.xcodeproj/project.pbxproj"
         ])
+    }
+
+    func testRejectsPreparationWithUnexpectedGitTreeMode() async throws {
+        let releaseCommit = String(repeating: "4", count: 40)
+        let preparationCommit = String(repeating: "5", count: 40)
+        let preparation = try JunchatReleasePreparation(releaseVersion: .init(name: "1.8.2", build: 37),
+                                                        releaseCommit: releaseCommit,
+                                                        releaseDate: "2026-07-14")
+        let stub = GitHubHTTPStub(responses: [
+            .json(200, referenceRecord(commit: preparationCommit)),
+            .json(200, preparationCommitRecord(commit: preparationCommit,
+                                               preparation: preparation)),
+            .json(200, preparationTreeRecord(modeOverrides: ["project.yml": "120000"]))
+        ])
+        let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+
+        do {
+            _ = try await api.isPreparationAlreadyPushed(branch: "junchat",
+                                                         releaseVersion: preparation.releaseVersion,
+                                                         releaseCommit: releaseCommit,
+                                                         generatedNotes: "- Fixed retry",
+                                                         repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
+                                                         token: "secret")
+            XCTFail("Expected a symlinked preparation file to fail closed")
+        } catch {
+            XCTAssertEqual(stub.requests.count, 3)
+        }
     }
 
     func testRemoteBranchAtTheArchivedCommitStillNeedsPreparation() async throws {
@@ -229,8 +304,8 @@ final class GitHubReleaseAPITests: XCTestCase {
                                                                        generatedNotes: "- Fixed retry",
                                                                        releaseDate: preparation.releaseDate)
         let invalidContents = [
-            (project: releaseProjectYAML, changelog: preparedChanges, expectedRequests: 4),
-            (project: preparedProject, changelog: preparedChanges + "Tampered\n", expectedRequests: 6)
+            (project: releaseProjectYAML, changelog: preparedChanges, expectedRequests: 5),
+            (project: preparedProject, changelog: preparedChanges + "Tampered\n", expectedRequests: 7)
         ]
 
         for invalidContent in invalidContents {
@@ -238,6 +313,7 @@ final class GitHubReleaseAPITests: XCTestCase {
                 .json(200, referenceRecord(commit: preparationCommit)),
                 .json(200, preparationCommitRecord(commit: preparationCommit,
                                                    preparation: preparation)),
+                .json(200, preparationTreeRecord()),
                 .json(200, contentRecord(releaseProjectYAML)),
                 .json(200, contentRecord(invalidContent.project)),
                 .json(200, contentRecord(releaseChangelog)),
@@ -277,6 +353,7 @@ final class GitHubReleaseAPITests: XCTestCase {
             .json(200, referenceRecord(commit: preparationCommit)),
             .json(200, preparationCommitRecord(commit: preparationCommit,
                                                preparation: preparation)),
+            .json(200, preparationTreeRecord()),
             .json(200, contentRecord(releaseProjectYAML)),
             .json(200, contentRecord(preparedProject)),
             .json(200, contentRecord(releaseChangelog)),
@@ -295,7 +372,7 @@ final class GitHubReleaseAPITests: XCTestCase {
                                                          token: "secret")
             XCTFail("Expected modified Xcode project content to fail closed")
         } catch {
-            XCTAssertEqual(stub.requests.count, 8)
+            XCTAssertEqual(stub.requests.count, 9)
         }
     }
 }
@@ -326,20 +403,47 @@ buildSettings = {
 };
 """
 
+private let preparationTree = String(repeating: "8", count: 40)
+
 private func releaseRecord(version: String = "1.8.2",
                            targetCommit: String,
-                           draft: Bool = true) -> [String: Any] {
+                           draft: Bool = true,
+                           prerelease: Bool = false) -> [String: Any] {
     [
         "tag_name": "release/\(version)",
         "name": version,
         "target_commitish": targetCommit,
         "body": "Generated notes",
-        "draft": draft
+        "draft": draft,
+        "prerelease": prerelease
     ]
 }
 
-private func referenceRecord(commit: String) -> [String: Any] {
-    ["object": ["sha": commit]]
+private func referenceRecord(commit: String, type: String = "commit") -> [String: Any] {
+    ["object": ["sha": commit, "type": type]]
+}
+
+private func tagObjectRecord(commit: String, type: String = "commit") -> [String: Any] {
+    ["object": ["sha": commit, "type": type]]
+}
+
+private func preparationTreeRecord(modeOverrides: [String: String] = [:]) -> [String: Any] {
+    let paths = [
+        "ElementX.xcodeproj/project.pbxproj",
+        "JUNCHAT_CHANGES.md",
+        "project.yml"
+    ]
+    return [
+        "truncated": false,
+        "tree": paths.map { path in
+            [
+                "path": path,
+                "mode": modeOverrides[path] ?? "100644",
+                "type": "blob",
+                "sha": String(repeating: "9", count: 40)
+            ]
+        }
+    ]
 }
 
 private func preparationCommitRecord(commit: String,
@@ -351,7 +455,10 @@ private func preparationCommitRecord(commit: String,
                                      ]) -> [String: Any] {
     [
         "sha": commit,
-        "commit": ["message": preparation.commitMessage],
+        "commit": [
+            "message": preparation.commitMessage,
+            "tree": ["sha": preparationTree]
+        ],
         "parents": [["sha": preparation.releaseCommit]],
         "files": changedPaths.map { ["filename": $0, "status": "modified"] }
     ]

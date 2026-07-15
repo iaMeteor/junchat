@@ -54,15 +54,18 @@ and `ElementX.xcodeproj/project.pbxproj`, and records the released version,
 build, archived commit, and date in validated commit trailers.
 
 If a run fails after draft creation, a clean CI retry lists authenticated
-releases and reuses only the same unpublished tag, name, and archived commit; a
-published or mismatched release fails closed. Xcode Cloud Rebuild starts from
+releases and reuses only the same draft, non-prerelease tag and name after
+peeling that tag to the archived commit; a published, prerelease, or mismatched
+release fails closed. Xcode Cloud Rebuild starts from
 the same archived commit, so the command also checks the current remote branch
 before making local changes. It accepts an already-pushed preparation only when
 it is the archived commit's sole child, carries the exact validated marker,
-modifies exactly the three expected paths, and reproduces the next version and
-changelog from the archived parent. Any unrelated remote advancement fails
-closed. A concurrent push failure performs the same validation before treating
-the operation as complete.
+modifies exactly the three expected regular-file paths with mode `100644`, and
+reproduces the next version and changelog from the archived parent. Any
+unrelated remote advancement fails closed. The branch update names the captured
+branch explicitly and leases it to the archived SHA, so deletion, rewind, or
+replacement fails closed. A concurrent push failure performs the same
+validation before treating the operation as complete.
 
 If HEAD is already the preparation commit, a retry applies the same parent,
 version, path, draft, and changelog checks before an idempotent branch push. A
@@ -71,6 +74,10 @@ clean checkout rather than deleting or committing ambiguous state. The command
 never rewrites, rebases, or force-pushes an unrelated branch. The GitHub release
 remains a draft until a separate explicit publication approval; review its tag
 target, notes, and artifacts before publishing it.
+
+TestFlight notes use the archived commit as the end of their Git log range, so
+the later `Prepare next release` metadata commit is not included in tester
+notes.
 
 Release credentials, Apple signing certificates, provisioning profiles, and
 entitlements remain managed by the existing secure Xcode Cloud/signing setup.

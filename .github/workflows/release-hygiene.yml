@@ -1,0 +1,34 @@
+name: Release Hygiene
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/release-hygiene.yml"
+      - "Package.swift"
+      - "Package.resolved"
+      - "Tools/**"
+      - "ci_scripts/**"
+      - "docs/JUNCHAT_RELEASE.md"
+
+permissions: {}
+
+jobs:
+  release-hygiene:
+    name: Release tooling and orchestration
+    runs-on: macos-26
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Run Swift release tests
+        run: swift test --disable-automatic-resolution
+
+      - name: Run shell orchestration tests
+        run: |
+          set -euo pipefail
+          for test_script in ci_scripts/tests/*_test.sh; do
+            bash "$test_script"
+          done

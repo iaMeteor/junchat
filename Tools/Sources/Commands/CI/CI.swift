@@ -173,13 +173,34 @@ struct CI: ParsableCommand {
         return output.split(whereSeparator: \.isWhitespace).map(String.init)
     }
 
-    static func gitCurrentCommitChangedPaths() async throws -> [String] {
+    static func gitCurrentCommitChangedFiles() async throws -> [JunchatReleasePreparation.ChangedFile] {
         guard let output = try await CI.run(.name("git"),
-                                            ["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", "HEAD"],
+                                            ["diff-tree", "--no-commit-id", "--raw", "--no-renames", "-r", "-z", "HEAD"],
                                             output: .string(limit: 1_048_576)).standardOutput else {
-            throw ValidationError("Could not determine the current commit paths.")
+            throw ValidationError("Could not determine the current commit files and modes.")
         }
-        return output.split(separator: "\0").map(String.init)
+        return try gitChangedFiles(fromRawDiff: output)
+    }
+
+    static func gitChangedFiles(fromRawDiff output: String) throws -> [JunchatReleasePreparation.ChangedFile] {
+        let fields = output.split(separator: "\0").map(String.init)
+        guard fields.count.isMultiple(of: 2) else {
+            throw ValidationError("Git returned malformed raw diff output.")
+        }
+
+        return try stride(from: 0, to: fields.count, by: 2).map { index in
+            let metadata = fields[index].split(whereSeparator: \.isWhitespace)
+            let path = fields[index + 1]
+            guard metadata.count == 5,
+                  metadata[0].hasPrefix(":"),
+                  metadata[0].count == 7,
+                  metadata[1].count == 6,
+                  metadata[4] == "M",
+                  !path.isEmpty else {
+                throw ValidationError("Git returned an unsupported raw diff entry.")
+            }
+            return JunchatReleasePreparation.ChangedFile(path: path, mode: String(metadata[1]))
+        }
     }
 
     static func gitFileContents(path: String, commit: String) async throws -> String {
@@ -191,29 +212,45 @@ struct CI: ParsableCommand {
         return output
     }
 
-    static func gitPush(tagName: String? = nil) async throws {
-        guard let apiToken = ProcessInfo.processInfo.environment["GITHUB_TOKEN"], !apiToken.isEmpty
-        else {
+    static func gitPush(tagName: String) async throws {
+        let repository = try await CI.gitRepository()
+        let environment = try authenticatedGitEnvironment()
+        try await CI.run(.name("git"), ["tag", tagName])
+        try await authenticatedGitPush(["push", repository.httpsURL.absoluteString, "refs/tags/\(tagName)"],
+                                       environment: environment)
+    }
+
+    static func gitPush(branch: String, expectedRemoteCommit: String) async throws {
+        let repository = try await CI.gitRepository()
+        try await authenticatedGitPush(Arguments(gitBranchPushArguments(branch: branch,
+                                                                        expectedRemoteCommit: expectedRemoteCommit,
+                                                                        repository: repository)),
+                                       environment: authenticatedGitEnvironment())
+    }
+
+    static func gitBranchPushArguments(branch: String,
+                                       expectedRemoteCommit: String,
+                                       repository: GitHubRepository) -> [String] {
+        let branchReference = "refs/heads/\(branch)"
+        return [
+            "push",
+            "--force-with-lease=\(branchReference):\(expectedRemoteCommit)",
+            repository.httpsURL.absoluteString,
+            "HEAD:\(branchReference)"
+        ]
+    }
+
+    private static func authenticatedGitEnvironment() throws -> Environment {
+        guard let apiToken = ProcessInfo.processInfo.environment["GITHUB_TOKEN"], !apiToken.isEmpty else {
             throw ValidationError("GITHUB_TOKEN environment variable is not set.")
         }
 
-        let repository = try await CI.gitRepository()
         let credentials = Data("x-access-token:\(apiToken)".utf8).base64EncodedString()
-        let environment = Environment.inherit.updating([
+        return Environment.inherit.updating([
             "GIT_CONFIG_COUNT": "1",
             "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
             "GIT_CONFIG_VALUE_0": "AUTHORIZATION: basic \(credentials)"
         ])
-
-        if let tagName {
-            try await CI.run(.name("git"), ["tag", tagName])
-            try await authenticatedGitPush(["push", repository.httpsURL.absoluteString, "refs/tags/\(tagName)"],
-                                           environment: environment)
-        } else {
-            let branchName = try await gitCurrentBranchName()
-            try await authenticatedGitPush(["push", repository.httpsURL.absoluteString, "HEAD:refs/heads/\(branchName)"],
-                                           environment: environment)
-        }
     }
 
     private static func authenticatedGitPush(_ arguments: Arguments, environment: Environment) async throws {
