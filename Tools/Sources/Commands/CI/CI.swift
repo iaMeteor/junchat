@@ -117,7 +117,7 @@ struct CI: ParsableCommand {
                                               output: output,
                                               error: error)
         
-        if case let .exited(code) = result.terminationStatus, code != 0 {
+        guard result.terminationStatus.isSuccess else {
             throw ExitCode.failure
         }
         

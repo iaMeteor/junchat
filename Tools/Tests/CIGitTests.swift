@@ -2,6 +2,13 @@
 import XCTest
 
 final class CIGitTests: XCTestCase {
+    func testRunRejectsSignalTermination() async {
+        do {
+            try await CI.run(.path("/bin/zsh"), ["-c", "kill -TERM $$"])
+            XCTFail("Expected a signal-terminated subprocess to fail.")
+        } catch { }
+    }
+
     func testBuildsBranchPushWithAnExplicitExpectedCommitLease() throws {
         let archivedCommit = String(repeating: "a", count: 40)
         let repository = try GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git")
