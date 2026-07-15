@@ -93,8 +93,7 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
             incomingCallGeneration = UUID()
             endUnansweredCallTask?.cancel()
             endUnansweredCallTask = nil
-            answerCallTask?.cancel()
-            answerCallTask = nil
+            cancelAnswerCallHandoff()
             MXLog.info("[JunchatCall] incomingCallID changed present=\(incomingCallID != nil) voice=\(incomingCallID?.isVoiceCall.description ?? "nil")")
             incomingCallRoomIDSubject.send(incomingCallID?.roomID)
             incomingCallIdentitySubject.send(incomingCallID?.incomingCallIdentity)
@@ -104,6 +103,7 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
 
     private var endUnansweredCallTask: Task<Void, Never>?
     private var answerCallTask: Task<Void, Never>?
+    private var answerCallHandoffIdentity: IncomingCallIdentity?
     private var callProviderAudioSessionDeactivationGeneration = UUID()
     private var callProviderAudioSessionDeactivationWaiter: CallProviderAudioSessionDeactivationWaiter?
     private var latestCallSessionGeneration: ElementCallSessionGeneration?
@@ -297,6 +297,11 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
             return nil
         }
 
+        guard answerCallHandoffIdentity != trackedIncomingCallIdentity else {
+            MXLog.info("Ignoring in-app accept while the matching CallKit answer is in progress")
+            return nil
+        }
+
         let incomingCallID = trackedIncomingCallIdentity.callID
         endUnansweredCallTask?.cancel()
         endUnansweredCallTask = nil
@@ -449,6 +454,12 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
 
     func providerDidReset(_ provider: CXProvider) {
         MXLog.info("Call provider did reset")
+        let incomingCallIdentity = currentIncomingCallIdentity
+        cancelAnswerCallHandoff()
+
+        guard let incomingCallIdentity else { return }
+        reportedIncomingCallKitIDs.remove(incomingCallIdentity.callID.callKitID)
+        clearIncomingCall(ifMatches: incomingCallIdentity)
     }
 
     func provider(_ provider: CXProvider, perform action: CXAnswerCallAction) {
@@ -458,6 +469,9 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
             fulfillCallKitAction(action)
             return
         }
+
+        endUnansweredCallTask?.cancel()
+        endUnansweredCallTask = nil
 
         let incomingCallID = incomingCallIdentity.callID
         MXLog.info("[JunchatCall] CallKit answer voice=\(incomingCallID.isVoiceCall)")
@@ -480,14 +494,20 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
         // First fulfill the action
         fulfillCallKitAction(action)
 
+        guard answerCallHandoffIdentity != incomingCallIdentity else {
+            MXLog.info("Ignoring duplicate CallKit answer while its handoff is in progress")
+            return
+        }
+
         // And delay ending the call so that the app has enough time to get deep-linked into.
-        answerCallTask?.cancel()
-        resumeCallProviderAudioSessionDeactivationWaiter(result: false)
+        cancelAnswerCallHandoff()
+        answerCallHandoffIdentity = incomingCallIdentity
         answerCallTask = Task { @MainActor [weak self] in
             try? await self?.timeProvider.clock.sleep(for: .seconds(1))
 
             guard let self,
                   !Task.isCancelled,
+                  answerCallHandoffIdentity == incomingCallIdentity,
                   isCurrentIncomingCall(incomingCallIdentity) else {
                 return
             }
@@ -500,6 +520,7 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
 
             let didDeactivate = await waitForCallProviderAudioSessionDeactivation(after: audioSessionDeactivationGeneration)
             guard !Task.isCancelled,
+                  answerCallHandoffIdentity == incomingCallIdentity,
                   isCurrentIncomingCall(incomingCallIdentity) else {
                 return
             }
@@ -508,12 +529,22 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
                 MXLog.warning("[JunchatCall] CallKit audio session deactivation timed out")
             }
 
+            answerCallHandoffIdentity = nil
+            answerCallTask = nil
             acceptedIncomingCallID = incomingCallID
             clearIncomingCall(ifMatches: incomingCallIdentity)
             actionsSubject.send(.startCall(roomID: incomingCallID.roomID,
                                            isVoiceCall: incomingCallID.isVoiceCall,
                                            incomingCallIdentity: incomingCallID.incomingCallIdentity))
         }
+    }
+
+    private func cancelAnswerCallHandoff() {
+        answerCallHandoffIdentity = nil
+        let task = answerCallTask
+        answerCallTask = nil
+        task?.cancel()
+        resumeCallProviderAudioSessionDeactivationWaiter(result: false)
     }
 
     private func waitForCallProviderAudioSessionDeactivation(after generation: UUID) async -> Bool {
@@ -536,8 +567,8 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
                     resumeCallProviderAudioSessionDeactivationWaiter(id: waiterID, result: false)
                 }
                 callProviderAudioSessionDeactivationWaiter = .init(id: waiterID,
-                                                                    continuation: continuation,
-                                                                    timeoutTask: timeoutTask)
+                                                                   continuation: continuation,
+                                                                   timeoutTask: timeoutTask)
             }
         } onCancel: {
             Task { @MainActor [weak self] in
