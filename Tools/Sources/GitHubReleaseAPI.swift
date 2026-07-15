@@ -1,8 +1,39 @@
 import Foundation
 
-struct GitHubReleaseAPI {
-    typealias DataLoader = (URLRequest) async throws -> (Data, URLResponse)
+protocol URLSessionProtocol: AnyObject {
+    func data(for request: URLRequest) async throws -> (Data, URLResponse)
+}
 
+extension URLSession: URLSessionProtocol { }
+
+final class GitHubReleaseURLSession: URLSessionProtocol {
+    private let session: URLSession
+
+    init(protocolClasses: [AnyClass]? = nil,
+         configure: (URLSessionConfiguration) -> Void = { _ in }) {
+        let configuration = URLSessionConfiguration.ephemeral
+        configure(configuration)
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        configuration.protocolClasses = protocolClasses
+        session = URLSession(configuration: configuration)
+    }
+
+    var configuration: URLSessionConfiguration {
+        session.configuration
+    }
+
+    func data(for request: URLRequest) async throws -> (Data, URLResponse) {
+        defer { withExtendedLifetime(self) { } }
+        return try await session.data(for: request)
+    }
+
+    deinit {
+        session.invalidateAndCancel()
+    }
+}
+
+struct GitHubReleaseAPI {
     enum APIError: LocalizedError {
         case invalidResponse
         case failedRequest(statusCode: Int, message: String)
@@ -37,12 +68,10 @@ struct GitHubReleaseAPI {
     private static let maximumTagDepth = 10
     private static let apiVersion = "2026-03-10"
 
-    private let dataLoader: DataLoader
+    private let urlSession: any URLSessionProtocol
 
-    init(dataLoader: @escaping DataLoader = { request in
-        try await URLSession.shared.data(for: request)
-    }) {
-        self.dataLoader = dataLoader
+    init(urlSession: any URLSessionProtocol = GitHubReleaseURLSession()) {
+        self.urlSession = urlSession
     }
 
     func publishedReleaseTags(repository: GitHubRepository,
@@ -383,6 +412,7 @@ struct GitHubReleaseAPI {
         var request = URLRequest(url: url,
                                  cachePolicy: .reloadIgnoringLocalAndRemoteCacheData)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue(Self.apiVersion, forHTTPHeaderField: "X-GitHub-Api-Version")
         request.setValue("JunChat-iOS-Release-Tool", forHTTPHeaderField: "User-Agent")
@@ -390,7 +420,7 @@ struct GitHubReleaseAPI {
     }
 
     private func successfulData(for request: URLRequest) async throws -> Data {
-        let (data, response) = try await dataLoader(request)
+        let (data, response) = try await urlSession.data(for: request)
         guard let response = response as? HTTPURLResponse else {
             throw APIError.invalidResponse
         }

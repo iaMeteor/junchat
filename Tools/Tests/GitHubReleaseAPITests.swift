@@ -31,7 +31,7 @@ final class GitHubReleaseAPITests: XCTestCase {
                                       draft: false,
                                       publishedAt: "2026-04-01T00:00:00Z")])
         ])
-        let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+        let api = GitHubReleaseAPI(urlSession: stub)
 
         let tags = try await api.publishedReleaseTags(repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
                                                       token: "secret")
@@ -40,13 +40,63 @@ final class GitHubReleaseAPITests: XCTestCase {
         XCTAssertEqual(stub.requests.map { $0.url?.query }, ["per_page=100&page=1", "per_page=100&page=2"])
     }
 
+    func testAuthenticatedGitHubResponsesAreNeverStoredInURLCache() async throws {
+        let cache = URLCache(memoryCapacity: 1_000_000,
+                             diskCapacity: 0,
+                             diskPath: nil)
+        let session = GitHubReleaseURLSession(protocolClasses: [CacheableGitHubURLProtocol.self]) {
+            $0.urlCache = cache
+        }
+        CacheableGitHubURLProtocol.reset()
+        defer {
+            cache.removeAllCachedResponses()
+            CacheableGitHubURLProtocol.reset()
+        }
+        let api = GitHubReleaseAPI(urlSession: session)
+
+        let tags = try await api.publishedReleaseTags(repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
+                                                      token: "secret")
+
+        XCTAssertEqual(tags, [])
+        let request = try XCTUnwrap(CacheableGitHubURLProtocol.lastRequest)
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer secret")
+        XCTAssertEqual(request.cachePolicy, .reloadIgnoringLocalAndRemoteCacheData)
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Cache-Control"), "no-store")
+        XCTAssertNil(cache.cachedResponse(for: request))
+    }
+
+    func testDedicatedGitHubSessionUsesAnEphemeralCachelessConfiguration() {
+        let session = GitHubReleaseURLSession()
+
+        XCTAssertNil(session.configuration.urlCache)
+        XCTAssertEqual(session.configuration.requestCachePolicy,
+                       .reloadIgnoringLocalAndRemoteCacheData)
+    }
+
+    func testDedicatedGitHubSessionIsReleasedAfterTheRequestCompletes() async throws {
+        weak var weakSession: GitHubReleaseURLSession?
+        CacheableGitHubURLProtocol.reset()
+        defer { CacheableGitHubURLProtocol.reset() }
+
+        do {
+            let session = GitHubReleaseURLSession(protocolClasses: [CacheableGitHubURLProtocol.self])
+            weakSession = session
+            let api = GitHubReleaseAPI(urlSession: session)
+
+            _ = try await api.publishedReleaseTags(repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
+                                                   token: "secret")
+        }
+
+        XCTAssertNil(weakSession)
+    }
+
     func testReusesAnExistingMatchingDraftWithoutCreatingAnotherRelease() async throws {
         let targetCommit = String(repeating: "a", count: 40)
         let stub = GitHubHTTPStub(responses: [
             .json(200, [releaseRecord(targetCommit: targetCommit)]),
             .json(200, referenceRecord(commit: targetCommit))
         ])
-        let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+        let api = GitHubReleaseAPI(urlSession: stub)
 
         let body = try await api.createOrReuseDraft(version: "1.8.2",
                                                     targetCommit: targetCommit,
@@ -73,7 +123,7 @@ final class GitHubReleaseAPITests: XCTestCase {
             .json(200, referenceRecord(commit: tagObject, type: "tag")),
             .json(200, tagObjectRecord(commit: targetCommit))
         ])
-        let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+        let api = GitHubReleaseAPI(urlSession: stub)
 
         let body = try await api.createOrReuseDraft(version: "1.8.2",
                                                     targetCommit: targetCommit,
@@ -96,7 +146,7 @@ final class GitHubReleaseAPITests: XCTestCase {
             .json(201, releaseRecord(targetCommit: targetCommit)),
             .json(200, referenceRecord(commit: targetCommit))
         ])
-        let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+        let api = GitHubReleaseAPI(urlSession: stub)
 
         let body = try await api.createOrReuseDraft(version: "1.8.2",
                                                     targetCommit: targetCommit,
@@ -127,7 +177,7 @@ final class GitHubReleaseAPITests: XCTestCase {
                 .json(201, releaseRecord(targetCommit: targetCommit))
             ]
         ])
-        let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+        let api = GitHubReleaseAPI(urlSession: stub)
 
         let body = try await api.createOrReuseDraft(version: "1.8.2",
                                                     targetCommit: targetCommit,
@@ -151,7 +201,7 @@ final class GitHubReleaseAPITests: XCTestCase {
             .json(200, referenceRecord(commit: tagObject, type: "tag")),
             .json(200, tagObjectRecord(commit: targetCommit))
         ])
-        let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+        let api = GitHubReleaseAPI(urlSession: stub)
 
         let body = try await api.createOrReuseDraft(version: "1.8.2",
                                                     targetCommit: targetCommit,
@@ -186,7 +236,7 @@ final class GitHubReleaseAPITests: XCTestCase {
                 .json(404, ["message": "Not Found"]),
                 .json(201, releaseRecord(targetCommit: targetCommit))
             ] + tagResponse)
-            let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+            let api = GitHubReleaseAPI(urlSession: stub)
 
             do {
                 _ = try await api.createOrReuseDraft(version: "1.8.2",
@@ -216,7 +266,7 @@ final class GitHubReleaseAPITests: XCTestCase {
             let stub = GitHubHTTPStub(responses: [
                 .json(200, [])
             ] + tagResponse)
-            let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+            let api = GitHubReleaseAPI(urlSession: stub)
 
             do {
                 _ = try await api.createOrReuseDraft(version: "1.8.2",
@@ -240,7 +290,7 @@ final class GitHubReleaseAPITests: XCTestCase {
             .json(201, releaseRecord(targetCommit: targetCommit)),
             .json(200, referenceRecord(commit: targetCommit))
         ])
-        let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+        let api = GitHubReleaseAPI(urlSession: stub)
 
         _ = try await api.createOrReuseDraft(version: "1.8.2",
                                              targetCommit: targetCommit,
@@ -258,7 +308,7 @@ final class GitHubReleaseAPITests: XCTestCase {
             .json(200, referenceRecord(commit: tagObject, type: "tag")),
             .json(404, ["message": "Not Found"])
         ])
-        let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+        let api = GitHubReleaseAPI(urlSession: stub)
 
         do {
             _ = try await api.createOrReuseDraft(version: "1.8.2",
@@ -279,7 +329,7 @@ final class GitHubReleaseAPITests: XCTestCase {
             .json(201, releaseRecord(targetCommit: targetCommit)),
             .json(404, ["message": "Not Found"])
         ])
-        let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+        let api = GitHubReleaseAPI(urlSession: stub)
 
         do {
             _ = try await api.createOrReuseDraft(version: "1.8.2",
@@ -295,7 +345,7 @@ final class GitHubReleaseAPITests: XCTestCase {
     func testDoesNotCreateADraftWhenRemotePreparationValidationRequiresAnExistingOne() async throws {
         let targetCommit = String(repeating: "2", count: 40)
         let stub = GitHubHTTPStub(responses: [.json(200, [])])
-        let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+        let api = GitHubReleaseAPI(urlSession: stub)
 
         do {
             _ = try await api.createOrReuseDraft(version: "1.8.2",
@@ -318,7 +368,7 @@ final class GitHubReleaseAPITests: XCTestCase {
 
         for record in invalidRecords {
             let stub = GitHubHTTPStub(responses: [.json(200, [record])])
-            let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+            let api = GitHubReleaseAPI(urlSession: stub)
             do {
                 _ = try await api.createOrReuseDraft(version: "1.8.2",
                                                      targetCommit: targetCommit,
@@ -337,7 +387,7 @@ final class GitHubReleaseAPITests: XCTestCase {
             .json(200, [releaseRecord(targetCommit: targetCommit)]),
             .json(200, referenceRecord(commit: String(repeating: "d", count: 40)))
         ])
-        let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+        let api = GitHubReleaseAPI(urlSession: stub)
 
         do {
             _ = try await api.createOrReuseDraft(version: "1.8.2",
@@ -360,7 +410,7 @@ final class GitHubReleaseAPITests: XCTestCase {
             .json(200, [releaseRecord(targetCommit: targetCommit)]),
             .json(200, referenceRecord(commit: targetCommit))
         ])
-        let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+        let api = GitHubReleaseAPI(urlSession: stub)
 
         _ = try await api.createOrReuseDraft(version: "1.8.2",
                                              targetCommit: targetCommit,
@@ -380,7 +430,7 @@ final class GitHubReleaseAPITests: XCTestCase {
             .json(200, [releaseRecord(targetCommit: targetCommit)]),
             .json(200, referenceRecord(commit: targetCommit))
         ])
-        let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+        let api = GitHubReleaseAPI(urlSession: stub)
 
         let body = try await api.createOrReuseDraft(version: "1.8.2",
                                                     targetCommit: targetCommit,
@@ -406,7 +456,7 @@ final class GitHubReleaseAPITests: XCTestCase {
                 .json(422, ["message": "already_exists"])
             ]
         ])
-        let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+        let api = GitHubReleaseAPI(urlSession: stub)
 
         let body = try await api.createOrReuseDraft(version: "1.8.2",
                                                     targetCommit: targetCommit,
@@ -429,7 +479,7 @@ final class GitHubReleaseAPITests: XCTestCase {
                 .json(200, referenceRecord(commit: preparedCommit))
             ]
         ])
-        let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+        let api = GitHubReleaseAPI(urlSession: stub)
         let repository = try GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git")
 
         let beforeMutation = try await api.remoteBranchCommit(branch: "release/ios",
@@ -472,7 +522,7 @@ final class GitHubReleaseAPITests: XCTestCase {
             .json(200, contentRecord(releaseXcodeProject)),
             .json(200, contentRecord(preparedXcodeProject))
         ])
-        let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+        let api = GitHubReleaseAPI(urlSession: stub)
 
         let isPrepared = try await api.isPreparationAlreadyPushed(branch: "release/ios",
                                                                   releaseVersion: releaseVersion,
@@ -505,7 +555,7 @@ final class GitHubReleaseAPITests: XCTestCase {
                                                preparation: preparation)),
             .json(200, preparationTreeRecord(modeOverrides: ["project.yml": "120000"]))
         ])
-        let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+        let api = GitHubReleaseAPI(urlSession: stub)
 
         do {
             _ = try await api.isPreparationAlreadyPushed(branch: "junchat",
@@ -525,7 +575,7 @@ final class GitHubReleaseAPITests: XCTestCase {
         let stub = GitHubHTTPStub(responses: [
             .json(200, referenceRecord(commit: releaseCommit))
         ])
-        let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+        let api = GitHubReleaseAPI(urlSession: stub)
 
         let isPrepared = try await api.isPreparationAlreadyPushed(branch: "junchat",
                                                                   releaseVersion: JunchatReleaseVersion(name: "1.8.2", build: 37),
@@ -550,7 +600,7 @@ final class GitHubReleaseAPITests: XCTestCase {
                                                preparation: preparation,
                                                changedPaths: ["Unrelated.swift"]))
         ])
-        let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+        let api = GitHubReleaseAPI(urlSession: stub)
 
         do {
             _ = try await api.isPreparationAlreadyPushed(branch: "junchat",
@@ -595,7 +645,7 @@ final class GitHubReleaseAPITests: XCTestCase {
                 .json(200, contentRecord(releaseChangelog)),
                 .json(200, contentRecord(invalidContent.changelog))
             ])
-            let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+            let api = GitHubReleaseAPI(urlSession: stub)
 
             do {
                 _ = try await api.isPreparationAlreadyPushed(branch: "junchat",
@@ -637,7 +687,7 @@ final class GitHubReleaseAPITests: XCTestCase {
             .json(200, contentRecord(releaseXcodeProject)),
             .json(200, contentRecord(preparedXcodeProject + "Unrelated mutation\n"))
         ])
-        let api = GitHubReleaseAPI(dataLoader: stub.data(for:))
+        let api = GitHubReleaseAPI(urlSession: stub)
 
         do {
             _ = try await api.isPreparationAlreadyPushed(branch: "junchat",
@@ -753,7 +803,7 @@ private func contentRecord(_ content: String) -> [String: Any] {
     ]
 }
 
-private final class GitHubHTTPStub: @unchecked Sendable {
+private final class GitHubHTTPStub: URLSessionProtocol, @unchecked Sendable {
     struct Response {
         let statusCode: Int
         let data: Data
@@ -802,7 +852,7 @@ private final class GitHubHTTPStub: @unchecked Sendable {
     }
 }
 
-private final class CacheAwareGitHubHTTPStub: @unchecked Sendable {
+private final class CacheAwareGitHubHTTPStub: URLSessionProtocol, @unchecked Sendable {
     struct Route: Hashable {
         let method: String
         let path: String
@@ -865,5 +915,62 @@ private final class CacheAwareGitHubHTTPStub: @unchecked Sendable {
     private enum StubError: Error {
         case invalidResponse
         case missingResponse(Route)
+    }
+}
+
+private class CacheableGitHubURLProtocol: URLProtocol, @unchecked Sendable {
+    private static let state = State()
+
+    static var lastRequest: URLRequest? {
+        state.lastRequest
+    }
+
+    static func reset() {
+        state.reset()
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        request.url?.host == "api.github.com"
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        Self.state.record(request)
+        guard let url = request.url,
+              let response = HTTPURLResponse(url: url,
+                                             statusCode: 200,
+                                             httpVersion: "HTTP/1.1",
+                                             headerFields: [
+                                                 "Cache-Control": "public, max-age=3600",
+                                                 "Content-Type": "application/json"
+                                             ]) else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .allowed)
+        client?.urlProtocol(self, didLoad: Data("[]".utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() { }
+
+    private final class State: @unchecked Sendable {
+        private let lock = NSLock()
+        private var recordedRequest: URLRequest?
+
+        var lastRequest: URLRequest? {
+            lock.withLock { recordedRequest }
+        }
+
+        func record(_ request: URLRequest) {
+            lock.withLock { recordedRequest = request }
+        }
+
+        func reset() {
+            lock.withLock { recordedRequest = nil }
+        }
     }
 }
