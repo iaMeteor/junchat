@@ -111,7 +111,7 @@ class MessageForwardingScreenViewModel: MessageForwardingScreenViewModelType, Me
                                      accountID: clientProxy.userID,
                                      destinationRoomID: roomID,
                                      items: forwardingBatch.items,
-                                     includingPreviousLaunches: false) {
+                                     includingPreviousLaunches: true) {
             MXLog.error("Failed clearing the message forwarding admission ledger.")
         }
     }

@@ -1163,6 +1163,9 @@ extension MessageForwardingScreenViewModelTests {
         #expect(recoveredContents.count == 1)
         #expect(recoveredContents.first === forwardingBatch.items[2].content)
         recoveredViewModel.confirmForwardingCompleted()
+        #expect(ledgerStore.states(accountID: RoomMemberProxyMock.mockMe.userID,
+                                   destinationRoomID: "2",
+                                   items: forwardingBatch.items) == [nil, nil, nil])
         interruptedSendGate.open()
         try await waitForCondition { interruptedContext.viewState.forwardingProgress?.isBusy == false }
 
