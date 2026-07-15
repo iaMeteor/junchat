@@ -23,9 +23,16 @@ private enum MediaEventsTimelineActionSource {
     }
 }
 
-private struct MediaEventsTimelineTapRequest {
+private enum MediaEventsTimelineActionKind {
+    case preview
+    case details
+}
+
+private struct MediaEventsTimelineActionCredential {
     let source: MediaEventsTimelineActionSource
     let modeGeneration: UInt
+    let itemID: TimelineItemIdentifier
+    let actionKind: MediaEventsTimelineActionKind
 }
 
 class MediaEventsTimelineScreenViewModel: MediaEventsTimelineScreenViewModelType, MediaEventsTimelineScreenViewModelProtocol {
@@ -39,7 +46,7 @@ class MediaEventsTimelineScreenViewModel: MediaEventsTimelineScreenViewModelType
     private var isOldestItemVisible = false
     private var modeGeneration: UInt = 0
     private var activeTimelineActionSource: MediaEventsTimelineActionSource
-    private var mediaTapRequest: MediaEventsTimelineTapRequest?
+    private var pendingMediaActionCredential: MediaEventsTimelineActionCredential?
     
     private var activeTimelineViewModel: TimelineViewModelProtocol {
         switch state.bindings.screenMode {
@@ -124,15 +131,16 @@ class MediaEventsTimelineScreenViewModel: MediaEventsTimelineScreenViewModelType
         case .oldestItemDidDisappear:
             isOldestItemVisible = false
         case .tappedItem(let item):
-            mediaTapRequest = .init(source: currentTimelineActionSource, modeGeneration: modeGeneration)
+            registerMediaAction(itemID: item.identifier, actionKind: .preview)
             activeTimelineViewModel.context.send(viewAction: .mediaTapped(itemID: item.identifier))
         case .longPressedItem(let item):
+            registerMediaAction(itemID: item.identifier, actionKind: .details)
             activeTimelineViewModel.context.send(viewAction: .displayTimelineItemMenu(itemID: item.identifier))
         }
     }
     
     func stop() {
-        invalidateMediaTapRequest()
+        invalidatePendingMediaAction()
         mediaTimelineViewModel.stop()
         filesTimelineViewModel.stop()
         cancelMediaPreviewForwardingHandoff()
@@ -157,7 +165,7 @@ class MediaEventsTimelineScreenViewModel: MediaEventsTimelineScreenViewModelType
     private func handleScreenModeChange() {
         let newSource = currentTimelineActionSource
         if newSource != activeTimelineActionSource {
-            invalidateMediaTapRequest()
+            invalidatePendingMediaAction()
             timelineViewModel(for: activeTimelineActionSource).stop()
             activeTimelineActionSource = newSource
         }
@@ -169,10 +177,11 @@ class MediaEventsTimelineScreenViewModel: MediaEventsTimelineScreenViewModelType
     private func handleTimelineAction(_ action: TimelineViewModelAction, source: MediaEventsTimelineActionSource) {
         switch action {
         case .displayMediaPreview(let mediaPreviewViewModel):
-            guard consumeMediaTapRequest(from: source) else { return }
+            guard case .media(let mediaItem) = mediaPreviewViewModel.state.currentItem,
+                  consumePendingMediaAction(from: source, itemID: mediaItem.timelineItem.id, actionKind: .preview) else { return }
             displayMediaPreview(mediaPreviewViewModel)
         case .displayMediaDetails(item: let item):
-            guard consumeMediaTapRequest(from: source) else { return }
+            guard consumePendingMediaAction(from: source, itemID: item.id, actionKind: .details) else { return }
             displayMediaPreviewSheet(for: item)
         case .displayEmojiPicker, .displayReportContent, .displayCameraPicker, .displayMediaPicker,
              .displayDocumentPicker, .displayLocationPicker, .displayLiveLocation, .displayPollForm, .displayMediaUploadPreviewScreen,
@@ -182,21 +191,32 @@ class MediaEventsTimelineScreenViewModel: MediaEventsTimelineScreenViewModelType
         }
     }
 
-    private func consumeMediaTapRequest(from source: MediaEventsTimelineActionSource) -> Bool {
+    private func registerMediaAction(itemID: TimelineItemIdentifier, actionKind: MediaEventsTimelineActionKind) {
+        pendingMediaActionCredential = .init(source: currentTimelineActionSource,
+                                             modeGeneration: modeGeneration,
+                                             itemID: itemID,
+                                             actionKind: actionKind)
+    }
+
+    private func consumePendingMediaAction(from source: MediaEventsTimelineActionSource,
+                                           itemID: TimelineItemIdentifier,
+                                           actionKind: MediaEventsTimelineActionKind) -> Bool {
         guard source == currentTimelineActionSource,
               source == activeTimelineActionSource,
-              let mediaTapRequest,
-              mediaTapRequest.source == source,
-              mediaTapRequest.modeGeneration == modeGeneration else {
+              let pendingMediaActionCredential,
+              pendingMediaActionCredential.source == source,
+              pendingMediaActionCredential.modeGeneration == modeGeneration,
+              pendingMediaActionCredential.itemID == itemID,
+              pendingMediaActionCredential.actionKind == actionKind else {
             return false
         }
-        self.mediaTapRequest = nil
+        self.pendingMediaActionCredential = nil
         return true
     }
 
-    private func invalidateMediaTapRequest() {
+    private func invalidatePendingMediaAction() {
         modeGeneration &+= 1
-        mediaTapRequest = nil
+        pendingMediaActionCredential = nil
     }
 
     private func displayMediaPreviewSheet(for item: EventBasedMessageTimelineItemProtocol) {

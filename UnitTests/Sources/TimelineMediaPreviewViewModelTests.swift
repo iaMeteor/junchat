@@ -512,9 +512,93 @@ struct TimelineMediaPreviewViewModelTests {
                                              thumbnailInfo: .mockThumbnail,
                                              contentType: .jpeg))
     }
+
+    private static func makeFileItem(id: TimelineItemIdentifier = .randomEvent) -> FileRoomTimelineItem {
+        FileRoomTimelineItem(id: id,
+                             timestamp: .mock,
+                             isOutgoing: false,
+                             isEditable: false,
+                             canBeRepliedTo: true,
+                             sender: .init(id: "", displayName: "Sally Sanderson"),
+                             content: .init(filename: "Important file.pdf",
+                                            source: try? .init(url: .mockMXCFile, mimeType: "document/pdf"),
+                                            fileSize: 2453,
+                                            thumbnailSource: nil,
+                                            contentType: .pdf))
+    }
 }
 
 extension TimelineMediaPreviewViewModelTests {
+    @Test
+    func mediaLongPressDisplaysDetailsWithoutTap() {
+        verifyLongPressDisplaysDetailsWithoutTap(initialMode: .media,
+                                                 item: Self.makeImageItem(id: .event(uniqueID: .init("media-long-press"),
+                                                                                     eventOrTransactionID: .eventID("media-long-press"))))
+    }
+
+    @Test
+    func filesVoiceOverContextMenuLongPressDisplaysDetailsWithoutTap() {
+        verifyLongPressDisplaysDetailsWithoutTap(initialMode: .files,
+                                                 item: Self.makeFileItem(id: .event(uniqueID: .init("files-long-press"),
+                                                                                    eventOrTransactionID: .eventID("files-long-press"))))
+    }
+
+    @Test
+    func longPressDetailsCredentialRejectsCollidingItemWithoutBeingConsumed() {
+        let setup = makeMediaEventsViewModel()
+        let items = makeCollidingMediaItems()
+
+        setup.viewModel.context.send(viewAction: .longPressedItem(item: .init(item: items.requested, groupStyle: .single)))
+        setup.mediaTimeline.send(.displayMediaDetails(item: items.other))
+        #expect(setup.viewModel.context.viewState.bindings.mediaPreviewSheetViewModel == nil)
+
+        setup.mediaTimeline.send(.displayMediaDetails(item: items.requested))
+        #expect(setup.viewModel.context.viewState.bindings.mediaPreviewSheetViewModel != nil)
+    }
+
+    @Test
+    func tapPreviewCredentialRejectsCollidingItemWithoutBeingConsumed() {
+        let setup = makeMediaEventsViewModel()
+        let items = makeCollidingMediaItems()
+
+        setup.viewModel.context.send(viewAction: .tappedItem(item: .init(item: items.requested, groupStyle: .single)))
+        setup.mediaTimeline.send(.displayMediaPreview(TimelineMediaPreviewViewModelActionEmitter(item: items.other)))
+        #expect(setup.viewModel.context.viewState.bindings.mediaPreviewViewModel == nil)
+
+        setup.mediaTimeline.send(.displayMediaPreview(TimelineMediaPreviewViewModelActionEmitter(item: items.requested)))
+        #expect(setup.viewModel.context.viewState.bindings.mediaPreviewViewModel != nil)
+    }
+
+    @Test
+    func tapThenLongPressAcceptsOnlyTheLongPressItemAndActionKind() {
+        let setup = makeMediaEventsViewModel()
+        let items = makeCollidingMediaItems()
+
+        setup.viewModel.context.send(viewAction: .tappedItem(item: .init(item: items.requested, groupStyle: .single)))
+        setup.viewModel.context.send(viewAction: .longPressedItem(item: .init(item: items.other, groupStyle: .single)))
+        setup.mediaTimeline.send(.displayMediaPreview(TimelineMediaPreviewViewModelActionEmitter(item: items.requested)))
+        #expect(setup.viewModel.context.viewState.bindings.mediaPreviewViewModel == nil)
+        #expect(setup.viewModel.context.viewState.bindings.mediaPreviewSheetViewModel == nil)
+
+        setup.mediaTimeline.send(.displayMediaDetails(item: items.other))
+        #expect(setup.viewModel.context.viewState.bindings.mediaPreviewSheetViewModel != nil)
+    }
+
+    @Test
+    func longPressThenTapAcceptsOnlyTheTapItemAndActionKind() {
+        let setup = makeMediaEventsViewModel()
+        let items = makeCollidingMediaItems()
+
+        setup.viewModel.context.send(viewAction: .longPressedItem(item: .init(item: items.requested, groupStyle: .single)))
+        setup.viewModel.context.send(viewAction: .tappedItem(item: .init(item: items.other, groupStyle: .single)))
+        setup.mediaTimeline.send(.displayMediaDetails(item: items.requested))
+        #expect(setup.viewModel.context.viewState.bindings.mediaPreviewViewModel == nil)
+        #expect(setup.viewModel.context.viewState.bindings.mediaPreviewSheetViewModel == nil)
+
+        setup.mediaTimeline.send(.displayMediaPreview(TimelineMediaPreviewViewModelActionEmitter(item: items.other)))
+        #expect(setup.viewModel.context.viewState.bindings.mediaPreviewViewModel != nil)
+    }
+
     @Test
     func mediaToFilesRejectsLatePreviewAndAcceptsActivePreview() {
         verifyModeSwitch(from: .media, action: .preview)
@@ -695,14 +779,10 @@ extension TimelineMediaPreviewViewModelTests {
 
     private func verifyModeSwitch(from initialMode: MediaEventsTimelineScreenMode,
                                   action: MediaEventsTimelineTestAction) {
-        let mediaTimeline = TimelineViewModelActionEmitter(timelineKind: .media(.mediaFilesScreen))
-        let filesTimeline = TimelineViewModelActionEmitter(timelineKind: .media(.mediaFilesScreen))
-        let viewModel = MediaEventsTimelineScreenViewModel(mediaTimelineViewModel: mediaTimeline,
-                                                           filesTimelineViewModel: filesTimeline,
-                                                           initialScreenMode: initialMode,
-                                                           mediaProvider: MediaProviderMock(configuration: .init()),
-                                                           userIndicatorController: UserIndicatorControllerMock(),
-                                                           appMediator: AppMediatorMock())
+        let setup = makeMediaEventsViewModel(initialMode: initialMode)
+        let mediaTimeline = setup.mediaTimeline
+        let filesTimeline = setup.filesTimeline
+        let viewModel = setup.viewModel
         let item = Self.makeImageItem()
         let itemViewState = RoomTimelineItemViewState(item: item, groupStyle: .single)
         let inactiveTimeline: TimelineViewModelActionEmitter
@@ -719,7 +799,7 @@ extension TimelineMediaPreviewViewModelTests {
             activeMode = .media
         }
 
-        viewModel.context.send(viewAction: .tappedItem(item: itemViewState))
+        viewModel.context.send(viewAction: action.viewAction(item: itemViewState))
         viewModel.context.screenMode = activeMode
         viewModel.context.send(viewAction: .changedScreenMode)
 
@@ -730,7 +810,7 @@ extension TimelineMediaPreviewViewModelTests {
         #expect(viewModel.context.viewState.bindings.mediaPreviewViewModel == nil)
         #expect(viewModel.context.viewState.bindings.mediaPreviewSheetViewModel == nil)
 
-        viewModel.context.send(viewAction: .tappedItem(item: itemViewState))
+        viewModel.context.send(viewAction: action.viewAction(item: itemViewState))
         activeTimeline.send(action.timelineAction(item: item))
         switch action {
         case .preview:
@@ -751,6 +831,45 @@ extension TimelineMediaPreviewViewModelTests {
         #expect(viewModel.context.viewState.bindings.mediaPreviewViewModel == nil)
         #expect(viewModel.context.viewState.bindings.mediaPreviewSheetViewModel == nil)
     }
+
+    private func verifyLongPressDisplaysDetailsWithoutTap(initialMode: MediaEventsTimelineScreenMode,
+                                                          item: EventBasedMessageTimelineItemProtocol) {
+        let setup = makeMediaEventsViewModel(initialMode: initialMode)
+        let activeTimeline = switch initialMode {
+        case .media: setup.mediaTimeline
+        case .files: setup.filesTimeline
+        }
+
+        setup.viewModel.context.send(viewAction: .longPressedItem(item: .init(item: item, groupStyle: .single)))
+        activeTimeline.send(.displayMediaDetails(item: item))
+
+        #expect(setup.viewModel.context.viewState.bindings.mediaPreviewViewModel == nil)
+        #expect(setup.viewModel.context.viewState.bindings.mediaPreviewSheetViewModel != nil)
+    }
+
+    private func makeMediaEventsViewModel(initialMode: MediaEventsTimelineScreenMode = .media) -> MediaEventsTimelineTestSetup {
+        let mediaTimeline = TimelineViewModelActionEmitter(timelineKind: .media(.mediaFilesScreen))
+        let filesTimeline = TimelineViewModelActionEmitter(timelineKind: .media(.mediaFilesScreen))
+        let viewModel = MediaEventsTimelineScreenViewModel(mediaTimelineViewModel: mediaTimeline,
+                                                           filesTimelineViewModel: filesTimeline,
+                                                           initialScreenMode: initialMode,
+                                                           mediaProvider: MediaProviderMock(configuration: .init()),
+                                                           userIndicatorController: UserIndicatorControllerMock(),
+                                                           appMediator: AppMediatorMock())
+        return .init(viewModel: viewModel, mediaTimeline: mediaTimeline, filesTimeline: filesTimeline)
+    }
+
+    private func makeCollidingMediaItems() -> (requested: ImageRoomTimelineItem, other: ImageRoomTimelineItem) {
+        let uniqueID = TimelineItemIdentifier.UniqueID("provider-local-media-item")
+        return (Self.makeImageItem(id: .event(uniqueID: uniqueID, eventOrTransactionID: .eventID("requested-event"))),
+                Self.makeImageItem(id: .event(uniqueID: uniqueID, eventOrTransactionID: .eventID("other-event"))))
+    }
+}
+
+private struct MediaEventsTimelineTestSetup {
+    let viewModel: MediaEventsTimelineScreenViewModel
+    let mediaTimeline: TimelineViewModelActionEmitter
+    let filesTimeline: TimelineViewModelActionEmitter
 }
 
 private enum MediaEventsTimelineTestAction {
@@ -761,9 +880,18 @@ private enum MediaEventsTimelineTestAction {
     func timelineAction(item: EventBasedMessageTimelineItemProtocol) -> TimelineViewModelAction {
         switch self {
         case .preview:
-            .displayMediaPreview(TimelineMediaPreviewViewModelActionEmitter())
+            .displayMediaPreview(TimelineMediaPreviewViewModelActionEmitter(item: item))
         case .details:
             .displayMediaDetails(item: item)
+        }
+    }
+
+    func viewAction(item: RoomTimelineItemViewState) -> MediaEventsTimelineScreenViewAction {
+        switch self {
+        case .preview:
+            .tappedItem(item: item)
+        case .details:
+            .longPressedItem(item: item)
         }
     }
 }
@@ -795,17 +923,17 @@ private final class TimelineMediaPreviewViewModelActionEmitter: TimelineMediaPre
         actionSubject.eraseToAnyPublisher()
     }
 
-    init() {
-        let item = ImageRoomTimelineItem(id: .randomEvent,
-                                         timestamp: .mock,
-                                         isOutgoing: false,
-                                         isEditable: false,
-                                         canBeRepliedTo: true,
-                                         sender: .init(id: "sender"),
-                                         content: .init(filename: "image.jpeg",
-                                                        imageInfo: .mockImage,
-                                                        thumbnailInfo: .mockThumbnail,
-                                                        contentType: .jpeg))
+    init(item: EventBasedMessageTimelineItemProtocol? = nil) {
+        let item = item ?? ImageRoomTimelineItem(id: .randomEvent,
+                                                 timestamp: .mock,
+                                                 isOutgoing: false,
+                                                 isEditable: false,
+                                                 canBeRepliedTo: true,
+                                                 sender: .init(id: "sender"),
+                                                 content: .init(filename: "image.jpeg",
+                                                                imageInfo: .mockImage,
+                                                                thumbnailInfo: .mockThumbnail,
+                                                                contentType: .jpeg))
         let timelineController = MockTimelineController(timelineKind: .media(.mediaFilesScreen))
         timelineController.timelineItems = [item]
         super.init(initialItem: item,
