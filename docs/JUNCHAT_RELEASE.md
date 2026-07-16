@@ -73,7 +73,11 @@ It accepts only the existing `Release` and `Nightly` archive workflows; unknown
 or missing workflow identity fails without running a command. The Swift
 `release-to-github` gate still independently requires `Release`, revalidates the
 bound artifacts, and repeats the repository/XcodeGen preflight as defense in
-depth.
+depth. `tag-nightly` independently requires the exact `Nightly` Xcode Cloud
+archive identity before reading release metadata, validating a binding, reading
+Git credentials, or entering tag/push logic. `upload-dsyms` independently
+requires an exact `Release` or `Nightly` archive identity before reading the
+Sentry token and reauthorizes that identity before every upload attempt.
 
 Artifact preflight requires the canonical archive and its exact signed
 `Junchat.app`. It matches archive and app bundle identifier, marketing version,
@@ -82,6 +86,10 @@ and build to `app.yml` and `project.yml`; verifies the app with
 wrong identifier signature metadata; requires `/usr/bin/otool -hv` to report
 only `EXECUTE` Mach-O slices; and requires `/usr/bin/dwarfdump --uuid` to return
 identical nonempty architecture/UUID sets for the app and dSYM. The preflight
+production command has no CLI or environment override for these executables;
+its runner fixes all three absolute paths in source. Tests inject read-only tool
+results only through an internal test-target seam while retaining the production
+metadata, structure, inventory, and binding implementation. The preflight
 atomically writes a private binding containing canonical root device/inode
 identities and a sorted SHA-256 inventory of the archive plist, complete app
 tree, and complete dSYMs tree. The shell carries the binding path and expected

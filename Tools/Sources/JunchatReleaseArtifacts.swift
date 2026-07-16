@@ -17,16 +17,16 @@ struct ReleaseArtifactCommandRunner {
     let dwarfdumpExecutablePath: String
     let run: @Sendable (_ executablePath: String, _ arguments: [String]) async throws -> Output
 
-    static func production(codesignExecutablePath: String = "/usr/bin/codesign",
-                           otoolExecutablePath: String = "/usr/bin/otool",
-                           dwarfdumpExecutablePath: String = "/usr/bin/dwarfdump") -> Self {
+    static func production() -> Self {
+        let codesignExecutablePath = "/usr/bin/codesign"
+        let otoolExecutablePath = "/usr/bin/otool"
+        let dwarfdumpExecutablePath = "/usr/bin/dwarfdump"
         let executablePaths = [codesignExecutablePath, otoolExecutablePath, dwarfdumpExecutablePath]
         return Self(codesignExecutablePath: codesignExecutablePath,
                     otoolExecutablePath: otoolExecutablePath,
                     dwarfdumpExecutablePath: dwarfdumpExecutablePath) { executablePath, arguments in
-            guard executablePaths.contains(executablePath),
-                  NSString(string: executablePath).isAbsolutePath else {
-                throw ValidationError("Release artifact validation requires an absolute allowlisted tool path.")
+            guard executablePaths.contains(executablePath) else {
+                throw ValidationError("Release artifact validation requires an immutable production tool path.")
             }
             let result = try await CI.run(.path(FilePath(executablePath)),
                                           Arguments(arguments),

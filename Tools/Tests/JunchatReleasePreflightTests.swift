@@ -3,6 +3,39 @@ import Foundation
 import XCTest
 
 final class JunchatReleasePreflightTests: XCTestCase {
+    func testProductionPreflightCommandDoesNotExposeVerifierExecutableOverrides() {
+        let help = ValidateJunchatReleasePreflight.helpMessage()
+
+        XCTAssertFalse(help.contains("--codesign-executable-path"))
+        XCTAssertFalse(help.contains("--otool-executable-path"))
+        XCTAssertFalse(help.contains("--dwarfdump-executable-path"))
+    }
+
+    func testProductionArtifactRunnerUsesOnlyImmutableSystemVerifierPaths() {
+        let commandRunner = ReleaseArtifactCommandRunner.production()
+
+        XCTAssertEqual(commandRunner.codesignExecutablePath, "/usr/bin/codesign")
+        XCTAssertEqual(commandRunner.otoolExecutablePath, "/usr/bin/otool")
+        XCTAssertEqual(commandRunner.dwarfdumpExecutablePath, "/usr/bin/dwarfdump")
+    }
+
+    func testExportsValidatedArtifactBindingForShellIntegration() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["JUNCHAT_RELEASE_TEST_EXPORT_BINDING"] == "1" else { return }
+
+        let repositoryPath = try XCTUnwrap(environment["JUNCHAT_RELEASE_TEST_REPOSITORY_PATH"])
+        let bindingPath = try XCTUnwrap(environment["JUNCHAT_RELEASE_TEST_BINDING_PATH"])
+        let digestPath = try XCTUnwrap(environment["JUNCHAT_RELEASE_TEST_BINDING_DIGEST_PATH"])
+        let originalDirectory = FileManager.default.currentDirectoryPath
+        XCTAssertTrue(FileManager.default.changeCurrentDirectoryPath(repositoryPath))
+        defer { XCTAssertTrue(FileManager.default.changeCurrentDirectoryPath(originalDirectory)) }
+
+        var command = ValidateJunchatReleasePreflight()
+        command.artifactBindingPath = bindingPath
+        command.artifactBindingDigestPath = digestPath
+        try await command.run(commandRunner: validatingCommandRunner())
+    }
+
     func testCryptographicArtifactValidationRejectsUnsignedTextStaleMetadataAndUnrelatedDSYMBeforeSideEffects() async throws {
         let unsignedFixture = try ReleaseArchiveFixture()
         defer { unsignedFixture.remove() }

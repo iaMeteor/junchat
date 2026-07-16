@@ -15,14 +15,44 @@ grep -Fq 'pull_request:' "$WORKFLOW"
 grep -Fq 'permissions: {}' "$WORKFLOW"
 grep -Fq 'run: swift test' "$WORKFLOW"
 grep -Fq 'for test_script in ci_scripts/tests/*_test.sh' "$WORKFLOW"
-grep -Fq 'XcodeCloudReleaseEnvironment.perform(environment: ProcessInfo.processInfo.environment)' \
-    "$REPOSITORY_ROOT/Tools/Sources/Commands/CI/ReleaseToGithub.swift"
+if ! grep -Fq 'expectedWorkflow: .release' \
+    "$REPOSITORY_ROOT/Tools/Sources/Commands/CI/ReleaseToGithub.swift"; then
+    printf '%s\n' 'release-to-github lacks exact Release command authorization.' >&2
+    exit 104
+fi
 grep -Fq 'pushAfterRevalidatingDraft' \
     "$REPOSITORY_ROOT/Tools/Sources/Commands/CI/ReleaseToGithub.swift"
 grep -Fq 'JunchatReleasePreflight.validateCurrentRepositoryFiles()' \
     "$REPOSITORY_ROOT/Tools/Sources/Commands/CI/ReleaseToGithub.swift"
 grep -Fq 'revalidateReleaseArtifacts(validateProjectMetadata: true)' \
     "$REPOSITORY_ROOT/Tools/Sources/Commands/CI/ReleaseToGithub.swift"
+if ! grep -Fq 'expectedWorkflow: .nightly' \
+    "$REPOSITORY_ROOT/Tools/Sources/Commands/CI/TagNightly.swift"; then
+    printf '%s\n' 'tag-nightly lacks exact Nightly command authorization.' >&2
+    exit 102
+fi
+if ! grep -Fq 'allowedWorkflows: [.release, .nightly]' \
+    "$REPOSITORY_ROOT/Tools/Sources/Commands/CI/UploadDSYMs.swift"; then
+    printf '%s\n' 'upload-dsyms lacks Release-or-Nightly command authorization.' >&2
+    exit 103
+fi
+
+PREFLIGHT_COMMAND="$REPOSITORY_ROOT/Tools/Sources/Commands/CI/ValidateJunchatReleasePreflight.swift"
+if grep -Eq 'codesignExecutablePath|otoolExecutablePath|dwarfdumpExecutablePath' "$PREFLIGHT_COMMAND"; then
+    printf '%s\n' 'The production preflight command exposes an artifact verifier override.' >&2
+    exit 101
+fi
+ARTIFACT_VALIDATOR="$REPOSITORY_ROOT/Tools/Sources/JunchatReleaseArtifacts.swift"
+grep -Fq 'static func production() -> Self' "$ARTIFACT_VALIDATOR"
+grep -Fq 'let codesignExecutablePath = "/usr/bin/codesign"' "$ARTIFACT_VALIDATOR"
+grep -Fq 'let otoolExecutablePath = "/usr/bin/otool"' "$ARTIFACT_VALIDATOR"
+grep -Fq 'let dwarfdumpExecutablePath = "/usr/bin/dwarfdump"' "$ARTIFACT_VALIDATOR"
+if grep -R -Eq -- '--(codesign|otool|dwarfdump)-executable-path|FAKE_BIN/(codesign|otool|dwarfdump)' \
+    "$REPOSITORY_ROOT/ci_scripts/tests/ci_post_xcodebuild_test.sh" \
+    "$REPOSITORY_ROOT/ci_scripts/tests/upload_dsyms_secrecy_test.sh"; then
+    printf '%s\n' 'Shell integration reintroduced a production artifact verifier override.' >&2
+    exit 105
+fi
 
 POST_BUILD_SCRIPT="$REPOSITORY_ROOT/ci_scripts/ci_post_xcodebuild.sh"
 LOCAL_PREFLIGHT_LINE=$(grep -nF 'swift run --disable-automatic-resolution -q tools ci validate-junchat-release-preflight' "$POST_BUILD_SCRIPT" | cut -d: -f1)

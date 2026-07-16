@@ -29,7 +29,23 @@ struct UploadDSYMs: AsyncParsableCommand {
     var maxRetries = 5
 
     func run() async throws {
-        guard ProcessInfo.processInfo.environment["SENTRY_AUTH_TOKEN"]?.isEmpty == false else {
+        try await run(environment: { ProcessInfo.processInfo.environment },
+                      readSentryAuthToken: { ProcessInfo.processInfo.environment["SENTRY_AUTH_TOKEN"] },
+                      revalidateBinding: {
+                          try JunchatReleaseArtifacts.revalidateBinding(atPath: $0,
+                                                                        expectedDigest: $1)
+                      },
+                      upload: { try await CI.run(.name("sentry-cli"), $0) })
+    }
+
+    func run(environment: () -> [String: String],
+             readSentryAuthToken: () -> String?,
+             revalidateBinding: (_ bindingPath: String, _ expectedDigest: String) throws -> JunchatReleasePreflight.ReleaseArtifacts,
+             upload: (_ arguments: Arguments) async throws -> Void) async throws {
+        try XcodeCloudReleaseEnvironment.validate(environment(),
+                                                  commandName: "upload-dsyms",
+                                                  allowedWorkflows: [.release, .nightly])
+        guard readSentryAuthToken()?.isEmpty == false else {
             throw ValidationError("SENTRY_AUTH_TOKEN environment variable is not set.")
         }
 
@@ -45,10 +61,12 @@ struct UploadDSYMs: AsyncParsableCommand {
         var lastError: Swift.Error?
 
         for attempt in 1...maxRetries {
+            try XcodeCloudReleaseEnvironment.validate(environment(),
+                                                      commandName: "upload-dsyms",
+                                                      allowedWorkflows: [.release, .nightly])
             do {
                 logger.info("\n📡 Uploading dSYMs to Sentry (attempt \(attempt)/\(maxRetries))…\n")
-                let artifacts = try JunchatReleaseArtifacts.revalidateBinding(atPath: artifactBindingPath,
-                                                                              expectedDigest: expectedArtifactBindingDigest)
+                let artifacts = try revalidateBinding(artifactBindingPath, expectedArtifactBindingDigest)
                 let requestedDSYMsURL = URL(filePath: dsymPath)
                 guard dsymPath == requestedDSYMsURL.path,
                       dsymPath == requestedDSYMsURL.standardizedFileURL.path,
@@ -56,7 +74,7 @@ struct UploadDSYMs: AsyncParsableCommand {
                       requestedDSYMsURL == artifacts.dSYMsURL else {
                     throw ValidationError("The dSYM upload path does not match the validated release artifact binding.")
                 }
-                try await CI.run(.name("sentry-cli"), arguments)
+                try await upload(arguments)
                 logger.info("\n✅ Successfully uploaded dSYMs to Sentry.\n")
                 return
             } catch {

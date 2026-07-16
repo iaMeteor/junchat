@@ -11,19 +11,11 @@ struct ValidateJunchatReleasePreflight: AsyncParsableCommand {
     @Option(help: "The private path where the expected binding digest will be created.")
     var artifactBindingDigestPath: String
 
-    @Option(help: "The absolute codesign executable path used by release artifact validation.")
-    var codesignExecutablePath = "/usr/bin/codesign"
-
-    @Option(help: "The absolute otool executable path used by release artifact validation.")
-    var otoolExecutablePath = "/usr/bin/otool"
-
-    @Option(help: "The absolute dwarfdump executable path used by release artifact validation.")
-    var dwarfdumpExecutablePath = "/usr/bin/dwarfdump"
-
     func run() async throws {
-        let commandRunner = ReleaseArtifactCommandRunner.production(codesignExecutablePath: codesignExecutablePath,
-                                                                    otoolExecutablePath: otoolExecutablePath,
-                                                                    dwarfdumpExecutablePath: dwarfdumpExecutablePath)
+        try await run(commandRunner: .production())
+    }
+
+    func run(commandRunner: ReleaseArtifactCommandRunner) async throws {
         guard let digest = try await JunchatReleasePreflight.validateCurrentRepository(commandRunner: commandRunner,
                                                                                        artifactBindingURL: URL(filePath: artifactBindingPath)) else {
             throw ValidationError("Release artifact preflight did not create a binding digest.")

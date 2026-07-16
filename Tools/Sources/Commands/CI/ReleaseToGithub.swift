@@ -26,7 +26,9 @@ struct ReleaseToGitHub: AsyncParsableCommand {
     var expectedArtifactBindingDigest: String
 
     func run() async throws {
-        try await XcodeCloudReleaseEnvironment.perform(environment: ProcessInfo.processInfo.environment) {
+        try await XcodeCloudReleaseEnvironment.perform(environment: ProcessInfo.processInfo.environment,
+                                                       commandName: "release-to-github",
+                                                       expectedWorkflow: .release) {
             try await runInValidatedEnvironment()
         }
     }

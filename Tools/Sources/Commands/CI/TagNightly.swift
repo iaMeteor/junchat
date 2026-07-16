@@ -15,17 +15,33 @@ struct TagNightly: AsyncParsableCommand {
     var expectedArtifactBindingDigest: String
 
     func run() async throws {
-        guard !buildNumber.isEmpty else {
-            throw ValidationError("Invalid build number.")
+        try await run(environment: ProcessInfo.processInfo.environment,
+                      readMarketingVersion: CI.readMarketingVersion,
+                      revalidateBinding: { bindingPath, expectedDigest in
+                          _ = try JunchatReleaseArtifacts.revalidateBinding(atPath: bindingPath,
+                                                                            expectedDigest: expectedDigest,
+                                                                            validateProjectMetadata: true)
+                      },
+                      pushTag: { try await CI.gitPush(tagName: $0) })
+    }
+
+    func run(environment: [String: String],
+             readMarketingVersion: () throws -> String,
+             revalidateBinding: (_ bindingPath: String, _ expectedDigest: String) throws -> Void,
+             pushTag: (_ tagName: String) async throws -> Void) async throws {
+        try await XcodeCloudReleaseEnvironment.perform(environment: environment,
+                                                       commandName: "tag-nightly",
+                                                       expectedWorkflow: .nightly) {
+            guard !buildNumber.isEmpty else {
+                throw ValidationError("Invalid build number.")
+            }
+            let currentVersion = try readMarketingVersion()
+            let tagName = "nightly/\(currentVersion).\(buildNumber)"
+
+            try revalidateBinding(artifactBindingPath, expectedArtifactBindingDigest)
+            try await pushTag(tagName)
+
+            logger.info("\n🚀 Successfully tagged nightly: \(tagName)\n")
         }
-        let currentVersion = try CI.readMarketingVersion()
-        let tagName = "nightly/\(currentVersion).\(buildNumber)"
-
-        _ = try JunchatReleaseArtifacts.revalidateBinding(atPath: artifactBindingPath,
-                                                          expectedDigest: expectedArtifactBindingDigest,
-                                                          validateProjectMetadata: true)
-        try await CI.gitPush(tagName: tagName)
-
-        logger.info("\n🚀 Successfully tagged nightly: \(tagName)\n")
     }
 }

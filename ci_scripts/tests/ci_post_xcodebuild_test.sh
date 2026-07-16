@@ -30,6 +30,7 @@ XCODEGEN_EXECUTABLE=$(command -v xcodegen)
 TOOLS_BIN_DIRECTORY=$($SWIFT_EXECUTABLE build --disable-automatic-resolution --show-bin-path)
 REAL_TOOLS_BINARY="$TOOLS_BIN_DIRECTORY/tools"
 PREFLIGHT_PATH="$(dirname "$XCODEGEN_EXECUTABLE"):/usr/bin:/bin:/usr/sbin:/sbin"
+export REPOSITORY_ROOT SWIFT_EXECUTABLE
 mkdir -p "$FIXTURE_ROOT" "$FAKE_BIN"
 git archive HEAD | tar -x -C "$FIXTURE_ROOT"
 cp "$REPOSITORY_ROOT/ci_scripts/ci_common.sh" "$FIXTURE_ROOT/ci_scripts/"
@@ -169,11 +170,43 @@ run_real_tools() {
     return 92
 }
 
+export_release_artifact_binding() {
+    local arguments=("$@")
+    local binding_path=""
+    local digest_path=""
+    local index
+
+    for ((index = 0; index < ${#arguments[@]}; index++)); do
+        case "${arguments[$index]}" in
+            --artifact-binding-path)
+                binding_path="${arguments[$((index + 1))]}"
+                ;;
+            --artifact-binding-digest-path)
+                digest_path="${arguments[$((index + 1))]}"
+                ;;
+        esac
+    done
+    if [[ -z "$binding_path" || -z "$digest_path" ]]; then
+        printf '%s\n' 'The production preflight binding arguments were not preserved.' >&2
+        return 84
+    fi
+
+    if PATH="$PREFLIGHT_PATH" \
+        JUNCHAT_RELEASE_TEST_BINDING_DIGEST_PATH="$digest_path" \
+        JUNCHAT_RELEASE_TEST_BINDING_PATH="$binding_path" \
+        JUNCHAT_RELEASE_TEST_EXPORT_BINDING=1 \
+        JUNCHAT_RELEASE_TEST_REPOSITORY_PATH="$FIXTURE_ROOT" \
+        "$SWIFT_EXECUTABLE" test --package-path "$REPOSITORY_ROOT" --disable-automatic-resolution \
+            --filter JunchatReleasePreflightTests/testExportsValidatedArtifactBindingForShellIntegration \
+            > "${LOCAL_PREFLIGHT_MARKER}.log" 2>&1; then
+        return 0
+    fi
+    cat "${LOCAL_PREFLIGHT_MARKER}.log" >&2
+    return 85
+}
+
 if [[ "$*" == *'tools ci validate-junchat-release-preflight --artifact-binding-path '* ]]; then
-    if run_real_tools "$@" \
-        --codesign-executable-path "$FAKE_BIN/codesign" \
-        --otool-executable-path "$FAKE_BIN/otool" \
-        --dwarfdump-executable-path "$FAKE_BIN/dwarfdump"; then
+    if export_release_artifact_binding "$@"; then
         printf '%s\n' captured > "$LOCAL_PREFLIGHT_MARKER"
         exit 0
     else
@@ -236,51 +269,6 @@ if [[ "$*" == *"release-to-github"* ]]; then
 fi
 EOF
 
-cat > "$FAKE_BIN/codesign" <<'EOF'
-#!/bin/bash
-set -euo pipefail
-
-case "$1" in
-    --verify)
-        test "$*" = "--verify --deep --strict $CI_APP_STORE_SIGNED_APP_PATH"
-        test -d "${@: -1}"
-        ;;
-    --display)
-        test "$*" = "--display --verbose=4 $CI_APP_STORE_SIGNED_APP_PATH"
-        test -d "${@: -1}"
-        printf '%s\n' \
-            'Identifier=com.heyujk.junchat' \
-            'TeamIdentifier=W834S4TA7S' \
-            'Signature size=9000' >&2
-        ;;
-    *)
-        exit 1
-        ;;
-esac
-EOF
-
-cat > "$FAKE_BIN/otool" <<'EOF'
-#!/bin/bash
-set -euo pipefail
-
-test "$1" = -hv
-test -f "$2"
-cat <<'OUTPUT'
-Mach header
-      magic cputype cpusubtype caps filetype ncmds sizeofcmds flags
- MH_MAGIC_64   ARM64        ALL  0x00  EXECUTE    20       2048 0x0
-OUTPUT
-EOF
-
-cat > "$FAKE_BIN/dwarfdump" <<'EOF'
-#!/bin/bash
-set -euo pipefail
-
-test "$1" = --uuid
-test -e "$2"
-printf 'UUID: 1AB9D6FA-27FF-3A79-9369-BE0E635A4AA2 (arm64) %s\n' "$2"
-EOF
-
 cat > "$FAKE_BIN/sentry-cli" <<'EOF'
 #!/bin/bash
 set -euo pipefail
@@ -292,7 +280,7 @@ if [[ "${MUTATE_AFTER_UPLOAD:-0}" = 1 ]]; then
 fi
 EOF
 
-chmod +x "$FAKE_BIN/git" "$FAKE_BIN/swift" "$FAKE_BIN/codesign" "$FAKE_BIN/otool" "$FAKE_BIN/dwarfdump" "$FAKE_BIN/sentry-cli"
+chmod +x "$FAKE_BIN/git" "$FAKE_BIN/swift" "$FAKE_BIN/sentry-cli"
 
 assert_invalid_identity_has_no_commands() {
     local scenario="$1"

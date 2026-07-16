@@ -11,7 +11,9 @@ final class XcodeCloudReleaseEnvironmentTests: XCTestCase {
     ]
 
     func testAcceptsTheXcodeCloudReleaseArchiveEnvironment() throws {
-        XCTAssertNoThrow(try XcodeCloudReleaseEnvironment.validate(validEnvironment))
+        XCTAssertNoThrow(try XcodeCloudReleaseEnvironment.validate(validEnvironment,
+                                                                   commandName: "release-to-github",
+                                                                   expectedWorkflow: .release))
     }
 
     func testRejectsLocalAndOtherXcodeCloudWorkflowEnvironments() {
@@ -28,7 +30,9 @@ final class XcodeCloudReleaseEnvironmentTests: XCTestCase {
         ]
 
         for environment in invalidEnvironments {
-            XCTAssertThrowsError(try XcodeCloudReleaseEnvironment.validate(environment))
+            XCTAssertThrowsError(try XcodeCloudReleaseEnvironment.validate(environment,
+                                                                           commandName: "release-to-github",
+                                                                           expectedWorkflow: .release))
         }
     }
 
@@ -36,12 +40,58 @@ final class XcodeCloudReleaseEnvironmentTests: XCTestCase {
         var operationRan = false
 
         do {
-            try await XcodeCloudReleaseEnvironment.perform(environment: [:]) {
+            try await XcodeCloudReleaseEnvironment.perform(environment: [:],
+                                                           commandName: "release-to-github",
+                                                           expectedWorkflow: .release) {
                 operationRan = true
             }
             XCTFail("Expected a local invocation to fail closed")
         } catch { }
 
         XCTAssertFalse(operationRan)
+    }
+
+    func testNightlyCommandAuthorizationRunsOnlyForTheNightlyArchiveIdentity() async {
+        var releaseSideEffects = 0
+        do {
+            try await XcodeCloudReleaseEnvironment.perform(environment: validEnvironment,
+                                                           commandName: "tag-nightly",
+                                                           expectedWorkflow: .nightly) {
+                releaseSideEffects += 1
+            }
+        } catch { }
+
+        var nightlySideEffects = 0
+        let nightlyEnvironment = validEnvironment.merging(["CI_WORKFLOW": "Nightly"]) { _, replacement in replacement }
+        do {
+            try await XcodeCloudReleaseEnvironment.perform(environment: nightlyEnvironment,
+                                                           commandName: "tag-nightly",
+                                                           expectedWorkflow: .nightly) {
+                nightlySideEffects += 1
+            }
+        } catch { }
+
+        XCTAssertEqual(releaseSideEffects, 0)
+        XCTAssertEqual(nightlySideEffects, 1)
+    }
+
+    func testUploadAuthorizationRunsOnlyForReleaseOrNightlyArchiveIdentities() async {
+        let validEnvironments = [
+            validEnvironment,
+            validEnvironment.merging(["CI_WORKFLOW": "Nightly"]) { _, replacement in replacement }
+        ]
+        var sideEffects = 0
+
+        for environment in validEnvironments {
+            do {
+                try await XcodeCloudReleaseEnvironment.perform(environment: environment,
+                                                               commandName: "upload-dsyms",
+                                                               allowedWorkflows: [.release, .nightly]) {
+                    sideEffects += 1
+                }
+            } catch { }
+        }
+
+        XCTAssertEqual(sideEffects, 2)
     }
 }
