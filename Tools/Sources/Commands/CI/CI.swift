@@ -4,6 +4,20 @@ import Subprocess
 
 // swiftlint:disable:next type_name
 struct CI: ParsableCommand {
+    struct GitReleaseIdentity: Equatable {
+        let repository: GitHubRepository
+        let originURL: String
+        let branch: String
+    }
+
+    enum GitPushError: LocalizedError {
+        case pushFailed
+
+        var errorDescription: String? {
+            "Authenticated git push failed."
+        }
+    }
+
     static let configuration = CommandConfiguration(abstract: "CI workflow commands that can be run both locally and in CI environments.",
                                                     subcommands: [
                                                         PreviewTests.self,
@@ -14,6 +28,7 @@ struct CI: ParsableCommand {
                                                         RunTests.self,
                                                         ConfigureNightly.self,
                                                         ConfigureProduction.self,
+                                                        ValidateJunchatReleasePreflight.self,
                                                         CurrentReleaseVersion.self,
                                                         PublishedJunchatReleaseTags.self,
                                                         TagNightly.self,
@@ -149,12 +164,25 @@ struct CI: ParsableCommand {
     }
 
     static func gitRepository() async throws -> GitHubRepository {
-        guard let rawURL = try await CI.run(.name("git"), ["ls-remote", "--get-url", "origin"],
-                                            output: .string(limit: 4096)).standardOutput else {
-            throw ValidationError("Could not determine the git remote URL.")
-        }
-
+        let rawURL = try await gitOutput(.name("git"),
+                                         arguments: ["remote", "get-url", "origin"],
+                                         environment: .inherit)
         return try GitHubRepository(remoteURL: rawURL)
+    }
+
+    static func gitReleaseIdentity() async throws -> GitReleaseIdentity {
+        try await gitReleaseIdentity(gitExecutable: .name("git"),
+                                     argumentPrefix: [],
+                                     environment: .inherit,
+                                     ciBranch: ProcessInfo.processInfo.environment["CI_BRANCH"])
+    }
+
+    static func gitReleaseIdentityForTesting(repositoryPath: String,
+                                             ciBranch: String?) async throws -> GitReleaseIdentity {
+        try await gitReleaseIdentity(gitExecutable: .path("/usr/bin/git"),
+                                     argumentPrefix: ["-C", repositoryPath],
+                                     environment: .inherit,
+                                     ciBranch: ciBranch)
     }
 
     static func gitCurrentCommit() async throws -> String {
@@ -266,15 +294,34 @@ struct CI: ParsableCommand {
                              argumentPrefix: ["-C", repositoryPath])
     }
 
-    static func gitPush(branch: String, expectedRemoteCommit: String) async throws {
-        let repository = try await CI.gitRepository()
-        try await authenticatedGitPush(Arguments(gitBranchPushArguments(branch: branch,
-                                                                        expectedRemoteCommit: expectedRemoteCommit,
-                                                                        repository: repository)),
-                                       environment: authenticatedGitEnvironment())
+    static func gitPush(identity: GitReleaseIdentity,
+                        expectedLocalCommit: String,
+                        expectedRemoteCommit: String) async throws {
+        try await gitPushBranch(identity: identity,
+                                expectedLocalCommit: expectedLocalCommit,
+                                expectedRemoteCommit: expectedRemoteCommit,
+                                environment: authenticatedGitEnvironment(),
+                                gitExecutable: .name("git"),
+                                argumentPrefix: [],
+                                ciBranch: ProcessInfo.processInfo.environment["CI_BRANCH"])
+    }
+
+    static func gitPushBranchForTesting(identity: GitReleaseIdentity,
+                                        expectedLocalCommit: String,
+                                        expectedRemoteCommit: String,
+                                        repositoryPath: String,
+                                        gitExecutablePath: String) async throws {
+        try await gitPushBranch(identity: identity,
+                                expectedLocalCommit: expectedLocalCommit,
+                                expectedRemoteCommit: expectedRemoteCommit,
+                                environment: .inherit,
+                                gitExecutable: .name(gitExecutablePath),
+                                argumentPrefix: ["-C", repositoryPath],
+                                ciBranch: identity.branch)
     }
 
     static func gitBranchPushArguments(branch: String,
+                                       expectedLocalCommit: String,
                                        expectedRemoteCommit: String,
                                        repository: GitHubRepository) -> [String] {
         let branchReference = "refs/heads/\(branch)"
@@ -282,7 +329,7 @@ struct CI: ParsableCommand {
             "push",
             "--force-with-lease=\(branchReference):\(expectedRemoteCommit)",
             repository.httpsURL.absoluteString,
-            "HEAD:\(branchReference)"
+            "\(expectedLocalCommit):\(branchReference)"
         ]
     }
 
@@ -299,12 +346,73 @@ struct CI: ParsableCommand {
         ])
     }
 
-    private static func authenticatedGitPush(_ arguments: Arguments, environment: Environment) async throws {
-        do {
-            try await CI.run(.name("git"), arguments, environment: environment)
-        } catch {
-            throw ValidationError("Authenticated git push failed.")
+    private static func gitPushBranch(identity: GitReleaseIdentity,
+                                      expectedLocalCommit: String,
+                                      expectedRemoteCommit: String,
+                                      environment: Environment,
+                                      gitExecutable: Executable,
+                                      argumentPrefix: [String],
+                                      ciBranch: String?) async throws {
+        let currentIdentity = try await gitReleaseIdentity(gitExecutable: gitExecutable,
+                                                           argumentPrefix: argumentPrefix,
+                                                           environment: environment,
+                                                           ciBranch: ciBranch)
+        guard currentIdentity == identity else {
+            throw ValidationError("The release repository or checked-out branch changed after preflight.")
         }
+
+        let resolvedLocalCommit = try await gitOutput(gitExecutable,
+                                                      arguments: argumentPrefix + ["rev-parse", "--verify", "\(expectedLocalCommit)^{commit}"],
+                                                      environment: environment)
+        guard resolvedLocalCommit == expectedLocalCommit else {
+            throw ValidationError("The release preparation commit changed before push.")
+        }
+
+        let arguments = argumentPrefix + gitBranchPushArguments(branch: identity.branch,
+                                                                expectedLocalCommit: expectedLocalCommit,
+                                                                expectedRemoteCommit: expectedRemoteCommit,
+                                                                repository: identity.repository)
+        do {
+            try await runGit(gitExecutable,
+                             arguments: arguments,
+                             environment: environment)
+        } catch {
+            throw GitPushError.pushFailed
+        }
+    }
+
+    private static func gitReleaseIdentity(gitExecutable: Executable,
+                                           argumentPrefix: [String],
+                                           environment: Environment,
+                                           ciBranch: String?) async throws -> GitReleaseIdentity {
+        let originURL = try await gitOutput(gitExecutable,
+                                            arguments: argumentPrefix + ["remote", "get-url", "origin"],
+                                            environment: environment)
+        let repository = try GitHubRepository(remoteURL: originURL)
+        let checkedOutBranch = try await gitOutput(gitExecutable,
+                                                   arguments: argumentPrefix + ["symbolic-ref", "--quiet", "--short", "HEAD"],
+                                                   environment: environment)
+        guard !checkedOutBranch.isEmpty else {
+            throw ValidationError("Could not determine the checked-out symbolic branch.")
+        }
+
+        let branch: String
+        if let ciBranch = ciBranch?.trimmingCharacters(in: .whitespacesAndNewlines), !ciBranch.isEmpty {
+            let prefix = "refs/heads/"
+            branch = ciBranch.hasPrefix(prefix) ? String(ciBranch.dropFirst(prefix.count)) : ciBranch
+            guard branch == checkedOutBranch else {
+                throw ValidationError("CI_BRANCH does not match the checked-out symbolic branch.")
+            }
+        } else {
+            branch = checkedOutBranch
+        }
+
+        try await runGit(gitExecutable,
+                         arguments: argumentPrefix + ["check-ref-format", "--branch", branch],
+                         environment: environment)
+        return GitReleaseIdentity(repository: repository,
+                                  originURL: originURL,
+                                  branch: branch)
     }
 
     private static func gitPushTag(tagName: String,
@@ -472,26 +580,5 @@ struct CI: ParsableCommand {
             throw ValidationError("Git returned no output.")
         }
         return output.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    static func gitCurrentBranchName() async throws -> String {
-        let branchName: String
-        if let cloudBranch = ProcessInfo.processInfo.environment["CI_BRANCH"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !cloudBranch.isEmpty {
-            let prefix = "refs/heads/"
-            branchName = cloudBranch.hasPrefix(prefix) ? String(cloudBranch.dropFirst(prefix.count)) : cloudBranch
-        } else {
-            guard let currentBranch = try await CI.run(.name("git"),
-                                                       ["symbolic-ref", "--quiet", "--short", "HEAD"],
-                                                       output: .string(limit: 4096)).standardOutput?.trimmingCharacters(in: .whitespacesAndNewlines),
-                !currentBranch.isEmpty else {
-                throw ValidationError("Could not determine the branch to push.")
-            }
-            branchName = currentBranch
-        }
-
-        try await CI.run(.name("git"), ["check-ref-format", "--branch", branchName])
-        return branchName
     }
 }

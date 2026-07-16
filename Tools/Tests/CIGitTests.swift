@@ -12,16 +12,67 @@ final class CIGitTests: XCTestCase {
 
     func testBuildsBranchPushWithAnExplicitExpectedCommitLease() throws {
         let archivedCommit = String(repeating: "a", count: 40)
+        let preparedCommit = String(repeating: "b", count: 40)
         let repository = try GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git")
 
         XCTAssertEqual(CI.gitBranchPushArguments(branch: "release/ios",
+                                                 expectedLocalCommit: preparedCommit,
                                                  expectedRemoteCommit: archivedCommit,
                                                  repository: repository), [
                 "push",
                 "--force-with-lease=refs/heads/release/ios:\(archivedCommit)",
                 "https://github.com/acme/junchat-ios.git",
-                "HEAD:refs/heads/release/ios"
+                "\(preparedCommit):refs/heads/release/ios"
             ])
+    }
+
+    func testReleaseIdentityRejectsCIEnvironmentAndCheckoutBranchMismatch() async throws {
+        let fixture = try await LocalGitFixture.make()
+        defer { fixture.remove() }
+        try await fixture.git(["remote", "add", "origin", "git@github.com:acme/junchat-ios.git"])
+        let checkedOutBranch = try await fixture.gitOutput(["symbolic-ref", "--short", "HEAD"])
+
+        do {
+            _ = try await CI.gitReleaseIdentityForTesting(repositoryPath: fixture.repository.path,
+                                                          ciBranch: "refs/heads/not-\(checkedOutBranch)")
+            XCTFail("Expected CI_BRANCH and the symbolic checkout branch to match")
+        } catch { }
+    }
+
+    func testPinnedReleasePushRejectsRepositoryMutationBeforeInvokingPush() async throws {
+        let fixture = try await LocalGitFixture.make()
+        defer { fixture.remove() }
+        try await fixture.git(["remote", "add", "origin", "git@github.com:acme/junchat-ios.git"])
+        let checkedOutBranch = try await fixture.gitOutput(["symbolic-ref", "--short", "HEAD"])
+        let identity = try await CI.gitReleaseIdentityForTesting(repositoryPath: fixture.repository.path,
+                                                                 ciBranch: checkedOutBranch)
+        try await fixture.git(["remote", "set-url", "origin", "git@github.com:other/fork.git"])
+
+        let pushMarker = fixture.root.appending(path: "push-invoked")
+        let fakeGit = fixture.root.appending(path: "recording-git")
+        let script = """
+        #!/bin/bash
+        set -euo pipefail
+        for argument in "$@"; do
+            if [[ "$argument" = push ]]; then
+                printf '%s\\n' invoked > "\(pushMarker.path)"
+            fi
+        done
+        exec /usr/bin/git "$@"
+        """
+        try script.write(to: fakeGit, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeGit.path)
+
+        do {
+            try await CI.gitPushBranchForTesting(identity: identity,
+                                                 expectedLocalCommit: fixture.headCommit,
+                                                 expectedRemoteCommit: fixture.baselineCommit,
+                                                 repositoryPath: fixture.repository.path,
+                                                 gitExecutablePath: fakeGit.path)
+            XCTFail("Expected a changed origin to fail before push")
+        } catch { }
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: pushMarker.path))
     }
 
     func testParsesTheExactModeForEachChangedFile() throws {

@@ -6,6 +6,9 @@ validate_xcode_cloud_post_build_environment
 # Move to the project root
 cd ..
 
+# Complete every local release and generated-file check before remote reads or side effects.
+swift run --disable-automatic-resolution -q tools ci validate-junchat-release-preflight
+
 # Xcode Cloud shallow clones the repo. We need full tags and commit history for release notes.
 fetch_unshallow_repository
 ARCHIVED_COMMIT=$(git rev-parse --verify HEAD)

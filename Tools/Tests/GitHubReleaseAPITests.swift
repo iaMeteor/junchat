@@ -603,9 +603,37 @@ final class GitHubReleaseAPITests: XCTestCase {
                                                                   token: "secret")
 
         XCTAssertTrue(isPrepared)
-        XCTAssertEqual(stub.requests.count, 11)
+        XCTAssertEqual(stub.requests.count, 12)
         XCTAssertTrue(try XCTUnwrap(stub.requests.first?.url?.absoluteString).contains("heads/release/ios"))
-        XCTAssertTrue(stub.requests.suffix(2).allSatisfy { $0.url?.path.contains("/git/blobs/") == true })
+        XCTAssertTrue(stub.requests.dropLast().suffix(2).allSatisfy { $0.url?.path.contains("/git/blobs/") == true })
+        XCTAssertEqual(stub.requests.last?.url?.path,
+                       "/repos/acme/junchat-ios/git/ref/heads/release/ios")
+    }
+
+    func testRejectsAnAlreadyPushedPreparationWhenTheBranchMovesDuringVerification() async throws {
+        let fixture = try RemotePreparationBlobFixture()
+        var responses = fixture.responses()
+        let branchRoute = CacheAwareGitHubHTTPStub.Route.get("/repos/acme/junchat-ios/git/ref/heads/release/ios")
+        responses[branchRoute] = [
+            .json(200, referenceRecord(commit: fixture.preparationCommit)),
+            .json(200, referenceRecord(commit: String(repeating: "c", count: 40)))
+        ]
+        let stub = CacheAwareGitHubHTTPStub(responsesByRoute: responses)
+        let api = GitHubReleaseAPI(urlSession: stub)
+
+        do {
+            _ = try await api.isPreparationAlreadyPushed(branch: "release/ios",
+                                                         releaseVersion: fixture.preparation.releaseVersion,
+                                                         releaseCommit: fixture.releaseCommit,
+                                                         generatedNotes: fixture.generatedNotes,
+                                                         repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
+                                                         token: "secret")
+            XCTFail("Expected a moving preparation branch to fail closed")
+        } catch GitHubReleaseAPI.APIError.incompatibleExistingPreparation { } catch {
+            XCTFail("Expected incompatible preparation, got \(error)")
+        }
+
+        XCTAssertEqual(stub.requests.filter { $0.url?.path == branchRoute.path }.count, 2)
     }
 
     func testVerifiesAnXcodeProjectLargerThanOneMiBThroughCommitBoundGitBlobs() async throws {
@@ -875,6 +903,7 @@ private struct RemotePreparationBlobFixture {
         let releaseTree = String(repeating: "7", count: 40)
         var responses: [CacheAwareGitHubHTTPStub.Route: [GitHubHTTPStub.Response]] = [
             .get("/repos/acme/junchat-ios/git/ref/heads/release/ios"): [
+                .json(200, referenceRecord(commit: preparationCommit)),
                 .json(200, referenceRecord(commit: preparationCommit))
             ],
             .get("/repos/acme/junchat-ios/commits/\(preparationCommit)"): [

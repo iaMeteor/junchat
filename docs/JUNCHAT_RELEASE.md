@@ -36,16 +36,16 @@ Before starting an archive:
 ```sh
 swift test
 swiftformat Tools Package.swift --lint
-xcodegen
-git diff --exit-code -- ElementX.xcodeproj ElementX/SupportingFiles/Info.plist NSE/SupportingFiles/Info.plist ShareExtension/SupportingFiles/Info.plist
+swift run --disable-automatic-resolution -q tools ci validate-junchat-release-preflight
 ```
 
 Use the repository's existing Xcode build and test schemes for the release
 candidate. Do not set `JUNCHAT_SKIP_SWIFTLINT=1` as a normal release path.
 The Release Hygiene pull-request workflow watches `project.yml`, `app.yml`, all
 `**/SupportingFiles/target.yml` files, variant specs, and generated release
-metadata. Its tested XcodeGen gate rejects unstaged or staged tracked changes
-and any untracked generated files.
+metadata. Its tested XcodeGen gate rejects unstaged or staged tracked changes,
+all ordinary untracked files, and ignored untracked drift inside the generated
+Xcode project and Info.plist paths. Unrelated ignored build output is excluded.
 
 ## Publication
 
@@ -66,10 +66,12 @@ values `CI=TRUE`, `CI_XCODE_CLOUD=TRUE`, `CI_WORKFLOW=Release`, and
 other workflows or actions, alternate boolean values, and missing values fail
 closed. `GITHUB_TOKEN` is checked only after this environment gate.
 The post-xcodebuild shell entry applies the same official Xcode Cloud archive
-identity before `git fetch`, GitHub release lookup, dSYM upload, or any Swift
-command. It accepts only the existing `Release` and `Nightly` archive workflows;
-unknown or missing workflow identity fails without running a command. The
-Swift `release-to-github` gate still independently requires `Release`.
+identity, then runs the complete local-only release/XcodeGen preflight before
+`git fetch`, GitHub release lookup, dSYM upload, or any remote-capable command.
+It accepts only the existing `Release` and `Nightly` archive workflows; unknown
+or missing workflow identity fails without running a command. The Swift
+`release-to-github` gate still independently requires `Release` and repeats the
+local preflight as defense in depth.
 
 If a run fails after draft creation, a clean CI retry lists authenticated
 releases and reuses only the same draft, non-prerelease tag and name after
@@ -82,10 +84,16 @@ before making local changes. It accepts an already-pushed preparation only when
 it is the archived commit's sole child, carries the exact validated marker,
 modifies exactly the three expected regular-file paths with mode `100644`, and
 reproduces the next version and changelog from the archived parent. Any
-unrelated remote advancement fails closed. The branch update names the captured
-branch explicitly and leases it to the archived SHA, so deletion, rewind, or
-replacement fails closed. A concurrent push failure performs the same
-validation before treating the operation as complete.
+unrelated remote advancement fails closed. Acceptance requires an immediate
+final reread of the mutable branch to return the same fully verified preparation
+commit. The branch update captures `origin`, its GitHub owner/repository, and the
+checked-out symbolic branch during preflight; `CI_BRANCH` must identify that
+same branch. Immediately before push, the command rejects changed repository or
+checkout identity, then pushes the exact preparation commit SHA to the captured
+repository/ref with a lease on the archived SHA. It never selects a destination
+by rereading a changed `origin` or a source through mutable `HEAD`. A concurrent
+push failure performs the same stable remote validation before treating the
+operation as complete.
 
 Draft creation or reuse captures the GitHub release ID, exact body, name, tag,
 target commitish, and peeled tag commit. Immediately before the branch push,

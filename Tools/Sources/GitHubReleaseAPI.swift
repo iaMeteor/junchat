@@ -276,6 +276,11 @@ struct GitHubReleaseAPI {
         guard preparedXcodeProject == expectedXcodeProject else {
             throw APIError.incompatibleExistingPreparation
         }
+        guard try await remoteBranchCommit(branch: branch,
+                                           repository: repository,
+                                           token: token) == remoteCommit else {
+            throw APIError.incompatibleExistingPreparation
+        }
         return true
     }
 

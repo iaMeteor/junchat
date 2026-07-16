@@ -41,4 +41,60 @@ enum JunchatReleasePreflight {
         let remoteResult = try await remoteMutation(preparation)
         return (preparation, remoteResult)
     }
+
+    static func validateCurrentRepository() async throws {
+        let projectDirectory = URL.projectDirectory
+        let xcodeGenGate = projectDirectory.appending(path: "ci_scripts/verify_xcodegen_is_current.sh")
+        try await CI.run(.path("/bin/bash"), [xcodeGenGate.path])
+        try await JunchatReleasePreparation.validateCleanRepositoryStatus(CI.gitRepositoryStatus())
+
+        let projectYAML = try String(contentsOf: projectDirectory.appending(path: JunchatReleasePreparation.projectYAMLPath),
+                                     encoding: .utf8)
+        let changelog = try String(contentsOf: projectDirectory.appending(path: JunchatReleasePreparation.changelogPath),
+                                   encoding: .utf8)
+        let xcodeProject = try String(contentsOf: projectDirectory.appending(path: JunchatReleasePreparation.xcodeProjectPath),
+                                      encoding: .utf8)
+        let releaseDate = Date().formatted(.iso8601.year().month().day())
+
+        _ = try await prepareBeforeRemoteMutation(projectYAML: projectYAML,
+                                                  changelog: changelog,
+                                                  xcodeProject: xcodeProject,
+                                                  releaseDate: releaseDate,
+                                                  generateXcodeProject: generateXcodeProject) { _ in () }
+        try await JunchatReleasePreparation.validateCleanRepositoryStatus(CI.gitRepositoryStatus())
+    }
+
+    static func generateXcodeProject(updatedProjectYAML: String) async throws -> String {
+        let projectDirectory = URL.projectDirectory
+        let projectURL = projectDirectory.appending(path: JunchatReleasePreparation.projectYAMLPath)
+        let xcodeProjectURL = projectDirectory.appending(path: JunchatReleasePreparation.xcodeProjectPath)
+        let projectSnapshot = try JunchatReleaseFile.Snapshot(url: projectURL)
+        let xcodeProjectSnapshot = try JunchatReleaseFile.Snapshot(url: xcodeProjectURL)
+
+        let generationResult: Result<String, Swift.Error>
+        do {
+            try JunchatReleaseFile.write(updatedProjectYAML, to: projectURL)
+            try await CI.run(.name("xcodegen"))
+            let generatedXcodeProject = try String(contentsOf: xcodeProjectURL, encoding: .utf8)
+            generationResult = .success(generatedXcodeProject)
+        } catch {
+            generationResult = .failure(error)
+        }
+
+        var restorationError: Swift.Error?
+        do {
+            try xcodeProjectSnapshot.restore()
+        } catch {
+            restorationError = error
+        }
+        do {
+            try projectSnapshot.restore()
+        } catch {
+            restorationError = restorationError ?? error
+        }
+        if let restorationError {
+            throw restorationError
+        }
+        return try generationResult.get()
+    }
 }

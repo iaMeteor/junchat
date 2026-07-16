@@ -19,14 +19,21 @@ case "$XCODEGEN_TEST_MODE" in
     clean)
         ;;
     tracked)
-        printf '%s\n' changed > generated-project.pbxproj
+        printf '%s\n' changed > ElementX.xcodeproj/project.pbxproj
         ;;
     staged)
-        printf '%s\n' changed > generated-project.pbxproj
-        git add generated-project.pbxproj
+        printf '%s\n' changed > ElementX.xcodeproj/project.pbxproj
+        git add ElementX.xcodeproj/project.pbxproj
         ;;
     untracked)
         printf '%s\n' generated > newly-generated.pbxproj
+        ;;
+    ignored-generated)
+        printf '%s\n' generated > ElementX.xcodeproj/ignored-generated.pbxproj
+        ;;
+    unrelated-ignored)
+        mkdir -p build
+        printf '%s\n' cache > build/unrelated-output
         ;;
     *)
         printf 'Unexpected XCODEGEN_TEST_MODE: %s\n' "$XCODEGEN_TEST_MODE" >&2
@@ -41,8 +48,13 @@ create_repository() {
     local repository="$TEST_ROOT/$scenario"
 
     git init -q "$repository"
-    printf '%s\n' current > "$repository/generated-project.pbxproj"
-    git -C "$repository" add generated-project.pbxproj
+    mkdir -p "$repository/ElementX.xcodeproj"
+    printf '%s\n' current > "$repository/ElementX.xcodeproj/project.pbxproj"
+    cat > "$repository/.gitignore" <<'EOF'
+ElementX.xcodeproj/ignored-generated.pbxproj
+build/
+EOF
+    git -C "$repository" add .gitignore ElementX.xcodeproj/project.pbxproj
     git -C "$repository" -c user.name='Release Test' -c user.email=release-test@example.com \
         commit -qm 'Add generated project'
     printf '%s\n' "$repository"
@@ -54,7 +66,7 @@ CLEAN_REPOSITORY=$(create_repository clean)
     PATH="$FAKE_BIN:$PATH" XCODEGEN_TEST_MODE=clean bash "$GATE_SCRIPT"
 )
 
-for mode in tracked staged untracked; do
+for mode in tracked staged untracked ignored-generated; do
     SCENARIO_REPOSITORY=$(create_repository "$mode")
     if (
         cd "$SCENARIO_REPOSITORY"
@@ -64,3 +76,9 @@ for mode in tracked staged untracked; do
         exit 92
     fi
 done
+
+UNRELATED_IGNORED_REPOSITORY=$(create_repository unrelated-ignored)
+(
+    cd "$UNRELATED_IGNORED_REPOSITORY"
+    PATH="$FAKE_BIN:$PATH" XCODEGEN_TEST_MODE=unrelated-ignored bash "$GATE_SCRIPT"
+)

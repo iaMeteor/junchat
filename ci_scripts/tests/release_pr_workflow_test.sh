@@ -19,6 +19,18 @@ grep -Fq 'XcodeCloudReleaseEnvironment.perform(environment: ProcessInfo.processI
     "$REPOSITORY_ROOT/Tools/Sources/Commands/CI/ReleaseToGithub.swift"
 grep -Fq 'pushAfterRevalidatingDraft' \
     "$REPOSITORY_ROOT/Tools/Sources/Commands/CI/ReleaseToGithub.swift"
+grep -Fq 'JunchatReleasePreflight.validateCurrentRepository()' \
+    "$REPOSITORY_ROOT/Tools/Sources/Commands/CI/ReleaseToGithub.swift"
+
+POST_BUILD_SCRIPT="$REPOSITORY_ROOT/ci_scripts/ci_post_xcodebuild.sh"
+LOCAL_PREFLIGHT_LINE=$(grep -nF 'swift run --disable-automatic-resolution -q tools ci validate-junchat-release-preflight' "$POST_BUILD_SCRIPT" | cut -d: -f1)
+FETCH_LINE=$(grep -nF 'fetch_unshallow_repository' "$POST_BUILD_SCRIPT" | cut -d: -f1)
+if [[ -z "$LOCAL_PREFLIGHT_LINE" || -z "$FETCH_LINE" || "$LOCAL_PREFLIGHT_LINE" -ge "$FETCH_LINE" ]]; then
+    printf '%s\n' 'The complete local release preflight must run before the first remote read.' >&2
+    exit 100
+fi
+grep -Fq 'ci_scripts/verify_xcodegen_is_current.sh' \
+    "$REPOSITORY_ROOT/Tools/Sources/JunchatReleasePreflight.swift"
 
 for release_metadata_path in \
     'project.yml' \
@@ -58,6 +70,7 @@ XCODEGEN_GATE="$REPOSITORY_ROOT/ci_scripts/verify_xcodegen_is_current.sh"
 grep -Fq 'xcodegen' "$XCODEGEN_GATE"
 grep -Fq 'git diff --exit-code --' "$XCODEGEN_GATE"
 grep -Fq 'git ls-files --others --exclude-standard' "$XCODEGEN_GATE"
+grep -Fq "IGNORED_GENERATED_FILES=\$(git ls-files --others --ignored --exclude-standard --" "$XCODEGEN_GATE"
 
 if grep -Eq 'release-to-github|upload-dsyms|fastlane|GITHUB_TOKEN|secrets\.' "$WORKFLOW"; then
     printf '%s\n' 'Release hygiene PR checks must not invoke publication, signing, or provider credentials.' >&2

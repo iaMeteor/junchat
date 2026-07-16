@@ -17,6 +17,7 @@ BASELINE_SHA_MARKER="$TEST_ROOT/baseline-sha-captured"
 NOTES_RANGE_MARKER="$TEST_ROOT/notes-range-validated"
 VERSION_COMMAND_MARKER="$TEST_ROOT/version-command-ran"
 PUBLISHED_RELEASE_SNAPSHOT_MARKER="$TEST_ROOT/published-release-snapshot-captured"
+LOCAL_PREFLIGHT_MARKER="$TEST_ROOT/local-preflight-ran"
 ARCHIVED_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 PREVIOUS_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 REPOSITORY_URL=git@github.com:acme/junchat-ios.git
@@ -80,6 +81,14 @@ cat > "$FAKE_BIN/swift" <<'EOF'
 set -euo pipefail
 
 printf 'swift %s\n' "$*" >> "$ENTRY_COMMAND_LOG"
+
+if [[ "$*" == 'run --disable-automatic-resolution -q tools ci validate-junchat-release-preflight' ]]; then
+    printf '%s\n' captured > "$LOCAL_PREFLIGHT_MARKER"
+    if [[ "${LOCAL_PREFLIGHT_FAIL:-0}" = 1 ]]; then
+        exit 92
+    fi
+    exit 0
+fi
 
 if [[ "$*" == 'run -q tools ci current-release-version' ]]; then
     printf '%s\n' '1.8.2'
@@ -153,9 +162,37 @@ assert_invalid_identity_has_no_commands wrong-workflow \
 
 rm -f "$ENTRY_COMMAND_LOG"
 
+if (
+    cd "$FIXTURE_ROOT/ci_scripts"
+    export ARCHIVED_SHA ARCHIVED_SHA_MARKER BASELINE_SHA_MARKER COMMAND_LOG ENTRY_COMMAND_LOG FIXTURE_ROOT GIT_LOG_ARGUMENTS LOCAL_PREFLIGHT_MARKER NOTES_RANGE_MARKER PREVIOUS_SHA PUBLISHED_RELEASE_SNAPSHOT_MARKER REPOSITORY_URL VERSION_COMMAND_MARKER
+    PATH="$FAKE_BIN:$PATH" \
+        CI=TRUE \
+        CI_ARCHIVE_PATH="$TEST_ROOT/archive" \
+        CI_APP_STORE_SIGNED_APP_PATH="$FIXTURE_ROOT/signed-app" \
+        CI_WORKFLOW_ID=release-workflow-id \
+        CI_WORKFLOW=Release \
+        CI_XCODEBUILD_ACTION=archive \
+        CI_XCODE_CLOUD=TRUE \
+        LOCAL_PREFLIGHT_FAIL=1 \
+        bash ci_post_xcodebuild.sh
+); then
+    printf '%s\n' 'A Release workflow continued after local preflight failed.' >&2
+    exit 97
+fi
+test -f "$LOCAL_PREFLIGHT_MARKER"
+test "$(wc -l < "$ENTRY_COMMAND_LOG" | tr -d '[:space:]')" = 1
+test "$(sed -n '1p' "$ENTRY_COMMAND_LOG")" = 'swift run --disable-automatic-resolution -q tools ci validate-junchat-release-preflight'
+if grep -Eq '^git fetch|published-junchat-release-tags|upload-dsyms|release-to-github|^sentry-cli ' "$ENTRY_COMMAND_LOG"; then
+    printf '%s\n' 'Local preflight failure allowed a remote read or side effect:' >&2
+    cat "$ENTRY_COMMAND_LOG" >&2
+    exit 98
+fi
+
+rm -f "$ENTRY_COMMAND_LOG" "$LOCAL_PREFLIGHT_MARKER"
+
 (
     cd "$FIXTURE_ROOT/ci_scripts"
-    export ARCHIVED_SHA ARCHIVED_SHA_MARKER BASELINE_SHA_MARKER COMMAND_LOG ENTRY_COMMAND_LOG FIXTURE_ROOT GIT_LOG_ARGUMENTS NOTES_RANGE_MARKER PREVIOUS_SHA PUBLISHED_RELEASE_SNAPSHOT_MARKER REPOSITORY_URL VERSION_COMMAND_MARKER
+    export ARCHIVED_SHA ARCHIVED_SHA_MARKER BASELINE_SHA_MARKER COMMAND_LOG ENTRY_COMMAND_LOG FIXTURE_ROOT GIT_LOG_ARGUMENTS LOCAL_PREFLIGHT_MARKER NOTES_RANGE_MARKER PREVIOUS_SHA PUBLISHED_RELEASE_SNAPSHOT_MARKER REPOSITORY_URL VERSION_COMMAND_MARKER
     PATH="$FAKE_BIN:$PATH" \
         CI=TRUE \
         CI_ARCHIVE_PATH="$TEST_ROOT/archive" \
@@ -168,6 +205,8 @@ rm -f "$ENTRY_COMMAND_LOG"
 )
 
 test -f "$FIXTURE_ROOT/TestFlight/WhatToTest.en-US.txt"
+test -f "$LOCAL_PREFLIGHT_MARKER"
+test "$(sed -n '1p' "$ENTRY_COMMAND_LOG")" = 'swift run --disable-automatic-resolution -q tools ci validate-junchat-release-preflight'
 test -f "$VERSION_COMMAND_MARKER"
 test -f "$PUBLISHED_RELEASE_SNAPSHOT_MARKER"
 test -f "$BASELINE_SHA_MARKER"
@@ -179,7 +218,7 @@ test "$(sed -n '3p' "$GIT_LOG_ARGUMENTS")" = "$PREVIOUS_SHA..$ARCHIVED_SHA"
 rm -f "$COMMAND_LOG" "$FIXTURE_ROOT/TestFlight/WhatToTest.en-US.txt"
 if (
     cd "$FIXTURE_ROOT/ci_scripts"
-    export ARCHIVED_SHA ARCHIVED_SHA_MARKER BASELINE_SHA_MARKER COMMAND_LOG ENTRY_COMMAND_LOG FIXTURE_ROOT GIT_LOG_ARGUMENTS NOTES_RANGE_MARKER PREVIOUS_SHA PUBLISHED_RELEASE_SNAPSHOT_MARKER REPOSITORY_URL VERSION_COMMAND_MARKER
+    export ARCHIVED_SHA ARCHIVED_SHA_MARKER BASELINE_SHA_MARKER COMMAND_LOG ENTRY_COMMAND_LOG FIXTURE_ROOT GIT_LOG_ARGUMENTS LOCAL_PREFLIGHT_MARKER NOTES_RANGE_MARKER PREVIOUS_SHA PUBLISHED_RELEASE_SNAPSHOT_MARKER REPOSITORY_URL VERSION_COMMAND_MARKER
     PATH="$FAKE_BIN:$PATH" \
         CI=TRUE \
         CI_ARCHIVE_PATH="$TEST_ROOT/archive" \
