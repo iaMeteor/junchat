@@ -46,6 +46,7 @@ struct CI: ParsableCommand {
                                                         ConfigureNightly.self,
                                                         ConfigureProduction.self,
                                                         ValidateJunchatReleasePreflight.self,
+                                                        ValidateJunchatReleaseArtifactBinding.self,
                                                         CurrentReleaseVersion.self,
                                                         PublishedJunchatReleaseTags.self,
                                                         TagNightly.self,
@@ -219,28 +220,40 @@ struct CI: ParsableCommand {
     }
 
     static func gitCurrentCommitMessage() async throws -> String {
+        try await gitCommitMessage(commit: "HEAD")
+    }
+
+    static func gitCommitMessage(commit: String) async throws -> String {
         guard let message = try await CI.run(.name("git"),
-                                             ["show", "-s", "--format=%B", "HEAD"],
+                                             ["show", "-s", "--format=%B", commit],
                                              output: .string(limit: 65536)).standardOutput else {
-            throw ValidationError("Could not determine the current commit message.")
+            throw ValidationError("Could not determine the release commit message.")
         }
         return message
     }
 
     static func gitCurrentCommitParents() async throws -> [String] {
+        try await gitCommitParents(commit: "HEAD")
+    }
+
+    static func gitCommitParents(commit: String) async throws -> [String] {
         guard let output = try await CI.run(.name("git"),
-                                            ["show", "-s", "--format=%P", "HEAD"],
+                                            ["show", "-s", "--format=%P", commit],
                                             output: .string(limit: 4096)).standardOutput else {
-            throw ValidationError("Could not determine the current commit parents.")
+            throw ValidationError("Could not determine the release commit parents.")
         }
         return output.split(whereSeparator: \.isWhitespace).map(String.init)
     }
 
     static func gitCurrentCommitChangedFiles() async throws -> [JunchatReleasePreparation.ChangedFile] {
+        try await gitCommitChangedFiles(commit: "HEAD")
+    }
+
+    static func gitCommitChangedFiles(commit: String) async throws -> [JunchatReleasePreparation.ChangedFile] {
         guard let output = try await CI.run(.name("git"),
-                                            ["diff-tree", "--no-commit-id", "--raw", "--no-renames", "-r", "-z", "HEAD"],
+                                            ["diff-tree", "--no-commit-id", "--raw", "--no-renames", "-r", "-z", commit],
                                             output: .string(limit: 1_048_576)).standardOutput else {
-            throw ValidationError("Could not determine the current commit files and modes.")
+            throw ValidationError("Could not determine the release commit files and modes.")
         }
         return try gitChangedFiles(fromRawDiff: output)
     }
@@ -385,6 +398,11 @@ struct CI: ParsableCommand {
         guard currentIdentity == identity else {
             throw ValidationError("The release repository or checked-out branch changed after preflight.")
         }
+        try await validateLocalBranchTip(identity: identity,
+                                         expectedCommit: expectedLocalCommit,
+                                         gitExecutable: gitExecutable,
+                                         argumentPrefix: argumentPrefix,
+                                         environment: localEnvironment)
 
         let resolvedLocalCommit = try await gitOutput(gitExecutable,
                                                       arguments: argumentPrefix + ["rev-parse", "--verify", "\(expectedLocalCommit)^{commit}"],
@@ -412,12 +430,31 @@ struct CI: ParsableCommand {
         ]
         do {
             try await validateGitPushDestination(sandbox)
+            try await validateLocalBranchTip(identity: identity,
+                                             expectedCommit: expectedLocalCommit,
+                                             gitExecutable: gitExecutable,
+                                             argumentPrefix: argumentPrefix,
+                                             environment: localEnvironment)
             try await runGit(sandbox.gitExecutable,
                              arguments: sandbox.arguments(arguments),
                              environment: sandbox.environment)
             try await validateGitPushDestination(sandbox)
         } catch {
             throw GitPushError.pushFailed
+        }
+    }
+
+    private static func validateLocalBranchTip(identity: GitReleaseIdentity,
+                                               expectedCommit: String,
+                                               gitExecutable: Executable,
+                                               argumentPrefix: [String],
+                                               environment: Environment) async throws {
+        let branchReference = "refs/heads/\(identity.branch)"
+        let branchCommit = try await gitOutput(gitExecutable,
+                                               arguments: argumentPrefix + ["rev-parse", "--verify", "\(branchReference)^{commit}"],
+                                               environment: environment)
+        guard branchCommit == expectedCommit else {
+            throw ValidationError("The validated release preparation branch tip changed before push.")
         }
     }
 

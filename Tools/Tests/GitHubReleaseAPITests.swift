@@ -306,24 +306,104 @@ final class GitHubReleaseAPITests: XCTestCase {
         let stub = GitHubHTTPStub(responses: [
             .json(200, []),
             .json(404, ["message": "Not Found"]),
+            .json(200, referenceRecord(commit: targetCommit)),
             .json(201, releaseRecord(targetCommit: targetCommit)),
             .json(200, referenceRecord(commit: targetCommit))
-        ] + capturedDraftRevalidationResponses(targetCommit: targetCommit))
+        ] + capturedDraftRevalidationResponses(targetCommit: targetCommit) + [
+            .json(200, referenceRecord(commit: targetCommit))
+        ])
         let api = GitHubReleaseAPI(urlSession: stub)
 
         let body = try await api.createOrReuseDraft(version: "1.8.2",
                                                     targetCommit: targetCommit,
                                                     repository: GitHubRepository(remoteURL: "https://github.com/acme/junchat-ios.git"),
-                                                    token: "secret")
+                                                    token: "secret",
+                                                    creationAuthorization: draftCreationAuthorization(targetCommit))
 
         XCTAssertEqual(body, "Generated notes")
         let requests = stub.requests
-        XCTAssertEqual(requests.map(\.httpMethod), ["GET", "GET", "POST", "GET", "GET", "GET"])
-        let payload = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(requests[2].httpBody)) as? [String: Any])
+        XCTAssertEqual(requests.map(\.httpMethod), ["GET", "GET", "GET", "POST", "GET", "GET", "GET", "GET"])
+        let payload = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(requests[3].httpBody)) as? [String: Any])
         XCTAssertEqual(payload["draft"] as? Bool, true)
         XCTAssertEqual(payload["target_commitish"] as? String, targetCommit)
-        let tagRequest = try XCTUnwrap(requests.last)
+        let tagRequest = requests[6]
         XCTAssertEqual(tagRequest.url?.path, "/repos/acme/junchat-ios/git/ref/tags/release/1.8.2")
+    }
+
+    func testDraftCreationReauthorizesTheExactBranchImmediatelyBeforePost() async throws {
+        let targetCommit = String(repeating: "b", count: 40)
+        let stub = GitHubHTTPStub(responses: [
+            .json(200, []),
+            .json(404, ["message": "Not Found"]),
+            .json(200, referenceRecord(commit: targetCommit)),
+            .json(201, releaseRecord(targetCommit: targetCommit)),
+            .json(200, referenceRecord(commit: targetCommit))
+        ] + capturedDraftRevalidationResponses(targetCommit: targetCommit) + [
+            .json(200, referenceRecord(commit: targetCommit))
+        ])
+        let api = GitHubReleaseAPI(urlSession: stub)
+
+        _ = try await api.createOrReuseDraftSnapshot(version: "1.8.2",
+                                                     targetCommit: targetCommit,
+                                                     repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
+                                                     token: "secret",
+                                                     creationAuthorization: draftCreationAuthorization(targetCommit))
+
+        XCTAssertEqual(stub.requests.map(\.httpMethod), ["GET", "GET", "GET", "POST", "GET", "GET", "GET", "GET"])
+        XCTAssertEqual(stub.requests[2].url?.path, "/repos/acme/junchat-ios/git/ref/heads/release/ios")
+        XCTAssertEqual(stub.requests[3].url?.path, "/repos/acme/junchat-ios/releases")
+    }
+
+    func testBranchAdvanceImmediatelyBeforeDraftPostPreventsCreation() async throws {
+        let targetCommit = String(repeating: "b", count: 40)
+        let advancedCommit = String(repeating: "c", count: 40)
+        let stub = GitHubHTTPStub(responses: [
+            .json(200, []),
+            .json(404, ["message": "Not Found"]),
+            .json(200, referenceRecord(commit: advancedCommit))
+        ])
+        let api = GitHubReleaseAPI(urlSession: stub)
+
+        do {
+            _ = try await api.createOrReuseDraftSnapshot(version: "1.8.2",
+                                                         targetCommit: targetCommit,
+                                                         repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
+                                                         token: "secret",
+                                                         creationAuthorization: draftCreationAuthorization(targetCommit))
+            XCTFail("Expected a branch advance to prevent draft creation")
+        } catch GitHubReleaseAPI.APIError.incompatibleExistingPreparation { } catch {
+            XCTFail("Expected incompatible preparation, got \(error)")
+        }
+
+        XCTAssertFalse(stub.requests.contains { $0.httpMethod == "POST" })
+        XCTAssertEqual(stub.requests.last?.url?.path, "/repos/acme/junchat-ios/git/ref/heads/release/ios")
+    }
+
+    func testConcurrentCreateRecoveryReauthorizesBranchBeforeAcceptingDraft() async throws {
+        let targetCommit = String(repeating: "b", count: 40)
+        let advancedCommit = String(repeating: "c", count: 40)
+        let stub = GitHubHTTPStub(responses: [
+            .json(200, []),
+            .json(404, ["message": "Not Found"]),
+            .json(200, referenceRecord(commit: targetCommit)),
+            .json(422, ["message": "already_exists"]),
+            .json(200, referenceRecord(commit: advancedCommit))
+        ])
+        let api = GitHubReleaseAPI(urlSession: stub)
+
+        do {
+            _ = try await api.createOrReuseDraftSnapshot(version: "1.8.2",
+                                                         targetCommit: targetCommit,
+                                                         repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
+                                                         token: "secret",
+                                                         creationAuthorization: draftCreationAuthorization(targetCommit))
+            XCTFail("Expected 422 recovery to reject an advanced branch")
+        } catch GitHubReleaseAPI.APIError.incompatibleExistingPreparation { } catch {
+            XCTFail("Expected incompatible preparation, got \(error)")
+        }
+
+        XCTAssertEqual(stub.requests.map(\.httpMethod), ["GET", "GET", "GET", "POST", "GET"])
+        XCTAssertEqual(stub.requests.last?.url?.path, "/repos/acme/junchat-ios/git/ref/heads/release/ios")
     }
 
     func testCreatedDraftMutationExitRejectsEveryCapturedReleaseRace() async throws {
@@ -333,6 +413,7 @@ final class GitHubReleaseAPITests: XCTestCase {
             let stub = GitHubHTTPStub(responses: [
                 .json(200, []),
                 .json(404, ["message": "Not Found"]),
+                .json(200, referenceRecord(commit: targetCommit)),
                 .json(201, releaseRecord(targetCommit: targetCommit)),
                 .json(200, referenceRecord(commit: targetCommit))
             ] + defect.responses)
@@ -342,12 +423,13 @@ final class GitHubReleaseAPITests: XCTestCase {
                 _ = try await api.createOrReuseDraft(version: "1.8.2",
                                                      targetCommit: targetCommit,
                                                      repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
-                                                     token: "secret")
+                                                     token: "secret",
+                                                     creationAuthorization: draftCreationAuthorization(targetCommit))
                 XCTFail("Expected created-draft \(defect.name) to fail closed")
             } catch { }
 
-            XCTAssertEqual(stub.requests.count, 4 + defect.responses.count)
-            XCTAssertEqual(stub.requests.dropFirst(4).first?.url?.path, "/repos/acme/junchat-ios/releases/42")
+            XCTAssertEqual(stub.requests.count, 5 + defect.responses.count)
+            XCTAssertEqual(stub.requests.dropFirst(5).first?.url?.path, "/repos/acme/junchat-ios/releases/42")
         }
     }
 
@@ -365,6 +447,10 @@ final class GitHubReleaseAPITests: XCTestCase {
             .get("/repos/acme/junchat-ios/releases/42"): [
                 .json(200, releaseRecord(targetCommit: targetCommit))
             ],
+            .get("/repos/acme/junchat-ios/git/ref/heads/release/ios"): [
+                .json(200, referenceRecord(commit: targetCommit)),
+                .json(200, referenceRecord(commit: targetCommit))
+            ],
             .post("/repos/acme/junchat-ios/releases"): [
                 .json(201, releaseRecord(targetCommit: targetCommit))
             ]
@@ -374,10 +460,11 @@ final class GitHubReleaseAPITests: XCTestCase {
         let body = try await api.createOrReuseDraft(version: "1.8.2",
                                                     targetCommit: targetCommit,
                                                     repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
-                                                    token: "secret")
+                                                    token: "secret",
+                                                    creationAuthorization: draftCreationAuthorization(targetCommit))
 
         XCTAssertEqual(body, "Generated notes")
-        XCTAssertEqual(stub.requests.map(\.httpMethod), ["GET", "GET", "POST", "GET", "GET", "GET"])
+        XCTAssertEqual(stub.requests.map(\.httpMethod), ["GET", "GET", "GET", "POST", "GET", "GET", "GET", "GET"])
         XCTAssertTrue(stub.requests.allSatisfy {
             $0.cachePolicy == .reloadIgnoringLocalAndRemoteCacheData
         })
@@ -389,28 +476,34 @@ final class GitHubReleaseAPITests: XCTestCase {
         let stub = GitHubHTTPStub(responses: [
             .json(200, []),
             .json(404, ["message": "Not Found"]),
+            .json(200, referenceRecord(commit: targetCommit)),
             .json(201, releaseRecord(targetCommit: targetCommit)),
             .json(200, referenceRecord(commit: tagObject, type: "tag")),
             .json(200, tagObjectRecord(commit: targetCommit))
         ] + capturedDraftRevalidationResponses(targetCommit: targetCommit,
-                                               tagObject: tagObject))
+                                               tagObject: tagObject) + [
+            .json(200, referenceRecord(commit: targetCommit))
+        ])
         let api = GitHubReleaseAPI(urlSession: stub)
 
         let body = try await api.createOrReuseDraft(version: "1.8.2",
                                                     targetCommit: targetCommit,
                                                     repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
-                                                    token: "secret")
+                                                    token: "secret",
+                                                    creationAuthorization: draftCreationAuthorization(targetCommit))
 
         XCTAssertEqual(body, "Generated notes")
         XCTAssertEqual(stub.requests.map(\.url?.path), [
             "/repos/acme/junchat-ios/releases",
             "/repos/acme/junchat-ios/git/ref/tags/release/1.8.2",
+            "/repos/acme/junchat-ios/git/ref/heads/release/ios",
             "/repos/acme/junchat-ios/releases",
             "/repos/acme/junchat-ios/git/ref/tags/release/1.8.2",
             "/repos/acme/junchat-ios/git/tags/\(tagObject)",
             "/repos/acme/junchat-ios/releases/42",
             "/repos/acme/junchat-ios/git/ref/tags/release/1.8.2",
-            "/repos/acme/junchat-ios/git/tags/\(tagObject)"
+            "/repos/acme/junchat-ios/git/tags/\(tagObject)",
+            "/repos/acme/junchat-ios/git/ref/heads/release/ios"
         ])
     }
 
@@ -430,6 +523,7 @@ final class GitHubReleaseAPITests: XCTestCase {
             let stub = GitHubHTTPStub(responses: [
                 .json(200, []),
                 .json(404, ["message": "Not Found"]),
+                .json(200, referenceRecord(commit: targetCommit)),
                 .json(201, releaseRecord(targetCommit: targetCommit))
             ] + tagResponse)
             let api = GitHubReleaseAPI(urlSession: stub)
@@ -438,10 +532,11 @@ final class GitHubReleaseAPITests: XCTestCase {
                 _ = try await api.createOrReuseDraft(version: "1.8.2",
                                                      targetCommit: targetCommit,
                                                      repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
-                                                     token: "secret")
+                                                     token: "secret",
+                                                     creationAuthorization: draftCreationAuthorization(targetCommit))
                 XCTFail("Expected the created draft's actual tag target to fail closed")
             } catch GitHubReleaseAPI.APIError.incompatibleExistingRelease {
-                XCTAssertEqual(stub.requests.count, 3 + tagResponse.count)
+                XCTAssertEqual(stub.requests.count, 4 + tagResponse.count)
             }
         }
     }
@@ -468,7 +563,8 @@ final class GitHubReleaseAPITests: XCTestCase {
                 _ = try await api.createOrReuseDraft(version: "1.8.2",
                                                      targetCommit: targetCommit,
                                                      repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
-                                                     token: "secret")
+                                                     token: "secret",
+                                                     creationAuthorization: draftCreationAuthorization(targetCommit))
                 XCTFail("Expected a preexisting mismatched tag to fail closed")
             } catch {
                 XCTAssertFalse(stub.requests.contains { $0.httpMethod == "POST" })
@@ -483,17 +579,21 @@ final class GitHubReleaseAPITests: XCTestCase {
             .json(200, []),
             .json(200, referenceRecord(commit: tagObject, type: "tag")),
             .json(200, tagObjectRecord(commit: targetCommit)),
+            .json(200, referenceRecord(commit: targetCommit)),
             .json(201, releaseRecord(targetCommit: targetCommit)),
             .json(200, referenceRecord(commit: targetCommit))
-        ] + capturedDraftRevalidationResponses(targetCommit: targetCommit))
+        ] + capturedDraftRevalidationResponses(targetCommit: targetCommit) + [
+            .json(200, referenceRecord(commit: targetCommit))
+        ])
         let api = GitHubReleaseAPI(urlSession: stub)
 
         _ = try await api.createOrReuseDraft(version: "1.8.2",
                                              targetCommit: targetCommit,
                                              repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
-                                             token: "secret")
+                                             token: "secret",
+                                             creationAuthorization: draftCreationAuthorization(targetCommit))
 
-        XCTAssertEqual(stub.requests.map(\.httpMethod), ["GET", "GET", "GET", "POST", "GET", "GET", "GET"])
+        XCTAssertEqual(stub.requests.map(\.httpMethod), ["GET", "GET", "GET", "GET", "POST", "GET", "GET", "GET", "GET"])
     }
 
     func testRejectsAnUnreadablePreexistingAnnotatedTagBeforeCreatingADraft() async throws {
@@ -510,7 +610,8 @@ final class GitHubReleaseAPITests: XCTestCase {
             _ = try await api.createOrReuseDraft(version: "1.8.2",
                                                  targetCommit: targetCommit,
                                                  repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
-                                                 token: "secret")
+                                                 token: "secret",
+                                                 creationAuthorization: draftCreationAuthorization(targetCommit))
             XCTFail("Expected an unreadable annotated tag to fail closed")
         } catch {
             XCTAssertFalse(stub.requests.contains { $0.httpMethod == "POST" })
@@ -522,6 +623,7 @@ final class GitHubReleaseAPITests: XCTestCase {
         let stub = GitHubHTTPStub(responses: [
             .json(200, []),
             .json(404, ["message": "Not Found"]),
+            .json(200, referenceRecord(commit: targetCommit)),
             .json(201, releaseRecord(targetCommit: targetCommit)),
             .json(404, ["message": "Not Found"])
         ])
@@ -531,10 +633,11 @@ final class GitHubReleaseAPITests: XCTestCase {
             _ = try await api.createOrReuseDraft(version: "1.8.2",
                                                  targetCommit: targetCommit,
                                                  repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
-                                                 token: "secret")
+                                                 token: "secret",
+                                                 creationAuthorization: draftCreationAuthorization(targetCommit))
             XCTFail("Expected a missing post-create tag ref to fail closed")
         } catch GitHubReleaseAPI.APIError.failedRequest(statusCode: 404, message: _) {
-            XCTAssertEqual(stub.requests.count, 4)
+            XCTAssertEqual(stub.requests.count, 5)
         }
     }
 
@@ -547,8 +650,7 @@ final class GitHubReleaseAPITests: XCTestCase {
             _ = try await api.createOrReuseDraft(version: "1.8.2",
                                                  targetCommit: targetCommit,
                                                  repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
-                                                 token: "secret",
-                                                 allowCreation: false)
+                                                 token: "secret")
             XCTFail("Expected validation-only lookup to reject a missing draft")
         } catch {
             XCTAssertEqual(stub.requests.map(\.httpMethod), ["GET"])
@@ -622,19 +724,24 @@ final class GitHubReleaseAPITests: XCTestCase {
         let stub = GitHubHTTPStub(responses: [
             .json(200, []),
             .json(404, ["message": "Not Found"]),
+            .json(200, referenceRecord(commit: targetCommit)),
             .json(422, ["message": "already_exists"]),
+            .json(200, referenceRecord(commit: targetCommit)),
             .json(200, [releaseRecord(targetCommit: targetCommit)]),
             .json(200, referenceRecord(commit: targetCommit))
-        ] + capturedDraftRevalidationResponses(targetCommit: targetCommit))
+        ] + capturedDraftRevalidationResponses(targetCommit: targetCommit) + [
+            .json(200, referenceRecord(commit: targetCommit))
+        ])
         let api = GitHubReleaseAPI(urlSession: stub)
 
         let body = try await api.createOrReuseDraft(version: "1.8.2",
                                                     targetCommit: targetCommit,
                                                     repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
-                                                    token: "secret")
+                                                    token: "secret",
+                                                    creationAuthorization: draftCreationAuthorization(targetCommit))
 
         XCTAssertEqual(body, "Generated notes")
-        XCTAssertEqual(stub.requests.map(\.httpMethod), ["GET", "GET", "POST", "GET", "GET", "GET", "GET"])
+        XCTAssertEqual(stub.requests.map(\.httpMethod), ["GET", "GET", "GET", "POST", "GET", "GET", "GET", "GET", "GET", "GET"])
     }
 
     func testConcurrentCreateRecoveryExitRejectsEveryCapturedReleaseRace() async throws {
@@ -644,7 +751,9 @@ final class GitHubReleaseAPITests: XCTestCase {
             let stub = GitHubHTTPStub(responses: [
                 .json(200, []),
                 .json(404, ["message": "Not Found"]),
+                .json(200, referenceRecord(commit: targetCommit)),
                 .json(422, ["message": "already_exists"]),
+                .json(200, referenceRecord(commit: targetCommit)),
                 .json(200, [releaseRecord(targetCommit: targetCommit)]),
                 .json(200, referenceRecord(commit: targetCommit))
             ] + defect.responses)
@@ -654,12 +763,13 @@ final class GitHubReleaseAPITests: XCTestCase {
                 _ = try await api.createOrReuseDraft(version: "1.8.2",
                                                      targetCommit: targetCommit,
                                                      repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
-                                                     token: "secret")
+                                                     token: "secret",
+                                                     creationAuthorization: draftCreationAuthorization(targetCommit))
                 XCTFail("Expected concurrent-create \(defect.name) to fail closed")
             } catch { }
 
-            XCTAssertEqual(stub.requests.count, 5 + defect.responses.count)
-            XCTAssertEqual(stub.requests.dropFirst(5).first?.url?.path, "/repos/acme/junchat-ios/releases/42")
+            XCTAssertEqual(stub.requests.count, 7 + defect.responses.count)
+            XCTAssertEqual(stub.requests.dropFirst(7).first?.url?.path, "/repos/acme/junchat-ios/releases/42")
         }
     }
 
@@ -678,6 +788,11 @@ final class GitHubReleaseAPITests: XCTestCase {
             .get("/repos/acme/junchat-ios/releases/42"): [
                 .json(200, releaseRecord(targetCommit: targetCommit))
             ],
+            .get("/repos/acme/junchat-ios/git/ref/heads/release/ios"): [
+                .json(200, referenceRecord(commit: targetCommit)),
+                .json(200, referenceRecord(commit: targetCommit)),
+                .json(200, referenceRecord(commit: targetCommit))
+            ],
             .post("/repos/acme/junchat-ios/releases"): [
                 .json(422, ["message": "already_exists"])
             ]
@@ -687,15 +802,18 @@ final class GitHubReleaseAPITests: XCTestCase {
         let body = try await api.createOrReuseDraft(version: "1.8.2",
                                                     targetCommit: targetCommit,
                                                     repository: GitHubRepository(remoteURL: "git@github.com:acme/junchat-ios.git"),
-                                                    token: "secret")
+                                                    token: "secret",
+                                                    creationAuthorization: draftCreationAuthorization(targetCommit))
 
         XCTAssertEqual(body, "Generated notes")
-        XCTAssertEqual(stub.requests.map(\.httpMethod), ["GET", "GET", "POST", "GET", "GET", "GET", "GET"])
+        XCTAssertEqual(stub.requests.map(\.httpMethod), ["GET", "GET", "GET", "POST", "GET", "GET", "GET", "GET", "GET", "GET"])
         XCTAssertTrue(stub.requests.allSatisfy {
             $0.cachePolicy == .reloadIgnoringLocalAndRemoteCacheData
         })
     }
+}
 
+extension GitHubReleaseAPITests {
     func testRepeatedBranchVerificationObservesThePostMutationCommit() async throws {
         let archivedCommit = String(repeating: "a", count: 40)
         let preparedCommit = String(repeating: "b", count: 40)
@@ -1172,6 +1290,10 @@ private struct RemotePreparationBlobFixture {
             .json(502, ["message": "Bad Gateway", "sha": sha])
         }
     }
+}
+
+private func draftCreationAuthorization(_ targetCommit: String) -> GitHubDraftCreationAuthorization {
+    GitHubDraftCreationAuthorization(branch: "release/ios", expectedCommit: targetCommit)
 }
 
 private func gitCommitRecord(sha: String, tree: String) -> [String: Any] {

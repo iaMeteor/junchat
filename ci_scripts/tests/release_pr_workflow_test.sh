@@ -19,7 +19,9 @@ grep -Fq 'XcodeCloudReleaseEnvironment.perform(environment: ProcessInfo.processI
     "$REPOSITORY_ROOT/Tools/Sources/Commands/CI/ReleaseToGithub.swift"
 grep -Fq 'pushAfterRevalidatingDraft' \
     "$REPOSITORY_ROOT/Tools/Sources/Commands/CI/ReleaseToGithub.swift"
-grep -Fq 'JunchatReleasePreflight.validateCurrentRepository()' \
+grep -Fq 'JunchatReleasePreflight.validateCurrentRepositoryFiles()' \
+    "$REPOSITORY_ROOT/Tools/Sources/Commands/CI/ReleaseToGithub.swift"
+grep -Fq 'revalidateReleaseArtifacts(validateProjectMetadata: true)' \
     "$REPOSITORY_ROOT/Tools/Sources/Commands/CI/ReleaseToGithub.swift"
 
 POST_BUILD_SCRIPT="$REPOSITORY_ROOT/ci_scripts/ci_post_xcodebuild.sh"

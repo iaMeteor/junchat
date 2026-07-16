@@ -10,6 +10,12 @@ struct UploadDSYMs: AsyncParsableCommand {
     @Option(help: "The path to the dSYMs directory or file to upload.")
     var dsymPath: String
 
+    @Option(help: "The private validated release artifact binding path.")
+    var artifactBindingPath: String
+
+    @Option(help: "The expected SHA-256 digest of the release artifact binding.")
+    var expectedArtifactBindingDigest: String
+
     @Option(help: "The Sentry organization slug.")
     var orgSlug = "element"
 
@@ -41,6 +47,15 @@ struct UploadDSYMs: AsyncParsableCommand {
         for attempt in 1...maxRetries {
             do {
                 logger.info("\n📡 Uploading dSYMs to Sentry (attempt \(attempt)/\(maxRetries))…\n")
+                let artifacts = try JunchatReleaseArtifacts.revalidateBinding(atPath: artifactBindingPath,
+                                                                              expectedDigest: expectedArtifactBindingDigest)
+                let requestedDSYMsURL = URL(filePath: dsymPath)
+                guard dsymPath == requestedDSYMsURL.path,
+                      dsymPath == requestedDSYMsURL.standardizedFileURL.path,
+                      dsymPath == requestedDSYMsURL.resolvingSymlinksInPath().path,
+                      requestedDSYMsURL == artifacts.dSYMsURL else {
+                    throw ValidationError("The dSYM upload path does not match the validated release artifact binding.")
+                }
                 try await CI.run(.name("sentry-cli"), arguments)
                 logger.info("\n✅ Successfully uploaded dSYMs to Sentry.\n")
                 return

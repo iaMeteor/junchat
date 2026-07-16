@@ -75,6 +75,38 @@ final class CIGitTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: pushMarker.path))
     }
 
+    func testPinnedReleasePushRejectsBranchAdvanceAfterValidationWithoutRemoteMutation() async throws {
+        let fixture = try await LocalGitFixture.make()
+        defer { fixture.remove() }
+        let checkedOutBranch = try await fixture.gitOutput(["symbolic-ref", "--short", "HEAD"])
+        try await fixture.git(["remote", "add", "origin", "git@github.com:acme/junchat-ios.git"])
+        try await fixture.git(["push",
+                               fixture.remote.path,
+                               "\(fixture.baselineCommit):refs/heads/\(checkedOutBranch)"])
+        let identity = try await CI.gitReleaseIdentityForTesting(repositoryPath: fixture.repository.path,
+                                                                 ciBranch: checkedOutBranch)
+        let validatedPreparationCommit = fixture.headCommit
+        let trackedFile = fixture.repository.appending(path: "history.txt")
+        try "later mutable head\n".write(to: trackedFile, atomically: true, encoding: .utf8)
+        try await fixture.git(["commit", "-am", "Advance after validation"])
+        let advancedCommit = try await fixture.gitOutput(["rev-parse", "HEAD"])
+        XCTAssertNotEqual(advancedCommit, validatedPreparationCommit)
+
+        do {
+            try await CI.gitPushBranchForTesting(identity: identity,
+                                                 expectedLocalCommit: validatedPreparationCommit,
+                                                 expectedRemoteCommit: fixture.baselineCommit,
+                                                 remoteURL: fixture.remote.path,
+                                                 repositoryPath: fixture.repository.path,
+                                                 gitExecutablePath: "/usr/bin/git")
+            XCTFail("Expected branch movement after validation to fail before push")
+        } catch { }
+
+        let remoteCommit = try await fixture.referenceCommit(remote: fixture.remote,
+                                                             reference: "refs/heads/\(checkedOutBranch)")
+        XCTAssertEqual(remoteCommit, fixture.baselineCommit)
+    }
+
     func testPinnedReleasePushIgnoresMaliciousGlobalPushInsteadOf() async throws {
         let fixture = try await LocalGitFixture.make()
         defer { fixture.remove() }

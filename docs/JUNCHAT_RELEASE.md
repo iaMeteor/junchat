@@ -36,7 +36,7 @@ Before starting an archive:
 ```sh
 swift test
 swiftformat Tools Package.swift --lint
-swift run --disable-automatic-resolution -q tools ci validate-junchat-release-preflight
+bash ci_scripts/tests/ci_post_xcodebuild_test.sh
 ```
 
 Use the repository's existing Xcode build and test schemes for the release
@@ -66,12 +66,34 @@ values `CI=TRUE`, `CI_XCODE_CLOUD=TRUE`, `CI_WORKFLOW=Release`, and
 other workflows or actions, alternate boolean values, and missing values fail
 closed. `GITHUB_TOKEN` is checked only after this environment gate.
 The post-xcodebuild shell entry applies the same official Xcode Cloud archive
-identity, then runs the complete local-only release/XcodeGen preflight before
-`git fetch`, GitHub release lookup, dSYM upload, or any remote-capable command.
+identity, then runs the complete local-only artifact and release/XcodeGen
+preflight before `git fetch`, GitHub release lookup, dSYM upload, or any
+remote-capable command.
 It accepts only the existing `Release` and `Nightly` archive workflows; unknown
 or missing workflow identity fails without running a command. The Swift
-`release-to-github` gate still independently requires `Release` and repeats the
-local preflight as defense in depth.
+`release-to-github` gate still independently requires `Release`, revalidates the
+bound artifacts, and repeats the repository/XcodeGen preflight as defense in
+depth.
+
+Artifact preflight requires the canonical archive and its exact signed
+`Junchat.app`. It matches archive and app bundle identifier, marketing version,
+and build to `app.yml` and `project.yml`; verifies the app with
+`/usr/bin/codesign --verify --deep --strict`; rejects ad-hoc, missing-team, or
+wrong identifier signature metadata; requires `/usr/bin/otool -hv` to report
+only `EXECUTE` Mach-O slices; and requires `/usr/bin/dwarfdump --uuid` to return
+identical nonempty architecture/UUID sets for the app and dSYM. The preflight
+atomically writes a private binding containing canonical root device/inode
+identities and a sorted SHA-256 inventory of the archive plist, complete app
+tree, and complete dSYMs tree. The shell carries the binding path and expected
+manifest digest into every upload, release, or nightly command, revalidates it
+immediately before each command, and removes its private temporary directory
+through an `EXIT` trap.
+
+The binding closes accidental and ordinary filesystem races, including file
+replacement with identical bytes. It cannot make multiple same-user filesystem
+opens transactional: a process with the same account privileges could still
+alter a file after the final validation open and before a consumer opens it.
+Release runners therefore remain a trusted same-user boundary.
 
 If a run fails after draft creation, a clean CI retry lists authenticated
 releases and reuses only the same draft, non-prerelease tag and name after
@@ -101,6 +123,14 @@ the command reads that release again by ID and requires every captured field,
 draft state, and peeled tag commit to remain unchanged. Editing, publishing, or
 deleting the draft, renaming its tag, or moving either a lightweight or
 annotated tag stops the operation before `git push` can run.
+Draft creation finishes tag checks, revalidates the bound artifacts, and then
+performs a cacheless exact branch-commit GET directly before POST. A 422
+concurrent-create recovery repeats branch authorization before accepting the
+captured draft and performs stable final branch and release rereads. GitHub does
+not provide a transaction spanning that final GET and POST, so a branch can
+still move in the provider-side interval; later tag, draft, and branch
+revalidation detects the resulting incompatible state but cannot undo a draft
+that GitHub already created.
 
 Remote preparation reads are bound to the verified archived and prepared
 commits. For each commit, the command verifies the recursive Git tree identity,
@@ -122,7 +152,10 @@ target, notes, and artifacts before publishing it.
 Release preparation commits use `git -c user.name="Element CI" -c
 user.email="ci@element.io" commit ...`. Release and nightly tooling never write
 the caller's global git configuration; nightly tags are lightweight and need no
-tagger identity.
+tagger identity. Pushes run from a private bare Git directory with system,
+global, local includes, URL rewrites, `pushInsteadOf`, credential helpers, and
+SSH redirection disabled; the configured push destination is reread in that
+same fail-closed environment immediately before and after mutation.
 
 Before upload or GitHub orchestration, the Release workflow reads the current
 marketing version and freezes the highest earlier published stable release's

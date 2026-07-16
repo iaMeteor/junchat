@@ -49,6 +49,11 @@ struct GitHubDraftRelease: Equatable {
     let tagCommit: String
 }
 
+struct GitHubDraftCreationAuthorization: Equatable {
+    let branch: String
+    let expectedCommit: String
+}
+
 struct GitHubReleaseAPI {
     enum APIError: LocalizedError {
         case invalidResponse
@@ -138,19 +143,22 @@ struct GitHubReleaseAPI {
                             targetCommit: String,
                             repository: GitHubRepository,
                             token: String,
-                            allowCreation: Bool = true) async throws -> String {
+                            creationAuthorization: GitHubDraftCreationAuthorization? = nil,
+                            beforeMutation: () async throws -> Void = { }) async throws -> String {
         try await createOrReuseDraftSnapshot(version: version,
                                              targetCommit: targetCommit,
                                              repository: repository,
                                              token: token,
-                                             allowCreation: allowCreation).body
+                                             creationAuthorization: creationAuthorization,
+                                             beforeMutation: beforeMutation).body
     }
 
     func createOrReuseDraftSnapshot(version: String,
                                     targetCommit: String,
                                     repository: GitHubRepository,
                                     token: String,
-                                    allowCreation: Bool = true) async throws -> GitHubDraftRelease {
+                                    creationAuthorization: GitHubDraftCreationAuthorization? = nil,
+                                    beforeMutation: () async throws -> Void = { }) async throws -> GitHubDraftRelease {
         let releaseRequest = GitHubReleaseRequest(version: version, targetCommit: targetCommit)
         if let draft = try await reusableDraft(for: releaseRequest,
                                                repository: repository,
@@ -158,22 +166,34 @@ struct GitHubReleaseAPI {
             try await revalidateDraft(draft, repository: repository, token: token)
             return draft
         }
-        guard allowCreation else {
+        guard let creationAuthorization,
+              creationAuthorization.expectedCommit == targetCommit else {
             throw APIError.missingExistingDraft
         }
 
         do {
             let draft = try await createDraft(releaseRequest,
+                                              creationAuthorization: creationAuthorization,
                                               repository: repository,
-                                              token: token)
+                                              token: token,
+                                              beforeMutation: beforeMutation)
             try await revalidateDraft(draft, repository: repository, token: token)
+            try await authorizeDraftCreation(creationAuthorization,
+                                             repository: repository,
+                                             token: token)
             return draft
         } catch APIError.failedRequest(statusCode: 422, message: _) {
             // A concurrent retry may have created the same draft after lookup.
+            try await authorizeDraftCreation(creationAuthorization,
+                                             repository: repository,
+                                             token: token)
             if let draft = try await reusableDraft(for: releaseRequest,
                                                    repository: repository,
                                                    token: token) {
                 try await revalidateDraft(draft, repository: repository, token: token)
+                try await authorizeDraftCreation(creationAuthorization,
+                                                 repository: repository,
+                                                 token: token)
                 return draft
             }
             throw APIError.failedRequest(statusCode: 422,
@@ -401,8 +421,10 @@ struct GitHubReleaseAPI {
     }
 
     private func createDraft(_ releaseRequest: GitHubReleaseRequest,
+                             creationAuthorization: GitHubDraftCreationAuthorization,
                              repository: GitHubRepository,
-                             token: String) async throws -> GitHubDraftRelease {
+                             token: String,
+                             beforeMutation: () async throws -> Void) async throws -> GitHubDraftRelease {
         if let existingTagCommit = try await releaseTagCommitIfPresent(tagName: releaseRequest.tagName,
                                                                        repository: repository,
                                                                        token: token) {
@@ -410,6 +432,11 @@ struct GitHubReleaseAPI {
                 throw APIError.incompatibleExistingRelease
             }
         }
+
+        try await beforeMutation()
+        try await authorizeDraftCreation(creationAuthorization,
+                                         repository: repository,
+                                         token: token)
 
         var request = authenticatedRequest(url: repository.releasesAPIURL, token: token)
         request.httpMethod = "POST"
@@ -428,6 +455,16 @@ struct GitHubReleaseAPI {
         return try release.validatedDraft(for: releaseRequest,
                                           validateTargetCommitish: true,
                                           tagCommit: tagCommit)
+    }
+
+    private func authorizeDraftCreation(_ authorization: GitHubDraftCreationAuthorization,
+                                        repository: GitHubRepository,
+                                        token: String) async throws {
+        guard try await remoteBranchCommit(branch: authorization.branch,
+                                           repository: repository,
+                                           token: token) == authorization.expectedCommit else {
+            throw APIError.incompatibleExistingPreparation
+        }
     }
 
     private func revalidateDraft(_ draft: GitHubDraftRelease,

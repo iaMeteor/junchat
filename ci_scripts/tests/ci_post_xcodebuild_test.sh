@@ -19,6 +19,9 @@ NOTES_RANGE_MARKER="$TEST_ROOT/notes-range-validated"
 VERSION_COMMAND_MARKER="$TEST_ROOT/version-command-ran"
 PUBLISHED_RELEASE_SNAPSHOT_MARKER="$TEST_ROOT/published-release-snapshot-captured"
 LOCAL_PREFLIGHT_MARKER="$TEST_ROOT/local-preflight-ran"
+ARTIFACT_BINDING_MARKER="$TEST_ROOT/artifact-binding-revalidated"
+SENTRY_MARKER="$TEST_ROOT/sentry-invoked"
+RELEASE_MARKER="$TEST_ROOT/release-invoked"
 ARCHIVED_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 PREVIOUS_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 REPOSITORY_URL=git@github.com:acme/junchat-ios.git
@@ -77,12 +80,13 @@ EOF
 <key>CFBundlePackageType</key><string>dSYM</string>
 </dict></plist>
 EOF
-    printf '%s\n' 'signed application' > "$app_path/Junchat"
-    printf '%s\n' 'debug symbols' > "$dsym_contents/Resources/DWARF/Junchat"
+    cp /usr/bin/true "$app_path/Junchat"
+    cp /usr/bin/true "$dsym_contents/Resources/DWARF/Junchat"
 }
 
 VALID_ARCHIVE="$TEST_ROOT/Junchat.xcarchive"
 VALID_SIGNED_APP="$VALID_ARCHIVE/Products/Applications/Junchat.app"
+MUTATION_TARGET="$VALID_ARCHIVE/dSYMs/Junchat.app.dSYM/Contents/Resources/DWARF/Junchat"
 create_valid_archive "$VALID_ARCHIVE"
 
 cat > "$FAKE_BIN/git" <<'EOF'
@@ -98,6 +102,9 @@ fi
 
 case "${1:-}" in
     fetch)
+        if [[ "${MUTATE_AFTER_PREFLIGHT:-0}" = 1 ]]; then
+            printf '%s\n' mutation >> "$MUTATION_TARGET"
+        fi
         ;;
     rev-parse)
         case "$*" in
@@ -147,9 +154,36 @@ set -euo pipefail
 
 printf 'swift %s\n' "$*" >> "$ENTRY_COMMAND_LOG"
 
-if [[ "$*" == 'run --disable-automatic-resolution -q tools ci validate-junchat-release-preflight' ]]; then
-    if PATH="$PREFLIGHT_PATH" "$REAL_TOOLS_BINARY" ci validate-junchat-release-preflight; then
+run_real_tools() {
+    local arguments=("$@")
+    local index
+    local tools_path=${REAL_TOOLS_PATH:-$PREFLIGHT_PATH}
+
+    for ((index = 0; index < ${#arguments[@]}; index++)); do
+        if [[ "${arguments[$index]}" = tools ]]; then
+            PATH="$tools_path" "$REAL_TOOLS_BINARY" "${arguments[@]:index + 1}"
+            return
+        fi
+    done
+    printf '%s\n' 'Unable to locate the tools command boundary.' >&2
+    return 92
+}
+
+if [[ "$*" == *'tools ci validate-junchat-release-preflight --artifact-binding-path '* ]]; then
+    if run_real_tools "$@" \
+        --codesign-executable-path "$FAKE_BIN/codesign" \
+        --otool-executable-path "$FAKE_BIN/otool" \
+        --dwarfdump-executable-path "$FAKE_BIN/dwarfdump"; then
         printf '%s\n' captured > "$LOCAL_PREFLIGHT_MARKER"
+        exit 0
+    else
+        exit $?
+    fi
+fi
+
+if [[ "$*" == *'tools ci validate-junchat-release-artifact-binding --artifact-binding-path '* ]]; then
+    if run_real_tools "$@"; then
+        printf '%s\n' captured > "$ARTIFACT_BINDING_MARKER"
         exit 0
     else
         exit $?
@@ -178,11 +212,73 @@ if [[ "$*" == *"upload-dsyms"* || "$*" == *"release-to-github"* ]] &&
     printf '%s\n' 'A remote-capable command ran before release notes were validated and frozen.' >&2
     exit 93
 fi
+if [[ "$*" == *"upload-dsyms"* ]]; then
+    if [[ ! -e "$ARTIFACT_BINDING_MARKER" ]]; then
+        printf '%s\n' 'dSYM upload ran without an immediate production artifact-binding check.' >&2
+        exit 87
+    fi
+    rm "$ARTIFACT_BINDING_MARKER"
+    SENTRY_AUTH_TOKEN=local-test-token REAL_TOOLS_PATH="$FAKE_BIN:$PREFLIGHT_PATH" run_real_tools "$@"
+    exit $?
+fi
 if [[ "$*" == *"release-to-github"* ]] &&
    [[ -e "$FIXTURE_ROOT/TestFlight/WhatToTest.en-US.txt" ]]; then
     printf '%s\n' 'Release preflight ran after TestFlight notes mutated the worktree.' >&2
     exit 91
 fi
+if [[ "$*" == *"release-to-github"* ]]; then
+    if [[ ! -e "$ARTIFACT_BINDING_MARKER" ]]; then
+        printf '%s\n' 'GitHub release ran without an immediate production artifact-binding check.' >&2
+        exit 86
+    fi
+    printf '%s\n' captured > "$RELEASE_MARKER"
+    exit 0
+fi
+EOF
+
+cat > "$FAKE_BIN/codesign" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+
+case "$1" in
+    --verify)
+        test "$*" = "--verify --deep --strict $CI_APP_STORE_SIGNED_APP_PATH"
+        test -d "${@: -1}"
+        ;;
+    --display)
+        test "$*" = "--display --verbose=4 $CI_APP_STORE_SIGNED_APP_PATH"
+        test -d "${@: -1}"
+        printf '%s\n' \
+            'Identifier=com.heyujk.junchat' \
+            'TeamIdentifier=W834S4TA7S' \
+            'Signature size=9000' >&2
+        ;;
+    *)
+        exit 1
+        ;;
+esac
+EOF
+
+cat > "$FAKE_BIN/otool" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+
+test "$1" = -hv
+test -f "$2"
+cat <<'OUTPUT'
+Mach header
+      magic cputype cpusubtype caps filetype ncmds sizeofcmds flags
+ MH_MAGIC_64   ARM64        ALL  0x00  EXECUTE    20       2048 0x0
+OUTPUT
+EOF
+
+cat > "$FAKE_BIN/dwarfdump" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+
+test "$1" = --uuid
+test -e "$2"
+printf 'UUID: 1AB9D6FA-27FF-3A79-9369-BE0E635A4AA2 (arm64) %s\n' "$2"
 EOF
 
 cat > "$FAKE_BIN/sentry-cli" <<'EOF'
@@ -190,9 +286,13 @@ cat > "$FAKE_BIN/sentry-cli" <<'EOF'
 set -euo pipefail
 
 printf 'sentry-cli %s\n' "$*" >> "$ENTRY_COMMAND_LOG"
+printf '%s\n' captured > "$SENTRY_MARKER"
+if [[ "${MUTATE_AFTER_UPLOAD:-0}" = 1 ]]; then
+    printf '%s\n' mutation >> "$MUTATION_TARGET"
+fi
 EOF
 
-chmod +x "$FAKE_BIN/git" "$FAKE_BIN/swift" "$FAKE_BIN/sentry-cli"
+chmod +x "$FAKE_BIN/git" "$FAKE_BIN/swift" "$FAKE_BIN/codesign" "$FAKE_BIN/otool" "$FAKE_BIN/dwarfdump" "$FAKE_BIN/sentry-cli"
 
 assert_invalid_identity_has_no_commands() {
     local scenario="$1"
@@ -201,7 +301,7 @@ assert_invalid_identity_has_no_commands() {
     rm -f "$ENTRY_COMMAND_LOG"
     if (
         cd "$FIXTURE_ROOT/ci_scripts"
-        export ARCHIVED_SHA ARCHIVED_SHA_MARKER BASELINE_SHA_MARKER COMMAND_LOG ENTRY_COMMAND_LOG FIXTURE_ROOT GIT_LOG_ARGUMENTS LOCAL_PREFLIGHT_MARKER NOTES_RANGE_MARKER PREFLIGHT_PATH PREVIOUS_SHA PUBLISHED_RELEASE_SNAPSHOT_MARKER REAL_TOOLS_BINARY REPOSITORY_URL VERSION_COMMAND_MARKER
+        export ARCHIVED_SHA ARCHIVED_SHA_MARKER ARTIFACT_BINDING_MARKER BASELINE_SHA_MARKER COMMAND_LOG ENTRY_COMMAND_LOG FAKE_BIN FIXTURE_ROOT GIT_LOG_ARGUMENTS LOCAL_PREFLIGHT_MARKER MUTATION_TARGET NOTES_RANGE_MARKER PREFLIGHT_PATH PREVIOUS_SHA PUBLISHED_RELEASE_SNAPSHOT_MARKER REAL_TOOLS_BINARY RELEASE_MARKER REPOSITORY_URL SENTRY_MARKER VERSION_COMMAND_MARKER
         PATH="$FAKE_BIN:$PATH" "$@" bash ci_post_xcodebuild.sh
     ); then
         printf 'Invalid Xcode Cloud identity succeeded: %s.\n' "$scenario" >&2
@@ -236,7 +336,7 @@ assert_artifact_preflight_failure() {
     rm -f "$COMMAND_LOG" "$ENTRY_COMMAND_LOG" "$LOCAL_PREFLIGHT_MARKER"
     if (
         cd "$FIXTURE_ROOT/ci_scripts"
-        export ARCHIVED_SHA ARCHIVED_SHA_MARKER BASELINE_SHA_MARKER COMMAND_LOG ENTRY_COMMAND_LOG FIXTURE_ROOT GIT_LOG_ARGUMENTS LOCAL_PREFLIGHT_MARKER NOTES_RANGE_MARKER PREFLIGHT_PATH PREVIOUS_SHA PUBLISHED_RELEASE_SNAPSHOT_MARKER REAL_TOOLS_BINARY REPOSITORY_URL VERSION_COMMAND_MARKER
+        export ARCHIVED_SHA ARCHIVED_SHA_MARKER ARTIFACT_BINDING_MARKER BASELINE_SHA_MARKER COMMAND_LOG ENTRY_COMMAND_LOG FAKE_BIN FIXTURE_ROOT GIT_LOG_ARGUMENTS LOCAL_PREFLIGHT_MARKER MUTATION_TARGET NOTES_RANGE_MARKER PREFLIGHT_PATH PREVIOUS_SHA PUBLISHED_RELEASE_SNAPSHOT_MARKER REAL_TOOLS_BINARY RELEASE_MARKER REPOSITORY_URL SENTRY_MARKER VERSION_COMMAND_MARKER
         PATH="$FAKE_BIN:$PATH" "$@" bash ci_post_xcodebuild.sh
     ); then
         printf 'Malformed release artifact succeeded: %s.\n' "$scenario" >&2
@@ -244,7 +344,7 @@ assert_artifact_preflight_failure() {
     fi
     test ! -e "$LOCAL_PREFLIGHT_MARKER"
     test "$(wc -l < "$ENTRY_COMMAND_LOG" | tr -d '[:space:]')" = 1
-    test "$(sed -n '1p' "$ENTRY_COMMAND_LOG")" = 'swift run --disable-automatic-resolution -q tools ci validate-junchat-release-preflight'
+    grep -Eq '^swift run --disable-automatic-resolution -q tools ci validate-junchat-release-preflight --artifact-binding-path /.* --artifact-binding-digest-path /' "$ENTRY_COMMAND_LOG"
     if grep -Eq '^git fetch|published-junchat-release-tags|upload-dsyms|release-to-github|^sentry-cli ' "$ENTRY_COMMAND_LOG"; then
         printf 'Artifact preflight failure allowed a remote read or side effect (%s):\n' "$scenario" >&2
         cat "$ENTRY_COMMAND_LOG" >&2
@@ -275,12 +375,22 @@ assert_artifact_preflight_failure missing-dsym \
     env CI=TRUE CI_ARCHIVE_PATH="$MISSING_DSYM_ARCHIVE" CI_APP_STORE_SIGNED_APP_PATH="$MISSING_DSYM_ARCHIVE/Products/Applications/Junchat.app" CI_WORKFLOW_ID=release-workflow-id CI_WORKFLOW=Release CI_XCODEBUILD_ACTION=archive CI_XCODE_CLOUD=TRUE
 
 BYPASSED_POST_BUILD="$FIXTURE_ROOT/ci_scripts/ci_post_xcodebuild_bypass.sh"
-sed 's|^swift run --disable-automatic-resolution -q tools ci validate-junchat-release-preflight$|: # mutation: bypass production preflight|' \
-    "$FIXTURE_ROOT/ci_scripts/ci_post_xcodebuild.sh" > "$BYPASSED_POST_BUILD"
+awk '
+    /^swift run --disable-automatic-resolution -q tools ci validate-junchat-release-preflight/ {
+        print "printf '\''%064d\\n'\'' 0 > \"$RELEASE_ARTIFACT_BINDING_DIGEST_PATH\" # mutation: bypass production preflight"
+        bypassing = 1
+        next
+    }
+    bypassing && /--artifact-binding-digest-path/ {
+        bypassing = 0
+        next
+    }
+    !bypassing { print }
+' "$FIXTURE_ROOT/ci_scripts/ci_post_xcodebuild.sh" > "$BYPASSED_POST_BUILD"
 rm -f "$ENTRY_COMMAND_LOG" "$LOCAL_PREFLIGHT_MARKER"
 if (
     cd "$FIXTURE_ROOT/ci_scripts"
-    export ARCHIVED_SHA ARCHIVED_SHA_MARKER BASELINE_SHA_MARKER COMMAND_LOG ENTRY_COMMAND_LOG FIXTURE_ROOT GIT_LOG_ARGUMENTS LOCAL_PREFLIGHT_MARKER NOTES_RANGE_MARKER PREFLIGHT_PATH PREVIOUS_SHA PUBLISHED_RELEASE_SNAPSHOT_MARKER REAL_TOOLS_BINARY REPOSITORY_URL VERSION_COMMAND_MARKER
+    export ARCHIVED_SHA ARCHIVED_SHA_MARKER ARTIFACT_BINDING_MARKER BASELINE_SHA_MARKER COMMAND_LOG ENTRY_COMMAND_LOG FAKE_BIN FIXTURE_ROOT GIT_LOG_ARGUMENTS LOCAL_PREFLIGHT_MARKER MUTATION_TARGET NOTES_RANGE_MARKER PREFLIGHT_PATH PREVIOUS_SHA PUBLISHED_RELEASE_SNAPSHOT_MARKER REAL_TOOLS_BINARY RELEASE_MARKER REPOSITORY_URL SENTRY_MARKER VERSION_COMMAND_MARKER
     PATH="$FAKE_BIN:$PATH" \
         CI=TRUE \
         CI_ARCHIVE_PATH="$VALID_ARCHIVE" \
@@ -300,7 +410,7 @@ rm -f "$BYPASSED_POST_BUILD" "$ENTRY_COMMAND_LOG"
 
 (
     cd "$FIXTURE_ROOT/ci_scripts"
-    export ARCHIVED_SHA ARCHIVED_SHA_MARKER BASELINE_SHA_MARKER COMMAND_LOG ENTRY_COMMAND_LOG FIXTURE_ROOT GIT_LOG_ARGUMENTS LOCAL_PREFLIGHT_MARKER NOTES_RANGE_MARKER PREFLIGHT_PATH PREVIOUS_SHA PUBLISHED_RELEASE_SNAPSHOT_MARKER REAL_TOOLS_BINARY REPOSITORY_URL VERSION_COMMAND_MARKER
+    export ARCHIVED_SHA ARCHIVED_SHA_MARKER ARTIFACT_BINDING_MARKER BASELINE_SHA_MARKER COMMAND_LOG ENTRY_COMMAND_LOG FAKE_BIN FIXTURE_ROOT GIT_LOG_ARGUMENTS LOCAL_PREFLIGHT_MARKER MUTATION_TARGET NOTES_RANGE_MARKER PREFLIGHT_PATH PREVIOUS_SHA PUBLISHED_RELEASE_SNAPSHOT_MARKER REAL_TOOLS_BINARY RELEASE_MARKER REPOSITORY_URL SENTRY_MARKER VERSION_COMMAND_MARKER
     PATH="$FAKE_BIN:$PATH" \
         CI=TRUE \
         CI_ARCHIVE_PATH="$VALID_ARCHIVE" \
@@ -314,19 +424,56 @@ rm -f "$BYPASSED_POST_BUILD" "$ENTRY_COMMAND_LOG"
 
 test -f "$FIXTURE_ROOT/TestFlight/WhatToTest.en-US.txt"
 test -f "$LOCAL_PREFLIGHT_MARKER"
-test "$(sed -n '1p' "$ENTRY_COMMAND_LOG")" = 'swift run --disable-automatic-resolution -q tools ci validate-junchat-release-preflight'
+grep -Eq '^swift run --disable-automatic-resolution -q tools ci validate-junchat-release-preflight --artifact-binding-path /.* --artifact-binding-digest-path /' "$ENTRY_COMMAND_LOG"
 test -f "$VERSION_COMMAND_MARKER"
 test -f "$PUBLISHED_RELEASE_SNAPSHOT_MARKER"
 test -f "$BASELINE_SHA_MARKER"
 test -f "$NOTES_RANGE_MARKER"
-test "$(sed -n '1p' "$COMMAND_LOG")" = "run -q tools ci upload-dsyms --dsym-path $VALID_ARCHIVE/dSYMs"
-test "$(sed -n '2p' "$COMMAND_LOG")" = 'run -q tools ci release-to-github'
+grep -Eq "^run -q tools ci upload-dsyms --dsym-path $VALID_ARCHIVE/dSYMs --artifact-binding-path /.* --expected-artifact-binding-digest [0-9a-f]{64}$" "$COMMAND_LOG"
+grep -Eq '^run -q tools ci release-to-github --artifact-binding-path /.* --expected-artifact-binding-digest [0-9a-f]{64}$' "$COMMAND_LOG"
+test -f "$SENTRY_MARKER"
+test -f "$RELEASE_MARKER"
 test "$(sed -n '3p' "$GIT_LOG_ARGUMENTS")" = "$PREVIOUS_SHA..$ARCHIVED_SHA"
 
-rm -f "$COMMAND_LOG" "$FIXTURE_ROOT/TestFlight/WhatToTest.en-US.txt"
+assert_bound_artifact_mutation_fails() {
+    local mutation_variable="$1"
+    local expect_sentry="$2"
+
+    create_valid_archive "$VALID_ARCHIVE"
+    rm -f "$ARTIFACT_BINDING_MARKER" "$COMMAND_LOG" "$ENTRY_COMMAND_LOG" "$FIXTURE_ROOT/TestFlight/WhatToTest.en-US.txt" "$RELEASE_MARKER" "$SENTRY_MARKER"
+    if (
+        cd "$FIXTURE_ROOT/ci_scripts"
+        export ARCHIVED_SHA ARCHIVED_SHA_MARKER ARTIFACT_BINDING_MARKER BASELINE_SHA_MARKER COMMAND_LOG ENTRY_COMMAND_LOG FAKE_BIN FIXTURE_ROOT GIT_LOG_ARGUMENTS LOCAL_PREFLIGHT_MARKER MUTATION_TARGET NOTES_RANGE_MARKER PREFLIGHT_PATH PREVIOUS_SHA PUBLISHED_RELEASE_SNAPSHOT_MARKER REAL_TOOLS_BINARY RELEASE_MARKER REPOSITORY_URL SENTRY_MARKER VERSION_COMMAND_MARKER
+        env PATH="$FAKE_BIN:$PATH" \
+            CI=TRUE \
+            CI_ARCHIVE_PATH="$VALID_ARCHIVE" \
+            CI_APP_STORE_SIGNED_APP_PATH="$VALID_SIGNED_APP" \
+            CI_WORKFLOW_ID=release-workflow-id \
+            CI_WORKFLOW=Release \
+            CI_XCODEBUILD_ACTION=archive \
+            CI_XCODE_CLOUD=TRUE \
+            "$mutation_variable=1" \
+            bash ci_post_xcodebuild.sh
+    ); then
+        printf 'Artifact mutation escaped the production binding: %s.\n' "$mutation_variable" >&2
+        exit 85
+    fi
+    test ! -e "$RELEASE_MARKER"
+    if [[ "$expect_sentry" = yes ]]; then
+        test -f "$SENTRY_MARKER"
+    else
+        test ! -e "$SENTRY_MARKER"
+    fi
+}
+
+assert_bound_artifact_mutation_fails MUTATE_AFTER_PREFLIGHT no
+assert_bound_artifact_mutation_fails MUTATE_AFTER_UPLOAD yes
+
+create_valid_archive "$VALID_ARCHIVE"
+rm -f "$ARTIFACT_BINDING_MARKER" "$COMMAND_LOG" "$ENTRY_COMMAND_LOG" "$FIXTURE_ROOT/TestFlight/WhatToTest.en-US.txt" "$RELEASE_MARKER" "$SENTRY_MARKER"
 if (
     cd "$FIXTURE_ROOT/ci_scripts"
-    export ARCHIVED_SHA ARCHIVED_SHA_MARKER BASELINE_SHA_MARKER COMMAND_LOG ENTRY_COMMAND_LOG FIXTURE_ROOT GIT_LOG_ARGUMENTS LOCAL_PREFLIGHT_MARKER NOTES_RANGE_MARKER PREFLIGHT_PATH PREVIOUS_SHA PUBLISHED_RELEASE_SNAPSHOT_MARKER REAL_TOOLS_BINARY REPOSITORY_URL VERSION_COMMAND_MARKER
+    export ARCHIVED_SHA ARCHIVED_SHA_MARKER ARTIFACT_BINDING_MARKER BASELINE_SHA_MARKER COMMAND_LOG ENTRY_COMMAND_LOG FAKE_BIN FIXTURE_ROOT GIT_LOG_ARGUMENTS LOCAL_PREFLIGHT_MARKER MUTATION_TARGET NOTES_RANGE_MARKER PREFLIGHT_PATH PREVIOUS_SHA PUBLISHED_RELEASE_SNAPSHOT_MARKER REAL_TOOLS_BINARY RELEASE_MARKER REPOSITORY_URL SENTRY_MARKER VERSION_COMMAND_MARKER
     PATH="$FAKE_BIN:$PATH" \
         CI=TRUE \
         CI_ARCHIVE_PATH="$VALID_ARCHIVE" \
