@@ -18,6 +18,23 @@ struct CI: ParsableCommand {
         }
     }
 
+    private struct GitPushSandbox {
+        let rootURL: URL
+        let gitDirectoryURL: URL
+        let remoteName: String
+        let remoteURL: String
+        let environment: Environment
+        let gitExecutable: Executable
+
+        func remove() {
+            try? FileManager.default.removeItem(at: rootURL)
+        }
+
+        func arguments(_ command: [String]) -> [String] {
+            ["--git-dir", gitDirectoryURL.path] + command
+        }
+    }
+
     static let configuration = CommandConfiguration(abstract: "CI workflow commands that can be run both locally and in CI environments.",
                                                     subcommands: [
                                                         PreviewTests.self,
@@ -164,16 +181,16 @@ struct CI: ParsableCommand {
     }
 
     static func gitRepository() async throws -> GitHubRepository {
-        let rawURL = try await gitOutput(.name("git"),
-                                         arguments: ["remote", "get-url", "origin"],
-                                         environment: .inherit)
+        let rawURL = try await rawOriginURL(gitExecutable: .path("/usr/bin/git"),
+                                            argumentPrefix: [],
+                                            environment: isolatedGitEnvironment())
         return try GitHubRepository(remoteURL: rawURL)
     }
 
     static func gitReleaseIdentity() async throws -> GitReleaseIdentity {
-        try await gitReleaseIdentity(gitExecutable: .name("git"),
+        try await gitReleaseIdentity(gitExecutable: .path("/usr/bin/git"),
                                      argumentPrefix: [],
-                                     environment: .inherit,
+                                     environment: isolatedGitEnvironment(),
                                      ciBranch: ProcessInfo.processInfo.environment["CI_BRANCH"])
     }
 
@@ -181,7 +198,7 @@ struct CI: ParsableCommand {
                                              ciBranch: String?) async throws -> GitReleaseIdentity {
         try await gitReleaseIdentity(gitExecutable: .path("/usr/bin/git"),
                                      argumentPrefix: ["-C", repositoryPath],
-                                     environment: .inherit,
+                                     environment: isolatedGitEnvironment(),
                                      ciBranch: ciBranch)
     }
 
@@ -260,14 +277,14 @@ struct CI: ParsableCommand {
 
     static func gitPush(tagName: String) async throws {
         let repository = try await CI.gitRepository()
-        let environment = try authenticatedGitEnvironment()
         let expectedCommit = try await gitCurrentCommit()
         try await gitPushTag(tagName: tagName,
                              expectedCommit: expectedCommit,
                              remoteURL: repository.httpsURL.absoluteString,
-                             environment: environment,
-                             gitExecutable: .name("git"),
-                             argumentPrefix: [])
+                             gitConfiguration: authenticatedGitConfiguration(),
+                             gitExecutable: .path("/usr/bin/git"),
+                             argumentPrefix: [],
+                             allowFileTransport: false)
     }
 
     static func gitPushTagForTesting(tagName: String,
@@ -281,17 +298,16 @@ struct CI: ParsableCommand {
         } else {
             .path("/usr/bin/git")
         }
-        let environment = if let globalConfigurationPath {
-            Environment.inherit.updating(["GIT_CONFIG_GLOBAL": globalConfigurationPath])
-        } else {
-            Environment.inherit
-        }
+        var parentEnvironment = ProcessInfo.processInfo.environment
+        parentEnvironment["GIT_CONFIG_GLOBAL"] = globalConfigurationPath
         try await gitPushTag(tagName: tagName,
                              expectedCommit: expectedCommit,
                              remoteURL: remoteURL,
-                             environment: environment,
+                             gitConfiguration: [],
                              gitExecutable: executable,
-                             argumentPrefix: ["-C", repositoryPath])
+                             argumentPrefix: ["-C", repositoryPath],
+                             allowFileTransport: true,
+                             parentEnvironment: parentEnvironment)
     }
 
     static func gitPush(identity: GitReleaseIdentity,
@@ -300,24 +316,33 @@ struct CI: ParsableCommand {
         try await gitPushBranch(identity: identity,
                                 expectedLocalCommit: expectedLocalCommit,
                                 expectedRemoteCommit: expectedRemoteCommit,
-                                environment: authenticatedGitEnvironment(),
-                                gitExecutable: .name("git"),
+                                remoteURL: identity.repository.httpsURL.absoluteString,
+                                gitConfiguration: authenticatedGitConfiguration(),
+                                gitExecutable: .path("/usr/bin/git"),
                                 argumentPrefix: [],
-                                ciBranch: ProcessInfo.processInfo.environment["CI_BRANCH"])
+                                ciBranch: ProcessInfo.processInfo.environment["CI_BRANCH"],
+                                allowFileTransport: false)
     }
 
     static func gitPushBranchForTesting(identity: GitReleaseIdentity,
                                         expectedLocalCommit: String,
                                         expectedRemoteCommit: String,
+                                        remoteURL: String? = nil,
                                         repositoryPath: String,
-                                        gitExecutablePath: String) async throws {
+                                        gitExecutablePath: String,
+                                        globalConfigurationPath: String? = nil) async throws {
+        var parentEnvironment = ProcessInfo.processInfo.environment
+        parentEnvironment["GIT_CONFIG_GLOBAL"] = globalConfigurationPath
         try await gitPushBranch(identity: identity,
                                 expectedLocalCommit: expectedLocalCommit,
                                 expectedRemoteCommit: expectedRemoteCommit,
-                                environment: .inherit,
+                                remoteURL: remoteURL ?? identity.repository.httpsURL.absoluteString,
+                                gitConfiguration: [],
                                 gitExecutable: .name(gitExecutablePath),
                                 argumentPrefix: ["-C", repositoryPath],
-                                ciBranch: identity.branch)
+                                ciBranch: identity.branch,
+                                allowFileTransport: remoteURL != nil,
+                                parentEnvironment: parentEnvironment)
     }
 
     static func gitBranchPushArguments(branch: String,
@@ -333,29 +358,29 @@ struct CI: ParsableCommand {
         ]
     }
 
-    private static func authenticatedGitEnvironment() throws -> Environment {
+    private static func authenticatedGitConfiguration() throws -> [(key: String, value: String)] {
         guard let apiToken = ProcessInfo.processInfo.environment["GITHUB_TOKEN"], !apiToken.isEmpty else {
             throw ValidationError("GITHUB_TOKEN environment variable is not set.")
         }
 
         let credentials = Data("x-access-token:\(apiToken)".utf8).base64EncodedString()
-        return Environment.inherit.updating([
-            "GIT_CONFIG_COUNT": "1",
-            "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
-            "GIT_CONFIG_VALUE_0": "AUTHORIZATION: basic \(credentials)"
-        ])
+        return [("http.https://github.com/.extraheader", "AUTHORIZATION: basic \(credentials)")]
     }
 
     private static func gitPushBranch(identity: GitReleaseIdentity,
                                       expectedLocalCommit: String,
                                       expectedRemoteCommit: String,
-                                      environment: Environment,
+                                      remoteURL: String,
+                                      gitConfiguration: [(key: String, value: String)],
                                       gitExecutable: Executable,
                                       argumentPrefix: [String],
-                                      ciBranch: String?) async throws {
+                                      ciBranch: String?,
+                                      allowFileTransport: Bool,
+                                      parentEnvironment: [String: String] = ProcessInfo.processInfo.environment) async throws {
+        let localEnvironment = isolatedGitEnvironment(parentEnvironment: parentEnvironment)
         let currentIdentity = try await gitReleaseIdentity(gitExecutable: gitExecutable,
                                                            argumentPrefix: argumentPrefix,
-                                                           environment: environment,
+                                                           environment: localEnvironment,
                                                            ciBranch: ciBranch)
         guard currentIdentity == identity else {
             throw ValidationError("The release repository or checked-out branch changed after preflight.")
@@ -363,19 +388,34 @@ struct CI: ParsableCommand {
 
         let resolvedLocalCommit = try await gitOutput(gitExecutable,
                                                       arguments: argumentPrefix + ["rev-parse", "--verify", "\(expectedLocalCommit)^{commit}"],
-                                                      environment: environment)
+                                                      environment: localEnvironment)
         guard resolvedLocalCommit == expectedLocalCommit else {
             throw ValidationError("The release preparation commit changed before push.")
         }
 
-        let arguments = argumentPrefix + gitBranchPushArguments(branch: identity.branch,
-                                                                expectedLocalCommit: expectedLocalCommit,
-                                                                expectedRemoteCommit: expectedRemoteCommit,
-                                                                repository: identity.repository)
+        let objectDirectory = try await gitObjectDirectory(gitExecutable: gitExecutable,
+                                                           argumentPrefix: argumentPrefix,
+                                                           environment: localEnvironment)
+        let sandbox = try await makeGitPushSandbox(remoteURL: remoteURL,
+                                                   objectDirectory: objectDirectory,
+                                                   gitConfiguration: gitConfiguration,
+                                                   gitExecutable: gitExecutable,
+                                                   allowFileTransport: allowFileTransport,
+                                                   parentEnvironment: parentEnvironment)
+        defer { sandbox.remove() }
+        let branchReference = "refs/heads/\(identity.branch)"
+        let arguments = [
+            "push",
+            "--force-with-lease=\(branchReference):\(expectedRemoteCommit)",
+            sandbox.remoteName,
+            "\(expectedLocalCommit):\(branchReference)"
+        ]
         do {
-            try await runGit(gitExecutable,
-                             arguments: arguments,
-                             environment: environment)
+            try await validateGitPushDestination(sandbox)
+            try await runGit(sandbox.gitExecutable,
+                             arguments: sandbox.arguments(arguments),
+                             environment: sandbox.environment)
+            try await validateGitPushDestination(sandbox)
         } catch {
             throw GitPushError.pushFailed
         }
@@ -385,9 +425,9 @@ struct CI: ParsableCommand {
                                            argumentPrefix: [String],
                                            environment: Environment,
                                            ciBranch: String?) async throws -> GitReleaseIdentity {
-        let originURL = try await gitOutput(gitExecutable,
-                                            arguments: argumentPrefix + ["remote", "get-url", "origin"],
-                                            environment: environment)
+        let originURL = try await rawOriginURL(gitExecutable: gitExecutable,
+                                               argumentPrefix: argumentPrefix,
+                                               environment: environment)
         let repository = try GitHubRepository(remoteURL: originURL)
         let checkedOutBranch = try await gitOutput(gitExecutable,
                                                    arguments: argumentPrefix + ["symbolic-ref", "--quiet", "--short", "HEAD"],
@@ -415,20 +455,31 @@ struct CI: ParsableCommand {
                                   branch: branch)
     }
 
+    private static func rawOriginURL(gitExecutable: Executable,
+                                     argumentPrefix: [String],
+                                     environment: Environment) async throws -> String {
+        try await gitOutput(gitExecutable,
+                            arguments: argumentPrefix + ["config", "--local", "--no-includes", "--get", "remote.origin.url"],
+                            environment: environment)
+    }
+
     private static func gitPushTag(tagName: String,
                                    expectedCommit: String,
                                    remoteURL: String,
-                                   environment: Environment,
+                                   gitConfiguration: [(key: String, value: String)],
                                    gitExecutable: Executable,
-                                   argumentPrefix: [String]) async throws {
+                                   argumentPrefix: [String],
+                                   allowFileTransport: Bool,
+                                   parentEnvironment: [String: String] = ProcessInfo.processInfo.environment) async throws {
+        let localEnvironment = isolatedGitEnvironment(parentEnvironment: parentEnvironment)
         let tagReference = "refs/tags/\(tagName)"
         try await runGit(gitExecutable,
                          arguments: argumentPrefix + ["check-ref-format", tagReference],
-                         environment: environment)
+                         environment: localEnvironment)
 
         let resolvedExpectedCommit = try await gitOutput(gitExecutable,
                                                          arguments: argumentPrefix + ["rev-parse", "--verify", "\(expectedCommit)^{commit}"],
-                                                         environment: environment)
+                                                         environment: localEnvironment)
         guard resolvedExpectedCommit == expectedCommit else {
             throw ValidationError("The nightly tag target is not the exact current commit.")
         }
@@ -436,16 +487,22 @@ struct CI: ParsableCommand {
         let localCommit = try await localTagCommit(tagReference,
                                                    gitExecutable: gitExecutable,
                                                    argumentPrefix: argumentPrefix,
-                                                   environment: environment)
+                                                   environment: localEnvironment)
         if let localCommit, localCommit != expectedCommit {
             throw ValidationError("The local nightly tag already points to another commit.")
         }
 
-        let remoteCommit = try await remoteTagCommit(tagReference,
-                                                     remoteURL: remoteURL,
-                                                     gitExecutable: gitExecutable,
-                                                     argumentPrefix: argumentPrefix,
-                                                     environment: environment)
+        let objectDirectory = try await gitObjectDirectory(gitExecutable: gitExecutable,
+                                                           argumentPrefix: argumentPrefix,
+                                                           environment: localEnvironment)
+        let sandbox = try await makeGitPushSandbox(remoteURL: remoteURL,
+                                                   objectDirectory: objectDirectory,
+                                                   gitConfiguration: gitConfiguration,
+                                                   gitExecutable: gitExecutable,
+                                                   allowFileTransport: allowFileTransport,
+                                                   parentEnvironment: parentEnvironment)
+        defer { sandbox.remove() }
+        let remoteCommit = try await remoteTagCommit(tagReference, sandbox: sandbox)
         if let remoteCommit, remoteCommit != expectedCommit {
             throw ValidationError("The remote nightly tag already points to another commit.")
         }
@@ -456,37 +513,36 @@ struct CI: ParsableCommand {
                                  existingCommit: localCommit,
                                  gitExecutable: gitExecutable,
                                  argumentPrefix: argumentPrefix,
-                                 environment: environment)
+                                 environment: localEnvironment)
 
         guard try await localTagCommit(tagReference,
                                        gitExecutable: gitExecutable,
                                        argumentPrefix: argumentPrefix,
-                                       environment: environment) == expectedCommit else {
+                                       environment: localEnvironment) == expectedCommit else {
             throw ValidationError("The local nightly tag does not point to the exact current commit.")
         }
         guard remoteCommit == nil else { return }
 
-        let pushArguments = argumentPrefix + ["push", remoteURL, "\(tagReference):\(tagReference)"]
+        let tagObject = try await gitOutput(gitExecutable,
+                                            arguments: argumentPrefix + ["rev-parse", "--verify", tagReference],
+                                            environment: localEnvironment)
+        try await runGit(sandbox.gitExecutable,
+                         arguments: sandbox.arguments(["update-ref", tagReference, tagObject]),
+                         environment: sandbox.environment)
         do {
-            try await runGit(gitExecutable,
-                             arguments: pushArguments,
-                             environment: environment)
+            try await validateGitPushDestination(sandbox)
+            try await runGit(sandbox.gitExecutable,
+                             arguments: sandbox.arguments(["push", sandbox.remoteName, "\(tagReference):\(tagReference)"]),
+                             environment: sandbox.environment)
+            try await validateGitPushDestination(sandbox)
         } catch {
-            guard try await remoteTagCommit(tagReference,
-                                            remoteURL: remoteURL,
-                                            gitExecutable: gitExecutable,
-                                            argumentPrefix: argumentPrefix,
-                                            environment: environment) == expectedCommit else {
+            guard try await remoteTagCommit(tagReference, sandbox: sandbox) == expectedCommit else {
                 throw ValidationError("Authenticated git push failed.")
             }
             return
         }
 
-        guard try await remoteTagCommit(tagReference,
-                                        remoteURL: remoteURL,
-                                        gitExecutable: gitExecutable,
-                                        argumentPrefix: argumentPrefix,
-                                        environment: environment) == expectedCommit else {
+        guard try await remoteTagCommit(tagReference, sandbox: sandbox) == expectedCommit else {
             throw ValidationError("The pushed nightly tag could not be verified on the remote.")
         }
     }
@@ -501,7 +557,11 @@ struct CI: ParsableCommand {
         guard existingCommit == nil else { return }
         do {
             try await runGit(gitExecutable,
-                             arguments: argumentPrefix + ["tag", tagName, expectedCommit],
+                             arguments: argumentPrefix + [
+                                 "-c", "core.hooksPath=/dev/null",
+                                 "-c", "tag.gpgSign=false",
+                                 "tag", tagName, expectedCommit
+                             ],
                              environment: environment)
         } catch {
             guard try await localTagCommit(tagReference,
@@ -530,13 +590,15 @@ struct CI: ParsableCommand {
     }
 
     private static func remoteTagCommit(_ tagReference: String,
-                                        remoteURL: String,
-                                        gitExecutable: Executable,
-                                        argumentPrefix: [String],
-                                        environment: Environment) async throws -> String? {
-        let output = try await gitOutput(gitExecutable,
-                                         arguments: argumentPrefix + ["ls-remote", remoteURL, tagReference, "\(tagReference)^{}"],
-                                         environment: environment)
+                                        sandbox: GitPushSandbox) async throws -> String? {
+        try await validateGitPushDestination(sandbox)
+        let output = try await gitOutput(sandbox.gitExecutable,
+                                         arguments: sandbox.arguments(["ls-remote",
+                                                                       sandbox.remoteName,
+                                                                       tagReference,
+                                                                       "\(tagReference)^{}"]),
+                                         environment: sandbox.environment)
+        try await validateGitPushDestination(sandbox)
         guard !output.isEmpty else { return nil }
 
         var tagObject: String?
@@ -560,6 +622,122 @@ struct CI: ParsableCommand {
             throw ValidationError("Git returned a peeled nightly tag without its tag reference.")
         }
         return peeledCommit ?? tagObject
+    }
+
+    private static func isolatedGitEnvironment(configuration: [(key: String, value: String)] = [],
+                                               allowFileTransport: Bool = false,
+                                               parentEnvironment: [String: String] = ProcessInfo.processInfo.environment) -> Environment {
+        _ = parentEnvironment
+        var gitConfiguration = [
+            (key: "core.hooksPath", value: "/dev/null"),
+            (key: "credential.interactive", value: "never"),
+            (key: "protocol.allow", value: "never"),
+            (key: "protocol.ext.allow", value: "never"),
+            (key: "protocol.https.allow", value: "always")
+        ]
+        if allowFileTransport {
+            gitConfiguration.append((key: "protocol.file.allow", value: "always"))
+        }
+        gitConfiguration.append(contentsOf: configuration)
+
+        var environment: [Environment.Key: String] = [
+            "GCM_INTERACTIVE": "never",
+            "GIT_ASKPASS": "/usr/bin/false",
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_SYSTEM": "/dev/null",
+            "GIT_PROTOCOL_FROM_USER": "0",
+            "GIT_TERMINAL_PROMPT": "0",
+            "HOME": "/var/empty",
+            "LC_ALL": "C",
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            "SSH_ASKPASS": "/usr/bin/false",
+            "XDG_CONFIG_HOME": "/var/empty"
+        ]
+        environment["GIT_CONFIG_COUNT"] = String(gitConfiguration.count)
+        for (index, entry) in gitConfiguration.enumerated() {
+            environment[Environment.Key(rawValue: "GIT_CONFIG_KEY_\(index)")!] = entry.key
+            environment[Environment.Key(rawValue: "GIT_CONFIG_VALUE_\(index)")!] = entry.value
+        }
+        return .custom(environment)
+    }
+
+    private static func gitObjectDirectory(gitExecutable: Executable,
+                                           argumentPrefix: [String],
+                                           environment: Environment) async throws -> URL {
+        let path = try await gitOutput(gitExecutable,
+                                       arguments: argumentPrefix + [
+                                           "rev-parse",
+                                           "--path-format=absolute",
+                                           "--git-path", "objects"
+                                       ],
+                                       environment: environment)
+        guard NSString(string: path).isAbsolutePath,
+              !path.contains("\n") else {
+            throw ValidationError("Could not isolate the release repository object database.")
+        }
+        let objectDirectory = URL(filePath: path).standardizedFileURL.resolvingSymlinksInPath()
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: objectDirectory.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            throw ValidationError("Could not isolate the release repository object database.")
+        }
+        return objectDirectory
+    }
+
+    private static func makeGitPushSandbox(remoteURL: String,
+                                           objectDirectory: URL,
+                                           gitConfiguration: [(key: String, value: String)],
+                                           gitExecutable: Executable,
+                                           allowFileTransport: Bool,
+                                           parentEnvironment: [String: String]) async throws -> GitPushSandbox {
+        let rootURL = FileManager.default.temporaryDirectory
+            .appending(path: "junchat-git-push-\(UUID().uuidString)", directoryHint: .isDirectory)
+        let gitDirectoryURL = rootURL.appending(path: "repository.git", directoryHint: .isDirectory)
+        let remoteName = "validated-release-destination"
+        let environment = isolatedGitEnvironment(configuration: gitConfiguration,
+                                                 allowFileTransport: allowFileTransport,
+                                                 parentEnvironment: parentEnvironment)
+        let sandbox = GitPushSandbox(rootURL: rootURL,
+                                     gitDirectoryURL: gitDirectoryURL,
+                                     remoteName: remoteName,
+                                     remoteURL: remoteURL,
+                                     environment: environment,
+                                     gitExecutable: gitExecutable)
+        do {
+            try FileManager.default.createDirectory(at: rootURL,
+                                                    withIntermediateDirectories: true,
+                                                    attributes: [.posixPermissions: 0o700])
+            try await runGit(gitExecutable,
+                             arguments: ["init", "--bare", gitDirectoryURL.path],
+                             environment: environment)
+            let alternatesURL = gitDirectoryURL.appending(path: "objects/info/alternates")
+            try Data("\(objectDirectory.path)\n".utf8).write(to: alternatesURL, options: .withoutOverwriting)
+            try await runGit(gitExecutable,
+                             arguments: sandbox.arguments([
+                                 "config", "--local", "--no-includes",
+                                 "remote.\(remoteName).url", remoteURL
+                             ]),
+                             environment: environment)
+            try await validateGitPushDestination(sandbox)
+            return sandbox
+        } catch {
+            sandbox.remove()
+            throw error
+        }
+    }
+
+    private static func validateGitPushDestination(_ sandbox: GitPushSandbox) async throws {
+        let destinations = try await gitOutput(sandbox.gitExecutable,
+                                               arguments: sandbox.arguments([
+                                                   "remote", "get-url", "--push", "--all", sandbox.remoteName
+                                               ]),
+                                               environment: sandbox.environment)
+            .split(whereSeparator: \.isNewline)
+            .map(String.init)
+        guard destinations == [sandbox.remoteURL] else {
+            throw ValidationError("Git push destination validation failed closed.")
+        }
     }
 
     private static func runGit(_ executable: Executable,

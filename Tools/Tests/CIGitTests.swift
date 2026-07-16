@@ -75,6 +75,38 @@ final class CIGitTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: pushMarker.path))
     }
 
+    func testPinnedReleasePushIgnoresMaliciousGlobalPushInsteadOf() async throws {
+        let fixture = try await LocalGitFixture.make()
+        defer { fixture.remove() }
+        let redirectedRemote = try await fixture.makeBareRemote(named: "redirected.git")
+        let checkedOutBranch = try await fixture.gitOutput(["symbolic-ref", "--short", "HEAD"])
+        try await fixture.git(["remote", "add", "origin", "git@github.com:acme/junchat-ios.git"])
+        try await fixture.git(["push",
+                               fixture.remote.path,
+                               "\(fixture.baselineCommit):refs/heads/\(checkedOutBranch)"])
+        let identity = try await CI.gitReleaseIdentityForTesting(repositoryPath: fixture.repository.path,
+                                                                 ciBranch: checkedOutBranch)
+        let maliciousConfiguration = fixture.root.appending(path: "malicious.gitconfig")
+        try await fixture.git(["config",
+                               "--file", maliciousConfiguration.path,
+                               "url.\(redirectedRemote.path).pushInsteadOf",
+                               fixture.remote.path])
+
+        try await CI.gitPushBranchForTesting(identity: identity,
+                                             expectedLocalCommit: fixture.headCommit,
+                                             expectedRemoteCommit: fixture.baselineCommit,
+                                             remoteURL: fixture.remote.path,
+                                             repositoryPath: fixture.repository.path,
+                                             gitExecutablePath: "/usr/bin/git",
+                                             globalConfigurationPath: maliciousConfiguration.path)
+
+        let pushedCommit = try await fixture.referenceCommit(remote: fixture.remote,
+                                                             reference: "refs/heads/\(checkedOutBranch)")
+        let redirectedReferences = try await fixture.references(remote: redirectedRemote)
+        XCTAssertEqual(pushedCommit, fixture.headCommit)
+        XCTAssertEqual(redirectedReferences, "")
+    }
+
     func testParsesTheExactModeForEachChangedFile() throws {
         let oldCommit = String(repeating: "b", count: 40)
         let newCommit = String(repeating: "c", count: 40)
@@ -120,6 +152,27 @@ final class CIGitTests: XCTestCase {
 
         let identityAfter = try await fixture.gitOutput(["config", "--file", globalConfiguration.path, "--get-regexp", "^user\\."])
         XCTAssertEqual(identityAfter, identityBefore)
+    }
+
+    func testNightlyTagPublicationIgnoresMaliciousGlobalPushInsteadOf() async throws {
+        let fixture = try await LocalGitFixture.make()
+        defer { fixture.remove() }
+        let redirectedRemote = try await fixture.makeBareRemote(named: "redirected.git")
+        let maliciousConfiguration = fixture.root.appending(path: "malicious.gitconfig")
+        try await fixture.git(["config",
+                               "--file", maliciousConfiguration.path,
+                               "url.\(redirectedRemote.path).pushInsteadOf",
+                               fixture.remote.path])
+        let tagName = "nightly/1.8.2.36-isolated"
+
+        try await publish(tagName,
+                          fixture: fixture,
+                          globalConfigurationPath: maliciousConfiguration.path)
+
+        let pushedCommit = try await fixture.remoteTagCommit(tagName)
+        let redirectedReferences = try await fixture.references(remote: redirectedRemote)
+        XCTAssertEqual(pushedCommit, fixture.headCommit)
+        XCTAssertEqual(redirectedReferences, "")
     }
 
     func testNightlyTagPublicationIsIdempotentForMatchingLocalAndRemoteTags() async throws {
@@ -308,6 +361,22 @@ private struct LocalGitFixture {
 
     func remoteTags(matching tagName: String) async throws -> String {
         try await gitBare(["tag", "--list", tagName])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func makeBareRemote(named name: String) async throws -> URL {
+        let bareRemote = root.appending(path: name, directoryHint: .isDirectory)
+        try await gitCommand(["init", "--bare", bareRemote.path])
+        return bareRemote
+    }
+
+    func referenceCommit(remote: URL, reference: String) async throws -> String {
+        try await gitCommand(["--git-dir", remote.path, "rev-parse", "\(reference)^{commit}"])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func references(remote: URL) async throws -> String {
+        try await gitCommand(["--git-dir", remote.path, "for-each-ref", "--format=%(refname)"])
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 

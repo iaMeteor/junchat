@@ -155,6 +155,7 @@ struct GitHubReleaseAPI {
         if let draft = try await reusableDraft(for: releaseRequest,
                                                repository: repository,
                                                token: token) {
+            try await revalidateDraft(draft, repository: repository, token: token)
             return draft
         }
         guard allowCreation else {
@@ -162,14 +163,17 @@ struct GitHubReleaseAPI {
         }
 
         do {
-            return try await createDraft(releaseRequest,
-                                         repository: repository,
-                                         token: token)
+            let draft = try await createDraft(releaseRequest,
+                                              repository: repository,
+                                              token: token)
+            try await revalidateDraft(draft, repository: repository, token: token)
+            return draft
         } catch APIError.failedRequest(statusCode: 422, message: _) {
             // A concurrent retry may have created the same draft after lookup.
             if let draft = try await reusableDraft(for: releaseRequest,
                                                    repository: repository,
                                                    token: token) {
+                try await revalidateDraft(draft, repository: repository, token: token)
                 return draft
             }
             throw APIError.failedRequest(statusCode: 422,
@@ -185,8 +189,10 @@ struct GitHubReleaseAPI {
         do {
             try await push()
         } catch {
+            try await revalidateDraft(draft, repository: repository, token: token)
             throw PushAttemptError.pushFailed(error)
         }
+        try await revalidateDraft(draft, repository: repository, token: token)
     }
 
     func isPreparationAlreadyPushed(branch: String,
@@ -195,10 +201,53 @@ struct GitHubReleaseAPI {
                                     generatedNotes: String,
                                     repository: GitHubRepository,
                                     token: String) async throws -> Bool {
+        try await verifiedPreparationCommit(branch: branch,
+                                            releaseVersion: releaseVersion,
+                                            releaseCommit: releaseCommit,
+                                            generatedNotes: generatedNotes,
+                                            repository: repository,
+                                            token: token) != nil
+    }
+
+    func isPreparationAlreadyPushed(branch: String,
+                                    releaseVersion: JunchatReleaseVersion,
+                                    releaseCommit: String,
+                                    generatedNotes: String,
+                                    releaseDraft: GitHubDraftRelease,
+                                    repository: GitHubRepository,
+                                    token: String) async throws -> Bool {
+        guard let verifiedCommit = try await verifiedPreparationCommit(branch: branch,
+                                                                       releaseVersion: releaseVersion,
+                                                                       releaseCommit: releaseCommit,
+                                                                       generatedNotes: generatedNotes,
+                                                                       repository: repository,
+                                                                       token: token) else {
+            return false
+        }
+        guard try await remoteBranchCommit(branch: branch,
+                                           repository: repository,
+                                           token: token) == verifiedCommit else {
+            throw APIError.incompatibleExistingPreparation
+        }
+        try await revalidateDraft(releaseDraft, repository: repository, token: token)
+        guard try await remoteBranchCommit(branch: branch,
+                                           repository: repository,
+                                           token: token) == verifiedCommit else {
+            throw APIError.incompatibleExistingPreparation
+        }
+        return true
+    }
+
+    private func verifiedPreparationCommit(branch: String,
+                                           releaseVersion: JunchatReleaseVersion,
+                                           releaseCommit: String,
+                                           generatedNotes: String,
+                                           repository: GitHubRepository,
+                                           token: String) async throws -> String? {
         let remoteCommit = try await remoteBranchCommit(branch: branch,
                                                         repository: repository,
                                                         token: token)
-        guard remoteCommit != releaseCommit else { return false }
+        guard remoteCommit != releaseCommit else { return nil }
 
         let commitURL = try repositoryAPIURL(repository: repository,
                                              pathComponents: ["commits", remoteCommit])
@@ -281,7 +330,7 @@ struct GitHubReleaseAPI {
                                            token: token) == remoteCommit else {
             throw APIError.incompatibleExistingPreparation
         }
-        return true
+        return remoteCommit
     }
 
     func remoteBranchCommit(branch: String,

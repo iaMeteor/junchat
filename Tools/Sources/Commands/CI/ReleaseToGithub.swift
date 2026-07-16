@@ -74,6 +74,7 @@ struct ReleaseToGitHub: AsyncParsableCommand {
                                                            releaseVersion: localPreparation.currentVersion,
                                                            releaseCommit: releaseCommit,
                                                            generatedNotes: releaseDraft.body,
+                                                           releaseDraft: releaseDraft,
                                                            repository: repository,
                                                            token: apiToken) {
             logger.info("The exact release preparation for \(localPreparation.currentVersion.name) was already pushed by an earlier build of this commit.")
@@ -181,6 +182,7 @@ struct ReleaseToGitHub: AsyncParsableCommand {
                                                            releaseVersion: preparation.releaseVersion,
                                                            releaseCommit: preparation.releaseCommit,
                                                            generatedNotes: releaseBody,
+                                                           releaseDraft: releaseDraft,
                                                            repository: repository,
                                                            token: apiToken) {
             logger.info("The exact release preparation for \(preparation.releaseVersion.name) is already present on the remote branch.")
@@ -231,11 +233,22 @@ struct ReleaseToGitHub: AsyncParsableCommand {
                                                                   releaseVersion: preparation.releaseVersion,
                                                                   releaseCommit: preparation.releaseCommit,
                                                                   generatedNotes: generatedNotes,
+                                                                  releaseDraft: releaseDraft,
                                                                   repository: identity.repository,
                                                                   token: apiToken) else {
                 throw pushError
             }
             logger.info("A concurrent build already pushed the exact release preparation commit.")
+            return
+        }
+        guard try await releaseAPI.isPreparationAlreadyPushed(branch: identity.branch,
+                                                              releaseVersion: preparation.releaseVersion,
+                                                              releaseCommit: preparation.releaseCommit,
+                                                              generatedNotes: generatedNotes,
+                                                              releaseDraft: releaseDraft,
+                                                              repository: identity.repository,
+                                                              token: apiToken) else {
+            throw GitHubReleaseAPI.APIError.incompatibleExistingPreparation
         }
     }
 
