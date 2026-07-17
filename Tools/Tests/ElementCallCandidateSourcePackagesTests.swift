@@ -252,6 +252,16 @@ final class ElementCallCandidateSourcePackagesTests: XCTestCase {
                                                                           under: commonDirectoryFixture.candidateRootURL)) { error in
             XCTAssertTrue(error.localizedDescription.contains("common directory"))
         }
+
+        let attributesFixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: attributesFixture.rootURL) }
+        try Data("Fixture.txt -text\n".utf8)
+            .write(to: attributesFixture.checkoutURL.appending(path: ".git/info/attributes"))
+        XCTAssertThrowsError(try ElementCallCandidateSourcePackages.stage(from: attributesFixture.sourcePackagesURL,
+                                                                          publicResolutionData: attributesFixture.publicResolutionData,
+                                                                          under: attributesFixture.candidateRootURL)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("attributes"))
+        }
     }
 
     func testRebasesCheckoutAlternateObjectStoreIntoSnapshot() throws {
@@ -297,6 +307,27 @@ final class ElementCallCandidateSourcePackagesTests: XCTestCase {
                                                                           publicResolutionData: externalFixture.publicResolutionData,
                                                                           under: externalFixture.candidateRootURL)) { error in
             XCTAssertTrue(error.localizedDescription.contains("escapes"))
+        }
+    }
+
+    func testRejectsSymlinkedReachableAlternateObjectStoreEntry() throws {
+        let fixture = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+        let alternateObjectsURL = fixture.sourcePackagesURL
+            .appending(path: "repositories/Fixture-fixture/objects")
+        try Data((alternateObjectsURL.path + "\n").utf8)
+            .write(to: fixture.checkoutURL.appending(path: ".git/objects/info/alternates"))
+        let outsideObjectURL = fixture.rootURL.appending(path: "OutsideObject")
+        try Data("outside\n".utf8).write(to: outsideObjectURL)
+        let packURL = alternateObjectsURL.appending(path: "pack")
+        try FileManager.default.createDirectory(at: packURL, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: packURL.appending(path: "escape.pack"),
+                                                   withDestinationURL: outsideObjectURL)
+
+        XCTAssertThrowsError(try ElementCallCandidateSourcePackages.stage(from: fixture.sourcePackagesURL,
+                                                                          publicResolutionData: fixture.publicResolutionData,
+                                                                          under: fixture.candidateRootURL)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("object store"))
         }
     }
 

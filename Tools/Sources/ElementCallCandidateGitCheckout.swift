@@ -61,9 +61,11 @@ enum ElementCallCandidateGitCheckout {
                                        gitDirectoryURL: gitDirectoryURL,
                                        topLevel: depth == 0)
         var validatedObjectStores = Set<String>()
+        var objectStoreEntryCount = 0
         try validateObjectStore(gitDirectoryURL.appending(path: "objects"),
                                 sourcePackagesRootURL: sourcePackagesRootURL,
                                 validatedObjectStores: &validatedObjectStores,
+                                entryCount: &objectStoreEntryCount,
                                 depth: 0)
 
         let entries = try treeEntries(checkoutURL: checkoutURL, revision: revision)
@@ -239,6 +241,8 @@ enum ElementCallCandidateGitCheckout {
                 try ElementCallCandidatePath.validateRelative(path)
                 try require(path != "refs/replace" && !path.hasPrefix("refs/replace/"),
                             "SourcePackages Git metadata contains replacement refs.")
+                try require(path != "info/attributes",
+                            "SourcePackages Git metadata contains untrusted local attributes.")
                 var information = stat()
                 try require(lstat(childURL.path, &information) == 0,
                             "SourcePackages Git metadata changed during validation.")
@@ -311,6 +315,7 @@ enum ElementCallCandidateGitCheckout {
     private static func validateObjectStore(_ objectStoreURL: URL,
                                             sourcePackagesRootURL: URL,
                                             validatedObjectStores: inout Set<String>,
+                                            entryCount: inout Int,
                                             depth: Int) throws {
         try require(depth <= maximumAlternateObjectStores,
                     "SourcePackages Git alternates exceed the supported depth.")
@@ -320,6 +325,7 @@ enum ElementCallCandidateGitCheckout {
         guard validatedObjectStores.insert(objectStoreURL.path).inserted else { return }
         try require(validatedObjectStores.count <= maximumAlternateObjectStores,
                     "SourcePackages Git alternates contain too many object stores.")
+        try validateObjectStoreTree(objectStoreURL, entryCount: &entryCount)
         guard let paths = try alternatePaths(objectStoreURL: objectStoreURL) else { return }
         for path in paths {
             let relative = try relativePath(path, beneath: sourcePackagesRootURL)
@@ -328,7 +334,30 @@ enum ElementCallCandidateGitCheckout {
             try validateObjectStore(URL(filePath: path),
                                     sourcePackagesRootURL: sourcePackagesRootURL,
                                     validatedObjectStores: &validatedObjectStores,
+                                    entryCount: &entryCount,
                                     depth: depth + 1)
+        }
+    }
+
+    private static func validateObjectStoreTree(_ objectStoreURL: URL,
+                                                entryCount: inout Int) throws {
+        let children = try FileManager.default.contentsOfDirectory(at: objectStoreURL,
+                                                                   includingPropertiesForKeys: nil,
+                                                                   options: [])
+        for childURL in children {
+            entryCount += 1
+            try require(entryCount <= maximumGitMetadataEntries,
+                        "SourcePackages Git object stores contain too many entries.")
+            var information = stat()
+            try require(lstat(childURL.path, &information) == 0,
+                        "A SourcePackages Git object store changed during validation.")
+            let type = information.st_mode & S_IFMT
+            if type == S_IFDIR {
+                try validateObjectStoreTree(childURL, entryCount: &entryCount)
+            } else {
+                try require(type == S_IFREG,
+                            "SourcePackages Git object stores must contain only real files and directories.")
+            }
         }
     }
 

@@ -406,7 +406,9 @@ final class ElementCallCandidateConsumerTests: XCTestCase {
 
         XCTAssertTrue(wrapper.contains("minimum_kib=83886080"))
         XCTAssertTrue(wrapper.contains("/System/Volumes/Data"))
-        XCTAssertTrue(wrapper.contains("exec 9>>\"$lock_file\""))
+        XCTAssertFalse(wrapper.contains("exec 9>>\"$lock_file\""))
+        XCTAssertTrue(wrapper.contains("O_NOFOLLOW"))
+        XCTAssertTrue(wrapper.contains("S_ISREG"))
         XCTAssertTrue(wrapper.contains("/usr/bin/lockf -s -t 0 9"))
         XCTAssertTrue(wrapper.contains("/usr/bin/pgrep -x xcodebuild"))
         XCTAssertTrue(wrapper.contains("/usr/bin/pgrep -x XCBBuildService"))
@@ -466,7 +468,7 @@ final class ElementCallCandidateConsumerTests: XCTestCase {
     func testXcodeBuildLockSurvivesWrapperSIGKILL() throws {
         let temporaryDirectory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
-        let fixture = try makeXcodeWrapperFixture(in: temporaryDirectory)
+        let fixture = try makeXcodeWrapperFixture(in: temporaryDirectory, useRealSandbox: true)
         let process = Process()
         process.executableURL = fixture.wrapperURL
         process.environment = ["PATH": "/usr/bin:/bin", "HOME": "/var/empty", "LC_ALL": "C"]
@@ -502,6 +504,70 @@ final class ElementCallCandidateConsumerTests: XCTestCase {
         XCTAssertTrue(waitForProcessesToExit(pids, timeout: 5))
         XCTAssertTrue(FileManager.default.fileExists(atPath: fixture.markerURL.path))
         XCTAssertTrue(try canAcquireLock(fixture.lockURL))
+    }
+
+    func testXcodeBuildWrapperEscalatesWhenLeaderIgnoresTermination() throws {
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let fixture = try makeXcodeWrapperFixture(in: temporaryDirectory, ignoresTermination: true)
+        let process = Process()
+        process.executableURL = fixture.wrapperURL
+        process.environment = ["PATH": "/usr/bin:/bin", "HOME": "/var/empty", "LC_ALL": "C"]
+        let terminated = expectation(description: "nonresponsive wrapper terminated")
+        process.terminationHandler = { _ in terminated.fulfill() }
+        var pids = [pid_t]()
+        try process.run()
+        defer {
+            if process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+                process.waitUntilExit()
+            }
+            if let groupLeader = pids.first {
+                kill(-groupLeader, SIGKILL)
+            }
+        }
+
+        XCTAssertTrue(waitForFile(fixture.pidURL, timeout: 5))
+        pids = try processIDs(in: fixture.pidURL)
+        XCTAssertFalse(try canAcquireLock(fixture.lockURL))
+        XCTAssertEqual(kill(process.processIdentifier, SIGTERM), 0)
+        wait(for: [terminated], timeout: 5)
+
+        XCTAssertEqual(process.terminationReason, .exit)
+        XCTAssertEqual(process.terminationStatus, 143)
+        XCTAssertTrue(waitForProcessesToExit(pids, timeout: 2))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.markerURL.path))
+        XCTAssertTrue(try canAcquireLock(fixture.lockURL))
+    }
+
+    func testXcodeBuildWrapperRejectsSymlinkedLockWithoutChangingTarget() throws {
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let fixture = try makeXcodeWrapperFixture(in: temporaryDirectory, leaderExitsImmediately: true)
+        let targetURL = temporaryDirectory.appending(path: "lock-target")
+        let targetData = Data("unchanged\n".utf8)
+        try targetData.write(to: targetURL)
+        XCTAssertEqual(chmod(targetURL.path, 0o644), 0)
+        try FileManager.default.createSymbolicLink(at: fixture.lockURL, withDestinationURL: targetURL)
+        let process = Process()
+        process.executableURL = fixture.wrapperURL
+        process.environment = ["PATH": "/usr/bin:/bin", "HOME": "/var/empty", "LC_ALL": "C"]
+        let terminated = expectation(description: "symlinked-lock wrapper terminated")
+        process.terminationHandler = { _ in terminated.fulfill() }
+        try process.run()
+        defer {
+            if process.isRunning {
+                kill(process.processIdentifier, SIGKILL)
+                process.waitUntilExit()
+            }
+        }
+
+        wait(for: [terminated], timeout: 5)
+        XCTAssertNotEqual(process.terminationStatus, 0)
+        XCTAssertEqual(try Data(contentsOf: targetURL), targetData)
+        XCTAssertEqual(try permissions(of: targetURL), 0o644)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.pidURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.markerURL.path))
     }
 
     func testXcodeBuildWrapperDefersSignalAcrossLaunchRace() throws {
@@ -592,7 +658,9 @@ final class ElementCallCandidateConsumerTests: XCTestCase {
 
     private func makeXcodeWrapperFixture(in temporaryDirectory: URL,
                                          delayBeforeLaunch: Bool = false,
-                                         leaderExitsImmediately: Bool = false) throws -> XcodeWrapperFixture {
+                                         leaderExitsImmediately: Bool = false,
+                                         ignoresTermination: Bool = false,
+                                         useRealSandbox: Bool = false) throws -> XcodeWrapperFixture {
         let sourceWrapperURL = URL(filePath: FileManager.default.currentDirectoryPath)
             .appending(path: "Tools/Scripts/run_xcodebuild.sh")
         let wrapperURL = temporaryDirectory.appending(path: "run_xcodebuild_test.sh")
@@ -617,9 +685,17 @@ final class ElementCallCandidateConsumerTests: XCTestCase {
         let launchDelay = delayBeforeLaunch ? "\n/bin/sleep 1" : ""
         try replaceRequired("launching=1\n/usr/bin/perl",
                             with: "launching=1\n\(launchBarrier)\(launchDelay)\n/usr/bin/perl", in: &wrapper)
-        let workerMode = leaderExitsImmediately ? "orphan" : "wait"
+        if ignoresTermination {
+            try replaceRequired("if [ \"$attempts\" -eq 100 ]; then",
+                                with: "if [ \"$attempts\" -eq 10 ]; then", in: &wrapper)
+        }
+        let workerMode = leaderExitsImmediately ? "orphan" : (ignoresTermination ? "ignore" : "wait")
+        let workerCommand = "\(shellQuote(workerURL.path)) \(shellQuote(pidURL.path)) " +
+            "\(shellQuote(markerURL.path)) \(workerMode)"
+        let launchCommand = useRealSandbox ? "/usr/bin/sandbox-exec -p \"$profile\" \(workerCommand) &" :
+            "\(workerCommand) &"
         try replaceRequired("/usr/bin/sandbox-exec -p \"$profile\" /usr/bin/xcodebuild \"$@\" &",
-                            with: "\(shellQuote(workerURL.path)) \(shellQuote(pidURL.path)) \(shellQuote(markerURL.path)) \(workerMode) &",
+                            with: launchCommand,
                             in: &wrapper)
 
         let worker = #"""
@@ -630,13 +706,17 @@ final class ElementCallCandidateConsumerTests: XCTestCase {
         my $grandchild = fork();
         die "fork failed: $!\n" unless defined $grandchild;
         if ($grandchild == 0) {
-            $SIG{TERM} = sub {
-                select undef, undef, undef, 1.0;
-                open my $marker, '>', $marker_path or die "marker failed: $!\n";
-                print {$marker} "terminated\n";
-                close $marker or die "marker close failed: $!\n";
-                exit 0;
-            };
+            if ($mode eq 'ignore') {
+                $SIG{TERM} = 'IGNORE';
+            } else {
+                $SIG{TERM} = sub {
+                    select undef, undef, undef, 1.0;
+                    open my $marker, '>', $marker_path or die "marker failed: $!\n";
+                    print {$marker} "terminated\n";
+                    close $marker or die "marker close failed: $!\n";
+                    exit 0;
+                };
+            }
             sleep 1 while 1;
         }
         if ($mode eq 'wait') {
@@ -644,6 +724,8 @@ final class ElementCallCandidateConsumerTests: XCTestCase {
                 waitpid($grandchild, 0);
                 exit 0;
             };
+        } elsif ($mode eq 'ignore') {
+            $SIG{TERM} = 'IGNORE';
         }
         open my $pids, '>', $pid_path or die "pid file failed: $!\n";
         print {$pids} "$$ $grandchild\n";

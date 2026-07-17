@@ -19,12 +19,48 @@ fi
 
 umask 077
 lock_file=/private/tmp/junchat-element-x-ios-xcodebuild.lock
-exec 9>>"$lock_file"
+lock_ready_variable=JUNCHAT_XCODEBUILD_LOCK_FD_READY
+if [ "${JUNCHAT_XCODEBUILD_LOCK_FD_READY:-}" != 1 ]; then
+    exec /usr/bin/perl -MFcntl=:DEFAULT,:mode,F_SETFD -MPOSIX=dup2 -e '
+        use strict;
+        use warnings;
+        my ($ready_variable, $script, $lock_path, @arguments) = @ARGV;
+        sysopen my $lock, $lock_path, O_WRONLY | O_CREAT | O_APPEND | O_NOFOLLOW, 0600
+            or die "Unable to open the Xcode build lock safely: $!\n";
+        my @descriptor = stat($lock);
+        my @path = lstat($lock_path);
+        die "The Xcode build lock must be one owned mode-0600 regular file.\n"
+            unless @descriptor && @path && S_ISREG($descriptor[2]) && S_ISREG($path[2]) &&
+                $descriptor[0] == $path[0] && $descriptor[1] == $path[1] &&
+                $descriptor[3] == 1 && $descriptor[4] == $> && ($descriptor[2] & 0777) == 0600;
+        my $duplicated = dup2(fileno($lock), 9);
+        die "Unable to assign the Xcode build lock descriptor: $!\n"
+            unless defined $duplicated && $duplicated == 9;
+        open my $inherited, ">&=9" or die "Unable to retain the Xcode build lock descriptor: $!\n";
+        my $flags = fcntl($inherited, F_SETFD, 0);
+        die "Unable to preserve the Xcode build lock descriptor: $!\n" unless defined $flags;
+        $ENV{$ready_variable} = 1;
+        exec { $script } $script, @arguments;
+        die "Unable to restart the Xcode build wrapper: $!\n";
+    ' "$lock_ready_variable" "$0" "$lock_file" "$@"
+fi
+/usr/bin/perl -MFcntl=:mode -e '
+    use strict;
+    use warnings;
+    my ($lock_path) = @ARGV;
+    open my $lock, "<&=9" or die "The inherited Xcode build lock descriptor is unavailable: $!\n";
+    my @descriptor = stat($lock);
+    my @path = lstat($lock_path);
+    die "The inherited Xcode build lock descriptor is invalid.\n"
+        unless @descriptor && @path && S_ISREG($descriptor[2]) && S_ISREG($path[2]) &&
+            $descriptor[0] == $path[0] && $descriptor[1] == $path[1] &&
+            $descriptor[3] == 1 && $descriptor[4] == $> && ($descriptor[2] & 0777) == 0600;
+' "$lock_file"
+unset JUNCHAT_XCODEBUILD_LOCK_FD_READY
 if ! /usr/bin/lockf -s -t 0 9; then
     echo "Another Junchat Xcode build holds $lock_file." >&2
     exit 1
 fi
-/bin/chmod 600 "$lock_file"
 
 handshake_root=
 ready_file=
@@ -70,10 +106,12 @@ terminate_process_group() {
         # A signal can arrive before the launcher finishes setpgid().
         /bin/kill "-$signal_name" "$child_pid" 2>/dev/null || true
     fi
+    if process_group_is_active; then
+        wait_for_process_group_exit
+    fi
     set +e
     wait "$child_pid" 2>/dev/null
     set -e
-    wait_for_process_group_exit
     child_pid=
 }
 
