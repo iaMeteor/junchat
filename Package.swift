@@ -35,6 +35,9 @@ let package = Package(
                             .product(name: "Yams", package: "Yams"),
                             .product(name: "Logging", package: "swift-log")
                           ],
-                          path: "Tools/Sources")
+                          path: "Tools/Sources"),
+        .testTarget(name: "ToolsTests",
+                    dependencies: ["Tools"],
+                    path: "Tools/Tests")
     ]
 )

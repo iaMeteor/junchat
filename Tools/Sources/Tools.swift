@@ -17,5 +17,6 @@ struct Tools: AsyncParsableCommand {
                                                                   AppIconBanner.self,
                                                                   UnusedStrings.self,
                                                                   BumpCalendarVersion.self,
+                                                                  BuildElementCallCandidate.self,
                                                                   CI.self])
 }
