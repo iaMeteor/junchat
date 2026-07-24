@@ -922,10 +922,10 @@ struct UserSessionFlowCoordinatorTests {
 
     private func makeCommonFlowParameters(userSession: UserSessionProtocol,
                                           appSettings: AppSettings,
-                                          elementCallService: ElementCallServiceProtocol = ElementCallServiceMock(.init())) -> CommonFlowParameters {
+                                          elementCallService: ElementCallServiceProtocol? = nil) -> CommonFlowParameters {
         CommonFlowParameters(userSession: userSession,
                              bugReportService: BugReportServiceMock(.init()),
-                             elementCallService: elementCallService,
+                             elementCallService: elementCallService ?? ElementCallServiceMock(.init()),
                              timelineControllerFactory: TimelineControllerFactoryMock(.init()),
                              emojiProvider: EmojiProvider(appSettings: appSettings),
                              linkMetadataProvider: LinkMetadataProvider(),
