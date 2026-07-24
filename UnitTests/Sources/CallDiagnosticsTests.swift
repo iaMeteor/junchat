@@ -49,6 +49,16 @@ struct CallDiagnosticsTests {
     }
 
     @Test
+    func textSummaryClassifiesKnownElementCallErrorsWithoutForwardingPayloads() {
+        let summary = CallDiagnostics.textSummary("Call error boundary caught: NETWORK_CONNECTIVITY room=!secret:example.org token=access-token")
+
+        #expect(summary.contains("category=network_connectivity"))
+        #expect(!summary.contains("!secret:example.org"))
+        #expect(!summary.contains("access-token"))
+        #expect(!summary.contains("Call error boundary caught"))
+    }
+
+    @Test
     func dictionarySummaryOmitsKeysAndValues() {
         let summary = CallDiagnostics.dictionarySummary([
             "room_id": "!secret:example.org",

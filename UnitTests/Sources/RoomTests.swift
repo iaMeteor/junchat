@@ -26,7 +26,7 @@ struct RoomTests {
 
                 #expect(configuration.intent == scenario.expectedIntent(hasActiveCall: hasActiveCall,
                                                                         voiceOnly: voiceOnly))
-                #expect(configuration.skipLobby == scenario.expectedSkipLobby(voiceOnly: voiceOnly))
+                #expect(configuration.skipLobby == scenario.expectedSkipLobby)
                 #expect(room.roomInfoCallsCount == 1)
                 #expect(room.hasActiveRoomCallCallsCount == 1)
                 #expect(room.isDirectCallsCount == 0)
@@ -88,8 +88,8 @@ struct CallRoomScenario: CustomTestStringConvertible {
         }
     }
 
-    func expectedSkipLobby(voiceOnly: Bool) -> Bool? {
-        voiceOnly && !isSpace && !isTrueDirectMessage ? true : nil
+    var expectedSkipLobby: Bool? {
+        !isSpace && !isTrueDirectMessage ? true : nil
     }
 }
 

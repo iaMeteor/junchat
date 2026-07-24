@@ -185,9 +185,8 @@ final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked
         stop()
     }
     
-    static func skipLobbyOverride(voiceOnly: Bool, roomClassification: CallRoomClassification?) -> Bool? {
-        guard voiceOnly,
-              let roomClassification,
+    static func skipLobbyOverride(roomClassification: CallRoomClassification?) -> Bool? {
+        guard let roomClassification,
               !roomClassification.isSpace,
               !roomClassification.isTrueDirectMessage else {
             return nil
@@ -210,8 +209,7 @@ final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked
         let intent = await room.joinCallIntent(voiceOnly: voiceOnly,
                                                isDirectMessage: roomClassification?.isTrueDirectMessage == true)
         return .init(intent: intent,
-                     skipLobby: skipLobbyOverride(voiceOnly: voiceOnly,
-                                                  roomClassification: roomClassification))
+                     skipLobby: skipLobbyOverride(roomClassification: roomClassification))
     }
 
     func start(baseURL: URL,

@@ -40,7 +40,15 @@ enum CallDiagnostics {
 
     static func textSummary(_ text: String) -> String {
         let lineCount = text.utf8.reduce(1) { count, byte in count + (byte == 0x0A ? 1 : 0) }
-        return "bytes=\(text.utf8.count) lines=\(lineCount)"
+        let category = [
+            ("Call error boundary caught: CONFIGURATION_ISSUE", "configuration_issue"),
+            ("Call error boundary caught: NETWORK_CONNECTIVITY", "network_connectivity"),
+            ("Call error boundary caught: CLIENT_CONFIGURATION", "client_configuration"),
+            ("Call error boundary caught: SYSTEM_FAILURE", "system_failure"),
+            ("Call error boundary caught: UNKNOWN", "unknown")
+        ].first { text.contains($0.0) }?.1
+        let classification = category.map { " category=\($0)" } ?? ""
+        return "bytes=\(text.utf8.count) lines=\(lineCount)\(classification)"
     }
 
     static func dictionarySummary(_ dictionary: [AnyHashable: Any]) -> String {

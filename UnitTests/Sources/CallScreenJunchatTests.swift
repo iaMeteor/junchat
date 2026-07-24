@@ -372,9 +372,46 @@ struct CallScreenJunchatTests {
         #expect(request["api"] as? String == "toWidget")
         let requestID = try #require(request["requestId"] as? String)
         viewModel.process(viewAction: .widgetAction(message: hangupAcknowledgement(requestID: requestID)))
+        await waitUntil { events.contains("acknowledgementForwarded") }
+
+        #expect(widgetDriver.stopCallsCount == 0)
+        #expect(elementCallService.tearDownCallSessionGenerationCallsCount == 0)
+        #expect(!events.contains("dismissed"))
+
+        fixture.widgetActions.send(.callEnded)
         await waitUntil { events.contains("dismissed") }
 
         #expect(events == ["hangupEvaluated", "acknowledgementForwarded", "widgetStopped", "serviceTornDown", "dismissed"])
+    }
+
+    @Test
+    @MainActor
+    func acknowledgedHangupWithoutCallCloseUsesBoundedFallback() async throws {
+        let fixture = makeLifecycleViewModel(callCloseTimeout: .milliseconds(20))
+        let viewModel = fixture.viewModel
+        let widgetDriver = fixture.widgetDriver
+        let elementCallService = fixture.elementCallService
+        var hangupJavaScript: String?
+
+        viewModel.context.javaScriptEvaluator = { script in
+            guard script.contains(#""action":"im.vector.hangup""#) else { return "ignored" }
+            hangupJavaScript = script
+            return "scheduled"
+        }
+
+        viewModel.process(viewAction: .endCall)
+        await waitUntil { hangupJavaScript != nil }
+        let requestID = try hangupRequestID(from: #require(hangupJavaScript))
+        viewModel.process(viewAction: .widgetAction(message: hangupAcknowledgement(requestID: requestID)))
+        await waitUntil { widgetDriver.handleMessageCallsCount == 1 }
+
+        #expect(widgetDriver.stopCallsCount == 0)
+        #expect(elementCallService.tearDownCallSessionGenerationCallsCount == 0)
+
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(widgetDriver.stopCallsCount == 1)
+        #expect(elementCallService.tearDownCallSessionGenerationCallsCount == 1)
     }
 
     @Test
@@ -1056,14 +1093,17 @@ struct CallScreenJunchatTests {
         let viewModel: CallScreenViewModel
         let widgetDriver: ElementCallWidgetDriverMock
         let elementCallService: ElementCallServiceMock
+        let widgetActions: PassthroughSubject<ElementCallWidgetDriverAction, Never>
     }
 
     @MainActor
-    private func makeLifecycleViewModel(hangupDeliveryTimeout: Duration = .seconds(1)) -> LifecycleViewModelFixture {
+    private func makeLifecycleViewModel(hangupDeliveryTimeout: Duration = .seconds(1),
+                                        callCloseTimeout: Duration = .seconds(2)) -> LifecycleViewModelFixture {
         let widgetDriver = ElementCallWidgetDriverMock()
+        let widgetActions = PassthroughSubject<ElementCallWidgetDriverAction, Never>()
         widgetDriver.underlyingWidgetID = "widget"
         widgetDriver.underlyingMessagePublisher = .init()
-        widgetDriver.underlyingActions = Empty().eraseToAnyPublisher()
+        widgetDriver.underlyingActions = widgetActions.eraseToAnyPublisher()
         widgetDriver.startBaseURLClientIDColorSchemeVoiceOnlyRageshakeURLAnalyticsConfigurationReturnValue = .success(URL.userDirectory)
         widgetDriver.handleMessageReturnValue = .success(true)
 
@@ -1085,10 +1125,12 @@ struct CallScreenJunchatTests {
                                             analyticsService: AnalyticsService(client: AnalyticsClientMock(), appSettings: appSettings),
                                             callConnectedTonePlayer: { },
                                             callEndedTonePlayer: { },
-                                            hangupDeliveryTimeout: hangupDeliveryTimeout)
+                                            hangupDeliveryTimeout: hangupDeliveryTimeout,
+                                            callCloseTimeout: callCloseTimeout)
         return .init(viewModel: viewModel,
                      widgetDriver: widgetDriver,
-                     elementCallService: elementCallService)
+                     elementCallService: elementCallService,
+                     widgetActions: widgetActions)
     }
 
     @MainActor

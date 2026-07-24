@@ -53,6 +53,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
     private var shouldDismissAfterHangup = false
     private var pendingHangupAcknowledgement: PendingHangupAcknowledgement?
     private let hangupDeliveryTimeout: Duration
+    private let callCloseTimeout: Duration
 
     /// Designated initialiser
     /// - Parameters:
@@ -73,7 +74,8 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
          setProximityMonitoringEnabled: @escaping (Bool) -> Void = { UIDevice.current.isProximityMonitoringEnabled = $0 },
          applicationStateProvider: @escaping @MainActor () -> UIApplication.State = { UIApplication.shared.applicationState },
          callMediaCoordinator: CallMediaCoordinatorProtocol? = nil,
-         hangupDeliveryTimeout: Duration = .seconds(1)) {
+         hangupDeliveryTimeout: Duration = .seconds(1),
+         callCloseTimeout: Duration = .seconds(2)) {
         self.elementCallService = elementCallService
         self.configuration = configuration
         self.appSettings = appSettings
@@ -90,6 +92,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
                                                                                  sessionOwnership: .shared)
         self.callEndedTonePlayer = callEndedTonePlayer
         self.hangupDeliveryTimeout = hangupDeliveryTimeout
+        self.callCloseTimeout = callCloseTimeout
         isPictureInPictureAllowed = allowPictureInPicture
 
         guard let deviceID = configuration.clientProxy.deviceID else { fatalError("Missing device ID for the call.") }
@@ -246,10 +249,12 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
                                                    acknowledgementGate: acknowledgementGate)
             guard !Task.isCancelled, !hasCompletedCall else { return }
 
-            callTerminationTask = nil
             switch outcome {
             case .delivered:
-                MXLog.info("[JunchatCall] Element Call hangup acknowledged")
+                MXLog.info("[JunchatCall] Element Call hangup acknowledged; waiting for call close")
+                try? await Task.sleep(for: callCloseTimeout)
+                guard !Task.isCancelled, !hasCompletedCall else { return }
+                MXLog.warning("[JunchatCall] Element Call close timed out; continuing teardown")
             case .failed:
                 MXLog.warning("[JunchatCall] Element Call hangup request failed; continuing teardown")
             case .timedOut:
@@ -260,6 +265,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
                 return
             }
 
+            callTerminationTask = nil
             if shouldDismissAfterHangup {
                 completeCall()
             } else {
