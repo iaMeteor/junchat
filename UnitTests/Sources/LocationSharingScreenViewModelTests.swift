@@ -8,9 +8,9 @@
 
 import Combine
 import CoreLocation
+@testable import ElementX
 import MapKit
 import SwiftUI
-@testable import ElementX
 import Testing
 
 @MainActor
@@ -564,14 +564,14 @@ struct JunchatMapKitMapViewTests {
         let geolocationUncertainty = BindingBox<CLLocationAccuracy?>(nil)
         
         return JunchatMapKitMapView(options: .init(zoomLevel: 15,
-                                                  initialZoomLevel: 10,
-                                                  mapCenter: .init(latitude: 22.3193, longitude: 114.1694)),
-                                   mediaProvider: nil,
-                                   showsUserLocationMode: mode.binding,
-                                   mapCenterCoordinate: center.binding,
-                                   hasLoadedUserLocation: hasLoadedUserLocation.binding,
-                                   isLocationAuthorized: isLocationAuthorized.binding,
-                                   geolocationUncertainty: geolocationUncertainty.binding)
+                                                   initialZoomLevel: 10,
+                                                   mapCenter: .init(latitude: 22.3193, longitude: 114.1694)),
+                                    mediaProvider: nil,
+                                    showsUserLocationMode: mode.binding,
+                                    mapCenterCoordinate: center.binding,
+                                    hasLoadedUserLocation: hasLoadedUserLocation.binding,
+                                    isLocationAuthorized: isLocationAuthorized.binding,
+                                    geolocationUncertainty: geolocationUncertainty.binding)
     }
 }
 

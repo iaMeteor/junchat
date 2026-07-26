@@ -106,7 +106,7 @@ class ShareExtensionViewController: UIViewController {
         var parts = [String]()
         appendUniqueShareText(extensionItem.attributedTitle?.string, to: &parts)
         appendUniqueShareText(extensionItem.attributedContentText?.string, to: &parts)
-        appendUniqueShareText(await itemProvider.loadString(), to: &parts)
+        await appendUniqueShareText(itemProvider.loadString(), to: &parts)
         appendUniqueShareText(url.absoluteString, to: &parts)
         return parts.joined(separator: "\n")
     }

@@ -254,8 +254,8 @@ struct NotificationContentBuilderTests {
         let event = TimelineEventSDKMock()
         event.eventIdUnderlyingReturnValue = UUID().uuidString
         event.contentReturnValue = TimelineEventContent.messageLike(content: MessageLikeEventContent.rtcNotification(notificationType: RtcNotificationType.ring,
-                                                                                                                    expirationTs: 0,
-                                                                                                                    callIntent: RtcCallIntent.audio))
+                                                                                                                     expirationTs: 0,
+                                                                                                                     callIntent: RtcCallIntent.audio))
         
         let notificationItem = NotificationItemProxyMock(.init(event: .timeline(event: event),
                                                                roomID: "!testroom:matrix.org",

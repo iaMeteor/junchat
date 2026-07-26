@@ -35,9 +35,9 @@ final class IncomingCallScreenCoordinator: CoordinatorProtocol {
                                         roomAvatar: parameters.candidate.roomAvatar,
                                         isVoiceCall: parameters.candidate.isVoiceCall,
                                         mediaProvider: parameters.mediaProvider) { [actionsSubject, candidate = parameters.candidate] in
-            actionsSubject.send(.decline(candidate))
-        } onAccept: { [actionsSubject, candidate = parameters.candidate] in
-            actionsSubject.send(.accept(candidate))
-        })
+                actionsSubject.send(.decline(candidate))
+            } onAccept: { [actionsSubject, candidate = parameters.candidate] in
+                actionsSubject.send(.accept(candidate))
+            })
     }
 }

@@ -373,8 +373,13 @@ private final class DisabledLocationManager: CLLocationManagerProtocol {
     var desiredAccuracy: CLLocationAccuracy = kCLLocationAccuracyReduced
     var distanceFilter: CLLocationDistance = kCLDistanceFilterNone
     var pausesLocationUpdatesAutomatically = true
-    var authorizationStatus: CLAuthorizationStatus { .denied }
-    var accuracyAuthorization: CLAccuracyAuthorization { .reducedAccuracy }
+    var authorizationStatus: CLAuthorizationStatus {
+        .denied
+    }
+
+    var accuracyAuthorization: CLAccuracyAuthorization {
+        .reducedAccuracy
+    }
     
     func requestAlwaysAuthorization() { }
     func startUpdatingLocation() { }

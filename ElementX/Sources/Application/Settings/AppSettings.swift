@@ -81,7 +81,10 @@ enum JunchatCallRingtone: String, CaseIterable, Codable, Identifiable {
     case softBell = "junchat-call-soft-bell.caf"
     case softPulse = "junchat-call-soft-pulse.caf"
 
-    var id: String { rawValue }
+    var id: String {
+        rawValue
+    }
+
     var soundName: String? {
         self == .systemDefault ? nil : rawValue
     }
@@ -166,8 +169,13 @@ enum JunchatMessageNotificationSound: String, CaseIterable, Codable, Identifiabl
     case soft = "junchat-message-soft.caf"
     case duo = "junchat-message-duo.caf"
 
-    var id: String { rawValue }
-    var soundName: String { rawValue }
+    var id: String {
+        rawValue
+    }
+
+    var soundName: String {
+        rawValue
+    }
 
     var title: String {
         switch self {

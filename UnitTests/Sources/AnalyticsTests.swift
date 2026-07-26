@@ -173,7 +173,7 @@ final class AnalyticsTests {
     }
     
     @Test
-    func sendingUserProperties() throws {
+    func sendingUserProperties() {
         // Given a client with user properties set
         
         let client = PostHogAnalyticsClient(posthogFactory: MockPostHogFactory(mock: posthogMock))
@@ -226,7 +226,7 @@ final class AnalyticsTests {
     }
     
     @Test
-    func sendingAndUpdatingSuperProperties() throws {
+    func sendingAndUpdatingSuperProperties() {
         // Given a client with user properties set
         let client = PostHogAnalyticsClient(posthogFactory: MockPostHogFactory(mock: posthogMock))
         client.start(analyticsConfiguration: testAnalyticsConfiguration)
@@ -283,7 +283,7 @@ final class AnalyticsTests {
     }
     
     @Test
-    func shouldNotReportIfNotStarted() throws {
+    func shouldNotReportIfNotStarted() {
         // Given a client with user properties set
         let client = PostHogAnalyticsClient(posthogFactory: MockPostHogFactory(mock: posthogMock))
         

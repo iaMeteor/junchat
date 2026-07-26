@@ -23,63 +23,63 @@ struct TimelineView: View {
                 emergencyPrivacyModePlaceholder
             }
         }
-            .id(timelineContext.viewState.roomID)
-            // It is tempting to inject these environment values last to avoid also injecting them into the sheets,
-            // and that approach works great on iOS. But it doesn't work on macOS (as of 15.5) where the app goes 💥
-            .environmentObject(timelineContext)
-            .environment(\.timelineContext, timelineContext)
-            .environment(\.focussedEventID, timelineContext.viewState.timelineState.focussedEvent?.eventID)
-            .alert(item: $timelineContext.alertInfo)
-            .sheet(item: $timelineContext.manageMemberViewModel) {
-                ManageRoomMemberSheetView(context: $0.context)
-            }
-            .sheet(item: $timelineContext.debugInfo) { TimelineItemDebugView(info: $0) }
-            .sheet(item: $timelineContext.actionMenuInfo) { info in
-                let actions = TimelineItemMenuActionProvider(timelineItem: info.item,
-                                                             canCurrentUserSendMessage: timelineContext.viewState.canCurrentUserSendMessage,
-                                                             canCurrentUserRedactSelf: timelineContext.viewState.canCurrentUserRedactSelf,
-                                                             canCurrentUserRedactOthers: timelineContext.viewState.canCurrentUserRedactOthers,
-                                                             canCurrentUserPin: timelineContext.viewState.canCurrentUserPin,
-                                                             pinnedEventIDs: timelineContext.viewState.pinnedEventIDs,
-                                                             isDM: timelineContext.viewState.isDirectOneToOneRoom,
-                                                             isViewSourceEnabled: timelineContext.viewState.isViewSourceEnabled,
-                                                             areThreadsEnabled: timelineContext.viewState.areThreadsEnabled,
-                                                             timelineKind: timelineContext.viewState.timelineKind,
-                                                             emojiProvider: timelineContext.viewState.emojiProvider)
-                    .makeActions()
-                if let actions {
-                    TimelineItemMenu(item: info.item, actions: actions)
-                        .environmentObject(timelineContext)
-                }
-            }
-            .sheet(item: $timelineContext.reactionSummaryInfo) {
-                ReactionsSummaryView(reactions: $0.reactions,
-                                     members: timelineContext.viewState.members,
-                                     mediaProvider: timelineContext.mediaProvider,
-                                     selectedReactionKey: $0.selectedKey)
-                    .edgesIgnoringSafeArea([.bottom])
-            }
-            .sheet(item: $timelineContext.readReceiptsSummaryInfo) {
-                ReadReceiptsSummaryView(orderedReadReceipts: $0.orderedReceipts)
+        .id(timelineContext.viewState.roomID)
+        // It is tempting to inject these environment values last to avoid also injecting them into the sheets,
+        // and that approach works great on iOS. But it doesn't work on macOS (as of 15.5) where the app goes 💥
+        .environmentObject(timelineContext)
+        .environment(\.timelineContext, timelineContext)
+        .environment(\.focussedEventID, timelineContext.viewState.timelineState.focussedEvent?.eventID)
+        .alert(item: $timelineContext.alertInfo)
+        .sheet(item: $timelineContext.manageMemberViewModel) {
+            ManageRoomMemberSheetView(context: $0.context)
+        }
+        .sheet(item: $timelineContext.debugInfo) { TimelineItemDebugView(info: $0) }
+        .sheet(item: $timelineContext.actionMenuInfo) { info in
+            let actions = TimelineItemMenuActionProvider(timelineItem: info.item,
+                                                         canCurrentUserSendMessage: timelineContext.viewState.canCurrentUserSendMessage,
+                                                         canCurrentUserRedactSelf: timelineContext.viewState.canCurrentUserRedactSelf,
+                                                         canCurrentUserRedactOthers: timelineContext.viewState.canCurrentUserRedactOthers,
+                                                         canCurrentUserPin: timelineContext.viewState.canCurrentUserPin,
+                                                         pinnedEventIDs: timelineContext.viewState.pinnedEventIDs,
+                                                         isDM: timelineContext.viewState.isDirectOneToOneRoom,
+                                                         isViewSourceEnabled: timelineContext.viewState.isViewSourceEnabled,
+                                                         areThreadsEnabled: timelineContext.viewState.areThreadsEnabled,
+                                                         timelineKind: timelineContext.viewState.timelineKind,
+                                                         emojiProvider: timelineContext.viewState.emojiProvider)
+                .makeActions()
+            if let actions {
+                TimelineItemMenu(item: info.item, actions: actions)
                     .environmentObject(timelineContext)
             }
-            .translationPresentation(isPresented: $timelineContext.showTranslation, text: timelineContext.textToBeTranslated ?? "")
-            .onChange(of: timelineContext.showTranslation) { oldValue, newValue in
-                if oldValue, !newValue {
-                    // clear texts after translation was dismissed
-                    timelineContext.textToBeTranslated = nil
-                }
+        }
+        .sheet(item: $timelineContext.reactionSummaryInfo) {
+            ReactionsSummaryView(reactions: $0.reactions,
+                                 members: timelineContext.viewState.members,
+                                 mediaProvider: timelineContext.mediaProvider,
+                                 selectedReactionKey: $0.selectedKey)
+                .edgesIgnoringSafeArea([.bottom])
+        }
+        .sheet(item: $timelineContext.readReceiptsSummaryInfo) {
+            ReadReceiptsSummaryView(orderedReadReceipts: $0.orderedReceipts)
+                .environmentObject(timelineContext)
+        }
+        .translationPresentation(isPresented: $timelineContext.showTranslation, text: timelineContext.textToBeTranslated ?? "")
+        .onChange(of: timelineContext.showTranslation) { oldValue, newValue in
+            if oldValue, !newValue {
+                // clear texts after translation was dismissed
+                timelineContext.textToBeTranslated = nil
             }
-            .onDrop(of: ["public.item", "public.file-url"], isTargeted: $dragOver) { providers -> Bool in
-                let supportedProviders = providers.filter(\.isSupportedForPasteOrDrop)
+        }
+        .onDrop(of: ["public.item", "public.file-url"], isTargeted: $dragOver) { providers -> Bool in
+            let supportedProviders = providers.filter(\.isSupportedForPasteOrDrop)
 
-                guard !supportedProviders.isEmpty else {
-                    return false
-                }
-
-                timelineContext.send(viewAction: .handlePasteOrDrop(providers: supportedProviders))
-                return true
+            guard !supportedProviders.isEmpty else {
+                return false
             }
+
+            timelineContext.send(viewAction: .handlePasteOrDrop(providers: supportedProviders))
+            return true
+        }
     }
 
     private var emergencyPrivacyModePlaceholder: some View {

@@ -165,8 +165,8 @@ enum JunchatErrorReporter {
     private static let ingestToken = "635d21e7ea07a7e7241f92fb9b86bbbeab1f1434d542fbd1"
     private static let queue = DispatchQueue(label: "cn.yyzs120.junchat.error-reporter")
     private static let duplicateWindow: TimeInterval = 60
-    nonisolated(unsafe) private static var installed = false
-    nonisolated(unsafe) private static var recentReports = [String: Date]()
+    private nonisolated(unsafe) static var installed = false
+    private nonisolated(unsafe) static var recentReports = [String: Date]()
     
     static func install() {
         queue.async {

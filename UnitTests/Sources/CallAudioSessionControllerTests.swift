@@ -36,7 +36,7 @@ struct CallAudioSessionControllerTests {
         let categoryCount = audioSessionMock.setCategoryModeOptionsCallsCount
 
         controller.handleInterruption(notification: .init(name: AVAudioSession.interruptionNotification,
-                                                         userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.ended.rawValue]))
+                                                          userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.ended.rawValue]))
 
         #expect(audioSessionMock.setAllowHapticsAndSystemSoundsDuringRecordingCallsCount == hapticsCount)
         #expect(audioSessionMock.setActiveOptionsCallsCount == activationCount)
@@ -46,7 +46,7 @@ struct CallAudioSessionControllerTests {
     @Test
     func handleInterruptionDoesNotActivateWhenCallSessionIsIdle() {
         controller.handleInterruption(notification: .init(name: AVAudioSession.interruptionNotification,
-                                                         userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.ended.rawValue]))
+                                                          userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.ended.rawValue]))
 
         #expect(audioSessionMock.setAllowHapticsAndSystemSoundsDuringRecordingCallsCount == 0)
         #expect(audioSessionMock.setActiveOptionsCallsCount == 0)

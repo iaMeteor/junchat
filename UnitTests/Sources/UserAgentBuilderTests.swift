@@ -33,7 +33,7 @@ struct UserAgentBuilderTests {
         let userAgent = UserAgentBuilder.makeASCIIUserAgent()
         #expect(userAgent.allSatisfy { character in
             character.unicodeScalars.allSatisfy { scalar in
-                scalar.value == 0x09 || (scalar.value >= 0x20 && scalar.value <= 0x7e)
+                scalar.value == 0x09 || (scalar.value >= 0x20 && scalar.value <= 0x7E)
             }
         }, "\(userAgent) contains a character that cannot be used in an HTTP header")
     }

@@ -29,7 +29,7 @@ final class ChangePasswordScreenCoordinator: CoordinatorProtocol {
     
     init(parameters: ChangePasswordScreenCoordinatorParameters) {
         viewModel = ChangePasswordScreenViewModel(clientProxy: parameters.clientProxy,
-                                                 userIndicatorController: parameters.userIndicatorController)
+                                                  userIndicatorController: parameters.userIndicatorController)
     }
     
     func start() {

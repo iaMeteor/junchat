@@ -3,8 +3,8 @@
 //
 
 import CryptoKit
-@testable import ElementX
 import Dispatch
+@testable import ElementX
 import Foundation
 import Testing
 import UserNotifications
@@ -348,12 +348,12 @@ struct NotificationBadgePolicyTests {
             weakCallbackToken = callbackToken
             weakCompletionToken = completionToken
             completion = NotificationContentCompletion(bestAttemptContent: content,
-                                                        contentHandler: { [callbackToken] _ in
-                                                            _ = callbackToken
-                                                        },
-                                                        completionHook: { [completionToken] in
-                                                            _ = completionToken
-                                                        })
+                                                       contentHandler: { [callbackToken] _ in
+                                                           _ = callbackToken
+                                                       },
+                                                       completionHook: { [completionToken] in
+                                                           _ = completionToken
+                                                       })
         }
 
         #expect(weakContent != nil)
@@ -455,21 +455,21 @@ struct NotificationBadgePolicyTests {
         let content = makeContent()
 
         #expect(NSERequestPolicy.configuredAction(shouldDeliverOffline: false,
-                                                 content: content) == .missingRoomID)
+                                                  content: content) == .missingRoomID)
 
         content.userInfo["room_id"] = "!room:example.org"
         #expect(NSERequestPolicy.configuredAction(shouldDeliverOffline: false,
-                                                 content: content) == .missingEventID)
+                                                  content: content) == .missingEventID)
 
         content.userInfo["event_id"] = "$event"
         #expect(NSERequestPolicy.configuredAction(shouldDeliverOffline: false,
-                                                 content: content) == .missingClientID)
+                                                  content: content) == .missingClientID)
 
         content.userInfo["pusher_notification_client_identifier"] = "client"
         #expect(NSERequestPolicy.configuredAction(shouldDeliverOffline: false,
-                                                 content: content) == .process(roomID: "!room:example.org",
-                                                                              eventID: "$event",
-                                                                              clientID: "client"))
+                                                  content: content) == .process(roomID: "!room:example.org",
+                                                                                eventID: "$event",
+                                                                                clientID: "client"))
     }
 
     @Test

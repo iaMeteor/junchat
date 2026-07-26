@@ -65,10 +65,8 @@ struct EntertainmentScreen: View {
                             let point = JunchatTetrisPoint(x: column, y: row)
                             Rectangle()
                                 .fill(game.isOccupied(point) ? Color.green : Color(.secondarySystemBackground))
-                                .overlay(
-                                    Rectangle()
-                                        .stroke(Color(.separator).opacity(0.35), lineWidth: 0.5)
-                                )
+                                .overlay(Rectangle()
+                                    .stroke(Color(.separator).opacity(0.35), lineWidth: 0.5))
                                 .frame(width: cellSize, height: cellSize)
                                 .accessibilityHidden(true)
                         }

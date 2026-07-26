@@ -340,9 +340,9 @@ extension JunchatMapKitMapView {
             case 15...:
                 return 900
             case 10..<15:
-                return 8_000
+                return 8000
             case 6..<10:
-                return 80_000
+                return 80000
             default:
                 return 8_000_000
             }
