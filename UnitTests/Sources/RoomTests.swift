@@ -34,6 +34,26 @@ struct RoomTests {
         }
     }
 
+    @Test(arguments: CallRoomScenario.all)
+    @MainActor
+    func everyRoomOffersAVoiceAndAVideoStartAction(_ scenario: CallRoomScenario) async {
+        let startCallOptions = RoomCallControlsToolbar.startCallOptions
+        #expect(startCallOptions.map(\.isVoiceCall) == [true, false])
+
+        for option in startCallOptions {
+            let room = RoomSDKMock()
+            room.roomInfoReturnValue = makeRoomInfo(scenario: scenario)
+            room.hasActiveRoomCallReturnValue = false
+
+            let configuration = await ElementCallWidgetDriver.callConfiguration(room: room,
+                                                                                voiceOnly: option.isVoiceCall)
+
+            #expect(configuration.intent == scenario.expectedIntent(hasActiveCall: false,
+                                                                    voiceOnly: option.isVoiceCall))
+            #expect(configuration.skipLobby == scenario.expectedSkipLobby)
+        }
+    }
+
     @Test(arguments: [false, true], [false, true])
     func failedRoomInfoUsesConservativeGroupConfiguration(hasActiveCall: Bool, voiceOnly: Bool) async {
         let room = RoomSDKMock()
