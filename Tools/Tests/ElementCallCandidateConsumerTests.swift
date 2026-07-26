@@ -44,6 +44,29 @@ final class ElementCallCandidateConsumerTests: XCTestCase {
         XCTAssertEqual(request.sourceCommit, sourceCommit)
     }
 
+    func testDeviceUDIDIsExplicitAndCandidateOnly() throws {
+        let deviceUDID = "00008150-001264C60163401C"
+
+        XCTAssertNil(try ElementCallCandidateDeviceRequest.resolve(deviceUDID: nil,
+                                                                   candidateRequested: false))
+        XCTAssertEqual(try ElementCallCandidateDeviceRequest.resolve(deviceUDID: deviceUDID,
+                                                                     candidateRequested: true),
+                       deviceUDID)
+        XCTAssertThrowsError(try ElementCallCandidateDeviceRequest.resolve(deviceUDID: deviceUDID,
+                                                                           candidateRequested: false))
+        for invalid in [
+            "JJiPhone",
+            "00008150-001264C60163401C --allowProvisioningUpdates",
+            "00008150_001264C60163401C",
+            "00008150-001264C60163401",
+            String(repeating: "a", count: 41)
+        ] {
+            XCTAssertThrowsError(try ElementCallCandidateDeviceRequest.resolve(deviceUDID: invalid,
+                                                                               candidateRequested: true),
+                                 "Expected invalid device UDID rejection: \(invalid)")
+        }
+    }
+
     func testDuplicateJSONKeysAreRejectedBeforeDecoding() throws {
         XCTAssertNoThrow(try ElementCallCandidateJSON.validateUniqueKeys(Data(#"{"outer":{"value":1}}"#.utf8)))
 
@@ -244,6 +267,26 @@ final class ElementCallCandidateConsumerTests: XCTestCase {
                 "INFOPLIST_FILE": repositoryURL.appending(path: "ShareExtension/SupportingFiles/Info.plist").path
             ]
         ])
+        XCTAssertEqual(inspection.targetEntitlementPaths, [
+            "ElementX": repositoryURL.appending(path: "ElementX/SupportingFiles/ElementX.entitlements").path,
+            "NSE": repositoryURL.appending(path: "NSE/SupportingFiles/NSE.entitlements").path,
+            "ShareExtension": repositoryURL.appending(path: "ShareExtension/SupportingFiles/ShareExtension.entitlements").path
+        ])
+
+        let developmentSignedSpec = try ElementCallCandidateProjectSpec.make(defaultProjectYAML: projectYAML,
+                                                                             stagedPackageURL: stagedPackageURL,
+                                                                             repositoryURL: repositoryURL,
+                                                                             developmentSigning: true)
+        let developmentSignedInspection = try ElementCallCandidateProjectSpec.inspect(developmentSignedSpec)
+        let signingSettings = [
+            "CODE_SIGN_IDENTITY": "Apple Development",
+            "CODE_SIGN_STYLE": "Automatic"
+        ]
+        for targetName in ["ElementX", "NSE", "ShareExtension"] {
+            XCTAssertEqual(developmentSignedInspection.targetBaseSettings[targetName],
+                           inspection.targetBaseSettings[targetName, default: [:]].merging(signingSettings) { _, signed in signed })
+        }
+        XCTAssertEqual(developmentSignedInspection.targetEntitlementPaths, inspection.targetEntitlementPaths)
         XCTAssertEqual(try String(contentsOf: projectYAMLURL, encoding: .utf8), projectYAML)
 
         let driftedYAML = projectYAML.replacingOccurrences(of: "exactVersion: 0.19.1", with: "exactVersion: 0.19.2")
@@ -252,6 +295,58 @@ final class ElementCallCandidateConsumerTests: XCTestCase {
                                                                       repositoryURL: repositoryURL)) { error in
             XCTAssertTrue(error.localizedDescription.contains("0.19.1"))
         }
+    }
+
+    func testGeneratedTransientProjectUsesAbsoluteEntitlementBuildSettings() throws {
+        let repositoryURL = URL(filePath: FileManager.default.currentDirectoryPath)
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let stagedPackageURL = temporaryDirectory.appending(path: "EmbeddedElementCall")
+        try FileManager.default.createDirectory(at: stagedPackageURL, withIntermediateDirectories: false)
+        try Data("// swift-tools-version: 6.0\n".utf8)
+            .write(to: stagedPackageURL.appending(path: "Package.swift"))
+
+        let projectYAML = try String(contentsOf: repositoryURL.appending(path: "project.yml"), encoding: .utf8)
+        let spec = try ElementCallCandidateProjectSpec.make(defaultProjectYAML: projectYAML,
+                                                            stagedPackageURL: stagedPackageURL,
+                                                            repositoryURL: repositoryURL,
+                                                            developmentSigning: true)
+        let specURL = temporaryDirectory.appending(path: "project.yml")
+        try Data(spec.utf8).write(to: specURL)
+
+        let process = Process()
+        process.executableURL = URL(filePath: "/opt/homebrew/bin/xcodegen")
+        process.arguments = [
+            "generate", "--no-env", "--spec", specURL.path,
+            "--project", temporaryDirectory.path, "--project-root", repositoryURL.path
+        ]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        process.waitUntilExit()
+        let outputData = output.fileHandleForReading.readDataToEndOfFile()
+        XCTAssertEqual(process.terminationReason, .exit)
+        XCTAssertEqual(process.terminationStatus, 0,
+                       String(bytes: outputData, encoding: .utf8) ?? "XcodeGen emitted non-UTF-8 output.")
+
+        let projectData = try Data(contentsOf: temporaryDirectory
+            .appending(path: "ElementX.xcodeproj/project.pbxproj"))
+        let root = try XCTUnwrap(try PropertyListSerialization.propertyList(from: projectData,
+                                                                            options: [],
+                                                                            format: nil) as? [String: Any])
+        let objects = try XCTUnwrap(root["objects"] as? [String: Any])
+        let entitlementPaths = Set(objects.values.compactMap { value -> String? in
+            guard let object = value as? [String: Any],
+                  object["isa"] as? String == "XCBuildConfiguration",
+                  let settings = object["buildSettings"] as? [String: Any] else { return nil }
+            return settings["CODE_SIGN_ENTITLEMENTS"] as? String
+        })
+        XCTAssertEqual(entitlementPaths, Set([
+            repositoryURL.appending(path: "ElementX/SupportingFiles/ElementX.entitlements").path,
+            repositoryURL.appending(path: "NSE/SupportingFiles/NSE.entitlements").path,
+            repositoryURL.appending(path: "ShareExtension/SupportingFiles/ShareExtension.entitlements").path
+        ]))
     }
 
     func testTrackedProjectStateReadsCapturedProjectAndResolutionBytes() throws {
@@ -338,10 +433,12 @@ final class ElementCallCandidateConsumerTests: XCTestCase {
                                                                                 candidateData: JSONSerialization.data(withJSONObject: changedDependency, options: [.sortedKeys])))
     }
 
-    func testBuildInvocationIsFixedToUnsignedDebugSimulator() {
+    func testBuildInvocationDefaultsToUnsignedDebugSimulatorAndUsesExplicitDevelopmentDeviceMode() {
         let projectURL = URL(filePath: "/private/tmp/candidate/ElementX.xcodeproj")
         let derivedDataURL = URL(filePath: "/private/tmp/candidate/DerivedData")
         let sourcePackagesURL = URL(filePath: "/private/tmp/candidate/SourcePackages")
+        let repositoryURL = URL(filePath: "/private/repository")
+        let deviceUDID = "00008150-001264C60163401C"
 
         XCTAssertEqual(ElementCallCandidateBuildInvocation.resolveArguments(projectURL: projectURL,
                                                                             derivedDataURL: derivedDataURL,
@@ -359,7 +456,7 @@ final class ElementCallCandidateConsumerTests: XCTestCase {
         XCTAssertEqual(ElementCallCandidateBuildInvocation.arguments(projectURL: projectURL,
                                                                      derivedDataURL: derivedDataURL,
                                                                      sourcePackagesURL: sourcePackagesURL,
-                                                                     repositoryURL: URL(filePath: "/private/repository")), [
+                                                                     repositoryURL: repositoryURL), [
                 "-IDEPackageSupportDisableManifestSandbox=1",
                 "-project", projectURL.path,
                 "-scheme", "ElementX",
@@ -374,6 +471,27 @@ final class ElementCallCandidateConsumerTests: XCTestCase {
                 "CODE_SIGNING_ALLOWED=NO",
                 "CODE_SIGNING_REQUIRED=NO",
                 "CODE_SIGN_IDENTITY=",
+                "OTHER_SWIFT_FLAGS=$(inherited) -disable-sandbox",
+                "SRCROOT=/private/repository",
+                "build"
+            ])
+
+        XCTAssertEqual(ElementCallCandidateBuildInvocation.arguments(projectURL: projectURL,
+                                                                     derivedDataURL: derivedDataURL,
+                                                                     sourcePackagesURL: sourcePackagesURL,
+                                                                     repositoryURL: repositoryURL,
+                                                                     deviceUDID: deviceUDID), [
+                "-IDEPackageSupportDisableManifestSandbox=1",
+                "-project", projectURL.path,
+                "-scheme", "ElementX",
+                "-configuration", "Debug",
+                "-sdk", "iphoneos",
+                "-destination", "generic/platform=iOS",
+                "-derivedDataPath", derivedDataURL.path,
+                "-resultBundlePath", "/private/tmp/candidate/Build.xcresult",
+                "-clonedSourcePackagesDirPath", sourcePackagesURL.path,
+                "-disableAutomaticPackageResolution",
+                "-onlyUsePackageVersionsFromResolvedFile",
                 "OTHER_SWIFT_FLAGS=$(inherited) -disable-sandbox",
                 "SRCROOT=/private/repository",
                 "build"
@@ -397,6 +515,64 @@ final class ElementCallCandidateConsumerTests: XCTestCase {
                 "XBS_DISABLE_SANDBOXED_BUILDS": "YES",
                 "TMPDIR": "/private/tmp/candidate/"
             ])
+    }
+
+    func testDevelopmentDeviceInstallationRequiresExactProfileIdentity() throws {
+        let appURL = URL(filePath: "/private/tmp/candidate/DerivedData/Build/Products/Debug-iphoneos/Junchat.app")
+        let deviceUDID = "00008150-001264C60163401C"
+        let teamIdentifier = "W834S4TA7S"
+        let bundleIdentifier = "com.heyujk.junchat"
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+        XCTAssertEqual(ElementCallCandidateDeviceInstallation.appURL(derivedDataURL: URL(filePath: "/private/tmp/candidate/DerivedData")),
+                       appURL)
+        XCTAssertEqual(ElementCallCandidateDeviceInstallation.arguments(deviceUDID: deviceUDID, appURL: appURL), [
+            "devicectl", "device", "install", "app", "--device", deviceUDID, appURL.path
+        ])
+
+        let validProfile: [String: Any] = [
+            "TeamIdentifier": [teamIdentifier],
+            "ExpirationDate": now.addingTimeInterval(3600),
+            "ProvisionedDevices": [deviceUDID],
+            "Entitlements": [
+                "application-identifier": "\(teamIdentifier).\(bundleIdentifier)",
+                "com.apple.developer.team-identifier": teamIdentifier,
+                "get-task-allow": true
+            ]
+        ]
+        func data(_ profile: [String: Any]) throws -> Data {
+            try PropertyListSerialization.data(fromPropertyList: profile, format: .xml, options: 0)
+        }
+
+        XCTAssertNoThrow(try ElementCallCandidateDeviceInstallation.validateProfile(data(validProfile),
+                                                                                    bundleIdentifier: bundleIdentifier,
+                                                                                    teamIdentifier: teamIdentifier,
+                                                                                    deviceUDID: deviceUDID,
+                                                                                    now: now))
+        for mutation: (String, (inout [String: Any]) throws -> Void) in [
+            ("distribution", { profile in
+                var entitlements = try XCTUnwrap(profile["Entitlements"] as? [String: Any])
+                entitlements["get-task-allow"] = false
+                profile["Entitlements"] = entitlements
+            }),
+            ("wrong bundle", { profile in
+                var entitlements = try XCTUnwrap(profile["Entitlements"] as? [String: Any])
+                entitlements["application-identifier"] = "\(teamIdentifier).invalid.bundle"
+                profile["Entitlements"] = entitlements
+            }),
+            ("wrong team", { profile in profile["TeamIdentifier"] = ["INVALIDTEAM"] }),
+            ("missing device", { profile in profile["ProvisionedDevices"] = ["00008150-0000000000000000"] }),
+            ("expired", { profile in profile["ExpirationDate"] = now })
+        ] {
+            var profile = validProfile
+            try mutation.1(&profile)
+            XCTAssertThrowsError(try ElementCallCandidateDeviceInstallation.validateProfile(data(profile),
+                                                                                            bundleIdentifier: bundleIdentifier,
+                                                                                            teamIdentifier: teamIdentifier,
+                                                                                            deviceUDID: deviceUDID,
+                                                                                            now: now),
+                                 "Expected \(mutation.0) profile rejection")
+        }
     }
 
     func testXcodeBuildWrapperOwnsResourceAndIsolationGates() throws {

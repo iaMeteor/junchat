@@ -21,6 +21,7 @@ enum ElementCallCandidateProjectSpec {
         let packageKeys: Set<String>
         let packagePaths: [String: String]
         let targetBaseSettings: [String: [String: String]]
+        let targetEntitlementPaths: [String: String]
     }
 
     static func validateDefault(_ yaml: String) throws {
@@ -31,10 +32,15 @@ enum ElementCallCandidateProjectSpec {
             "The default EmbeddedElementCall dependency must remain the public remote 0.19.1 package.")
     }
 
-    static func make(defaultProjectYAML: String, stagedPackageURL: URL, repositoryURL: URL) throws -> String {
+    static func make(defaultProjectYAML: String,
+                     stagedPackageURL: URL,
+                     repositoryURL: URL,
+                     developmentSigning: Bool = false) throws -> String {
         try validateDefault(defaultProjectYAML)
         try ElementCallCandidatePath.validateRecordedAbsolute(stagedPackageURL.path, label: "staged Element Call package")
-        let targetBaseSettings = try protectedTargetBaseSettings(repositoryURL: repositoryURL)
+        let targetBaseSettings = try protectedTargetBaseSettings(repositoryURL: repositoryURL,
+                                                                 developmentSigning: developmentSigning)
+        let targetEntitlementPaths = try protectedTargetEntitlementPaths(repositoryURL: repositoryURL)
         guard var node = try Yams.compose(yaml: defaultProjectYAML), var root = node.mapping,
               var packagesNode = root["packages"], var packages = packagesNode.mapping,
               var optionsNode = root["options"], var options = optionsNode.mapping else {
@@ -69,7 +75,7 @@ enum ElementCallCandidateProjectSpec {
         elementXNode["postBuildScripts:REPLACE"] = Node([] as [Node])
         targetsNode["ElementX"] = elementXNode
 
-        for targetName in targetBaseSettings.keys.sorted() {
+        for targetName in Set(targetBaseSettings.keys).union(targetEntitlementPaths.keys).sorted() {
             var targetNode = targetsNode[targetName] ?? Node([] as [(Node, Node)])
             try candidateProjectRequire(targetNode.mapping != nil,
                                         "The transient \(targetName) target override must be a mapping.")
@@ -84,6 +90,13 @@ enum ElementCallCandidateProjectSpec {
             }
             settingsNode["base"] = baseNode
             targetNode["settings"] = settingsNode
+            if let entitlementPath = targetEntitlementPaths[targetName] {
+                var entitlementsNode = targetNode["entitlements"] ?? Node([] as [(Node, Node)])
+                try candidateProjectRequire(entitlementsNode.mapping != nil,
+                                            "The transient \(targetName) entitlements override must be a mapping.")
+                entitlementsNode["path"] = Node(entitlementPath)
+                targetNode["entitlements"] = entitlementsNode
+            }
             targetsNode[targetName] = targetNode
         }
         root["targets"] = targetsNode
@@ -95,12 +108,14 @@ enum ElementCallCandidateProjectSpec {
             inspection.elementCallURL == nil && inspection.elementCallExactVersion == nil && !inspection.hasPostGenerationCommand &&
             inspection.replacesElementXPreBuildScripts && inspection.replacesElementXPostBuildScripts &&
             inspection.packagePaths == ["Compound": compoundURL.path, "EmbeddedElementCall": stagedPackageURL.path] &&
-            inspection.targetBaseSettings == targetBaseSettings,
+            inspection.targetBaseSettings == targetBaseSettings &&
+            inspection.targetEntitlementPaths == targetEntitlementPaths,
             "The transient XcodeGen spec did not isolate the local Element Call package.")
         return yaml
     }
 
-    private static func protectedTargetBaseSettings(repositoryURL: URL) throws -> [String: [String: String]] {
+    private static func protectedTargetBaseSettings(repositoryURL: URL,
+                                                    developmentSigning: Bool) throws -> [String: [String: String]] {
         let paths: [(String, String, String, ElementCallCandidatePath.Kind)] = [
             ("ElementX", "DEVELOPMENT_ASSET_PATHS", "DevelopmentAssets/Media", .directory),
             ("ElementX", "INFOPLIST_FILE", "ElementX/SupportingFiles/Info.plist", .file),
@@ -115,7 +130,30 @@ enum ElementCallCandidateProjectSpec {
                                                               label: "protected \(target) \(setting) path")
             settings[target, default: [:]][setting] = url.path
         }
+        if developmentSigning {
+            let signingSettings = [
+                "CODE_SIGN_IDENTITY": "Apple Development",
+                "CODE_SIGN_STYLE": "Automatic"
+            ]
+            for targetName in ["ElementX", "NSE", "ShareExtension"] {
+                settings[targetName, default: [:]].merge(signingSettings) { _, signed in signed }
+            }
+        }
         return settings
+    }
+
+    private static func protectedTargetEntitlementPaths(repositoryURL: URL) throws -> [String: String] {
+        let paths = [
+            "ElementX": "ElementX/SupportingFiles/ElementX.entitlements",
+            "NSE": "NSE/SupportingFiles/NSE.entitlements",
+            "ShareExtension": "ShareExtension/SupportingFiles/ShareExtension.entitlements"
+        ]
+        return try paths.mapValues { relativePath in
+            let url = repositoryURL.appending(path: relativePath)
+            _ = try ElementCallCandidatePath.validateExisting(url, kind: .file,
+                                                              label: "protected target entitlements path")
+            return url.path
+        }
     }
 
     static func inspect(_ yaml: String) throws -> Inspection {
@@ -130,11 +168,16 @@ enum ElementCallCandidateProjectSpec {
         let postBuildScripts = elementX?["postBuildScripts:REPLACE"] as? [Any]
         let packagePaths = packages.compactMapValues { ($0 as? [String: Any])?["path"] as? String }
         var targetBaseSettings = [String: [String: String]]()
+        var targetEntitlementPaths = [String: String]()
         for (name, value) in root["targets"] as? [String: Any] ?? [:] {
             guard let target = value as? [String: Any],
                   let settings = target["settings"] as? [String: Any],
                   let base = settings["base"] as? [String: Any] else { continue }
             targetBaseSettings[name] = base.compactMapValues { $0 as? String }
+            if let entitlements = target["entitlements"] as? [String: Any],
+               let path = entitlements["path"] as? String {
+                targetEntitlementPaths[name] = path
+            }
         }
         return Inspection(elementCallPath: elementCall["path"] as? String,
                           elementCallURL: elementCall["url"] as? String,
@@ -144,7 +187,8 @@ enum ElementCallCandidateProjectSpec {
                           replacesElementXPostBuildScripts: postBuildScripts?.isEmpty == true,
                           packageKeys: Set(elementCall.keys),
                           packagePaths: packagePaths,
-                          targetBaseSettings: targetBaseSettings)
+                          targetBaseSettings: targetBaseSettings,
+                          targetEntitlementPaths: targetEntitlementPaths)
     }
 }
 
@@ -235,6 +279,26 @@ enum ElementCallCandidatePackageResolution {
     }
 }
 
+enum ElementCallCandidateDeviceRequest {
+    static func resolve(deviceUDID: String?, candidateRequested: Bool) throws -> String? {
+        guard let deviceUDID else { return nil }
+        try candidateProjectRequire(candidateRequested,
+                                    "A device UDID may only be used with a complete Element Call candidate request.")
+        let bytes = deviceUDID.utf8
+        let modernComponents = deviceUDID.split(separator: "-", omittingEmptySubsequences: false)
+        let isModern = modernComponents.count == 2 && modernComponents[0].utf8.count == 8 &&
+            modernComponents[1].utf8.count == 16 && modernComponents.allSatisfy { $0.utf8.allSatisfy(isHex) }
+        let isLegacy = bytes.count == 40 && bytes.allSatisfy(isHex)
+        try candidateProjectRequire(isModern || isLegacy,
+                                    "The development device UDID must use an Apple hardware UDID format.")
+        return deviceUDID
+    }
+
+    private static func isHex(_ byte: UInt8) -> Bool {
+        (48...57).contains(byte) || (65...70).contains(byte) || (97...102).contains(byte)
+    }
+}
+
 enum ElementCallCandidateBuildInvocation {
     static func resolveArguments(projectURL: URL,
                                  derivedDataURL: URL,
@@ -255,27 +319,40 @@ enum ElementCallCandidateBuildInvocation {
     static func arguments(projectURL: URL,
                           derivedDataURL: URL,
                           sourcePackagesURL: URL,
-                          repositoryURL: URL) -> [String] {
+                          repositoryURL: URL,
+                          deviceUDID: String? = nil) -> [String] {
         let temporaryRootURL = derivedDataURL.deletingLastPathComponent()
-        return [
+        let platformArguments: [String] = if deviceUDID == nil {
+            ["-sdk", "iphonesimulator", "-destination", "generic/platform=iOS Simulator"]
+        } else {
+            ["-sdk", "iphoneos", "-destination", "generic/platform=iOS"]
+        }
+        let signingArguments: [String] = if deviceUDID == nil {
+            ["CODE_SIGNING_ALLOWED=NO", "CODE_SIGNING_REQUIRED=NO", "CODE_SIGN_IDENTITY="]
+        } else {
+            []
+        }
+        var arguments = [
             "-IDEPackageSupportDisableManifestSandbox=1",
             "-project", projectURL.path,
             "-scheme", "ElementX",
-            "-configuration", "Debug",
-            "-sdk", "iphonesimulator",
-            "-destination", "generic/platform=iOS Simulator",
+            "-configuration", "Debug"
+        ]
+        arguments += platformArguments
+        arguments += [
             "-derivedDataPath", derivedDataURL.path,
             "-resultBundlePath", temporaryRootURL.appending(path: "Build.xcresult").path,
             "-clonedSourcePackagesDirPath", sourcePackagesURL.path,
             "-disableAutomaticPackageResolution",
-            "-onlyUsePackageVersionsFromResolvedFile",
-            "CODE_SIGNING_ALLOWED=NO",
-            "CODE_SIGNING_REQUIRED=NO",
-            "CODE_SIGN_IDENTITY=",
+            "-onlyUsePackageVersionsFromResolvedFile"
+        ]
+        arguments += signingArguments
+        arguments += [
             "OTHER_SWIFT_FLAGS=$(inherited) -disable-sandbox",
             "SRCROOT=\(repositoryURL.path)",
             "build"
         ]
+        return arguments
     }
 
     static func environment(repositoryURL: URL,
@@ -299,9 +376,97 @@ enum ElementCallCandidateBuildInvocation {
     }
 }
 
+enum ElementCallCandidateDeviceInstallation {
+    private struct BundleArtifact {
+        let url: URL
+        let bundleIdentifier: String
+        let packageType: String
+    }
+
+    static func appURL(derivedDataURL: URL) -> URL {
+        derivedDataURL.appending(path: "Build/Products/Debug-iphoneos/Junchat.app")
+    }
+
+    static func arguments(deviceUDID: String, appURL: URL) -> [String] {
+        ["devicectl", "device", "install", "app", "--device", deviceUDID, appURL.path]
+    }
+
+    static func validateProfile(_ data: Data,
+                                bundleIdentifier: String,
+                                teamIdentifier: String,
+                                deviceUDID: String,
+                                now: Date = Date()) throws {
+        guard let profile = try PropertyListSerialization.propertyList(from: data,
+                                                                       options: [],
+                                                                       format: nil) as? [String: Any],
+            profile["TeamIdentifier"] as? [String] == [teamIdentifier],
+            let expirationDate = profile["ExpirationDate"] as? Date,
+            expirationDate > now,
+            let provisionedDevices = profile["ProvisionedDevices"] as? [String],
+            provisionedDevices.contains(deviceUDID),
+            let entitlements = profile["Entitlements"] as? [String: Any],
+            entitlements["application-identifier"] as? String == "\(teamIdentifier).\(bundleIdentifier)",
+            entitlements["com.apple.developer.team-identifier"] as? String == teamIdentifier,
+            entitlements["get-task-allow"] as? Bool == true else {
+            throw ElementCallCandidateError.validation("The signed candidate does not use the expected development profile for \(bundleIdentifier) and device \(deviceUDID).")
+        }
+    }
+
+    static func validateAndInstall(appURL: URL,
+                                   deviceUDID: String,
+                                   repositoryURL: URL) throws {
+        _ = try ElementCallCandidatePath.validateExisting(appURL, kind: .directory,
+                                                          label: "development-signed candidate app")
+        let metadata = try JunchatReleaseArtifacts.ExpectedMetadata.current(projectDirectory: repositoryURL)
+        let artifacts = [
+            BundleArtifact(url: appURL,
+                           bundleIdentifier: metadata.bundleIdentifier,
+                           packageType: "APPL"),
+            BundleArtifact(url: appURL.appending(path: "PlugIns/NSE.appex"),
+                           bundleIdentifier: "\(metadata.bundleIdentifier).nse",
+                           packageType: "XPC!"),
+            BundleArtifact(url: appURL.appending(path: "PlugIns/ShareExtension.appex"),
+                           bundleIdentifier: "\(metadata.bundleIdentifier).shareextension",
+                           packageType: "XPC!")
+        ]
+        for artifact in artifacts {
+            _ = try ElementCallCandidatePath.validateExisting(artifact.url, kind: .directory,
+                                                              label: "signed candidate bundle")
+            let infoURL = artifact.url.appending(path: "Info.plist")
+            let profileURL = artifact.url.appending(path: "embedded.mobileprovision")
+            _ = try ElementCallCandidatePath.validateExisting(infoURL, kind: .file,
+                                                              label: "signed candidate Info.plist")
+            _ = try ElementCallCandidatePath.validateExisting(profileURL, kind: .file,
+                                                              label: "signed candidate provisioning profile")
+            guard let info = try PropertyListSerialization.propertyList(from: Data(contentsOf: infoURL),
+                                                                        options: [],
+                                                                        format: nil) as? [String: Any],
+                info["CFBundleIdentifier"] as? String == artifact.bundleIdentifier,
+                info["CFBundlePackageType"] as? String == artifact.packageType,
+                info["CFBundleShortVersionString"] as? String == metadata.version,
+                info["CFBundleVersion"] as? String == metadata.build else {
+                throw ElementCallCandidateError.validation("The signed candidate bundle metadata is invalid: \(artifact.bundleIdentifier).")
+            }
+            let profileData = try CandidateProcess.capture(executable: "/usr/bin/security",
+                                                           arguments: ["cms", "-D", "-i", profileURL.path],
+                                                           currentDirectory: appURL)
+            try validateProfile(profileData,
+                                bundleIdentifier: artifact.bundleIdentifier,
+                                teamIdentifier: metadata.developmentTeam,
+                                deviceUDID: deviceUDID)
+        }
+        try CandidateProcess.run(executable: "/usr/bin/codesign",
+                                 arguments: ["--verify", "--deep", "--strict", appURL.path],
+                                 currentDirectory: appURL)
+        try CandidateProcess.run(executable: "/usr/bin/xcrun",
+                                 arguments: arguments(deviceUDID: deviceUDID, appURL: appURL),
+                                 currentDirectory: appURL)
+    }
+}
+
 struct BuildElementCallCandidate: ParsableCommand {
     static let configuration = CommandConfiguration(commandName: "build-element-call-candidate",
-                                                    abstract: "Builds an unsigned Debug simulator app with a verified local Element Call candidate.")
+                                                    abstract: "Builds a verified local Element Call candidate for simulator or an explicitly selected development device.")
 
     @Option(name: .customLong("manifest-path"), help: "Canonical absolute path to the schema-v4 manifest.")
     var manifestPath: String?
@@ -315,11 +480,16 @@ struct BuildElementCallCandidate: ParsableCommand {
     @Option(name: .customLong("source-packages-path"), help: "Complete local SourcePackages seed for offline resolution.")
     var sourcePackagesPath: String?
 
+    @Option(name: .customLong("device-udid"), help: "Explicit hardware UDID for a development-signed Debug install.")
+    var deviceUDID: String?
+
     func run() throws {
         let repositoryURL = URL.projectDirectory.standardizedFileURL
         let request = try ElementCallCandidateRequest.resolve(manifestPath: manifestPath,
                                                               manifestSHA256: manifestSHA256,
                                                               sourceCommit: sourceCommit)
+        let resolvedDeviceUDID = try ElementCallCandidateDeviceRequest.resolve(deviceUDID: deviceUDID,
+                                                                               candidateRequested: request != nil)
         let sourcePackagesSeedURL = try ElementCallCandidateSourcePackages.resolve(path: sourcePackagesPath,
                                                                                    candidateRequested: request != nil)
         guard let request, let sourcePackagesSeedURL else {
@@ -342,7 +512,8 @@ struct BuildElementCallCandidate: ParsableCommand {
         do {
             let specYAML = try ElementCallCandidateProjectSpec.make(defaultProjectYAML: defaultProjectYAML,
                                                                     stagedPackageURL: staged.packageURL,
-                                                                    repositoryURL: repositoryURL)
+                                                                    repositoryURL: repositoryURL,
+                                                                    developmentSigning: resolvedDeviceUDID != nil)
             let specURL = staged.rootURL.appending(path: "candidate-project.yml")
             try writePrivate(specYAML.data(using: .utf8)!, to: specURL)
             try validatePackageIdentity(packageURL: staged.packageURL,
@@ -368,8 +539,15 @@ struct BuildElementCallCandidate: ParsableCommand {
             try build(projectURL: generatedProjectURL,
                       derivedDataURL: derivedDataURL,
                       sourcePackagesURL: sourcePackagesURL,
+                      deviceUDID: resolvedDeviceUDID,
                       protectedState: protectedState)
             try trackedState.validateUnchanged()
+            if let resolvedDeviceUDID {
+                try ElementCallCandidateDeviceInstallation.validateAndInstall(appURL: ElementCallCandidateDeviceInstallation.appURL(derivedDataURL: derivedDataURL),
+                                                                              deviceUDID: resolvedDeviceUDID,
+                                                                              repositoryURL: repositoryURL)
+                try trackedState.validateUnchanged()
+            }
         } catch {
             operationError = error
         }
@@ -387,7 +565,11 @@ struct BuildElementCallCandidate: ParsableCommand {
         if let operationError {
             throw operationError
         }
-        logger.info("Verified Element Call candidate \(package.version) with an unsigned Debug simulator build.")
+        if let resolvedDeviceUDID {
+            logger.info("Installed Element Call candidate \(package.version) as an ephemeral development-signed Debug build on \(resolvedDeviceUDID).")
+        } else {
+            logger.info("Verified Element Call candidate \(package.version) with an unsigned Debug simulator build.")
+        }
     }
 
     private func validatePackageIdentity(packageURL: URL,
@@ -439,11 +621,13 @@ struct BuildElementCallCandidate: ParsableCommand {
     private func build(projectURL: URL,
                        derivedDataURL: URL,
                        sourcePackagesURL: URL,
+                       deviceUDID: String?,
                        protectedState: ProtectedRepositoryState) throws {
         try runXcodebuild(arguments: ElementCallCandidateBuildInvocation.arguments(projectURL: projectURL,
                                                                                    derivedDataURL: derivedDataURL,
                                                                                    sourcePackagesURL: sourcePackagesURL,
-                                                                                   repositoryURL: protectedState.repositoryURL),
+                                                                                   repositoryURL: protectedState.repositoryURL,
+                                                                                   deviceUDID: deviceUDID),
                           derivedDataURL: derivedDataURL,
                           protectedState: protectedState)
     }
