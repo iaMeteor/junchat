@@ -176,7 +176,7 @@ struct RoomScreen: View {
             Image(systemName: "timer")
                 .font(.compound.bodyMDSemibold)
 
-            Text("下面的对话是隐私模式，发出的内容会在 3 分钟后自动销毁")
+            Text("下面的对话是隐私模式，内容会在被阅读 3 分钟后自动销毁")
                 .font(.compound.bodySM)
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)

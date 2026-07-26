@@ -439,7 +439,7 @@ private struct PrivacyControlledIndicatorViewModifier: ViewModifier {
                                 .stroke(Color.compound.bgCanvasDefault, lineWidth: 1)
                         }
                         .offset(x: horizontalOffset, y: -3)
-                        .accessibilityLabel("隐私消息，3 分钟后自动销毁")
+                        .accessibilityLabel("隐私消息，被阅读 3 分钟后自动销毁")
                 }
             }
     }
