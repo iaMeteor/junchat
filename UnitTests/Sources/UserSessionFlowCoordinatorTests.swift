@@ -651,21 +651,57 @@ struct UserSessionFlowCoordinatorTests {
     }
 
     @Test
-    mutating func callScreenIsDismissedWhenOnlyOwnCallMembershipRemains() async throws {
+    mutating func callScreenIsDismissedWhenOnlyOwnCallMembershipRemainsInDirectRoom() async throws {
         userSessionFlowCoordinator.handleAppRoute(.call(roomID: "1", isVoiceCall: true), animated: false)
         try await Task.sleep(for: .milliseconds(100))
 
         #expect(tabCoordinator?.overlayCoordinator is CallScreenCoordinator)
 
         ongoingCallRoomIDSubject.send("1")
-        staticRoomListSubject.send([incomingCallRoomSummary(id: "1", activeRoomCallParticipants: ["@caller:junchat.yyzs120.cn"])])
+        staticRoomListSubject.send([incomingCallRoomSummary(id: "1", isDirect: true, activeRoomCallParticipants: ["@caller:junchat.yyzs120.cn"])])
         try await Task.sleep(for: .milliseconds(100))
 
-        staticRoomListSubject.send([incomingCallRoomSummary(id: "1", activeRoomCallParticipants: ["hi@bob"])])
+        staticRoomListSubject.send([incomingCallRoomSummary(id: "1", isDirect: true, activeRoomCallParticipants: ["hi@bob"])])
         try await Task.sleep(for: .milliseconds(1500))
 
         #expect(tabCoordinator?.overlayCoordinator == nil)
         #expect(elementCallService.tearDownCallSessionCalled)
+    }
+
+    @Test
+    mutating func callScreenIsKeptWhenOnlyOwnCallMembershipRemainsInGroupRoom() async throws {
+        userSessionFlowCoordinator.handleAppRoute(.call(roomID: "1", isVoiceCall: true), animated: false)
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(tabCoordinator?.overlayCoordinator is CallScreenCoordinator)
+
+        ongoingCallRoomIDSubject.send("1")
+        staticRoomListSubject.send([incomingCallRoomSummary(id: "1", isDirect: false, activeRoomCallParticipants: ["@caller:junchat.yyzs120.cn"])])
+        try await Task.sleep(for: .milliseconds(100))
+
+        staticRoomListSubject.send([incomingCallRoomSummary(id: "1", isDirect: false, activeRoomCallParticipants: ["hi@bob"])])
+        try await Task.sleep(for: .milliseconds(1500))
+
+        #expect(tabCoordinator?.overlayCoordinator is CallScreenCoordinator)
+        #expect(!elementCallService.tearDownCallSessionCalled)
+    }
+
+    @Test
+    mutating func callScreenIsKeptWhenAGroupCallEndsWithoutTheCreatorBeingJoined() async throws {
+        userSessionFlowCoordinator.handleAppRoute(.call(roomID: "1", isVoiceCall: false), animated: false)
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(tabCoordinator?.overlayCoordinator is CallScreenCoordinator)
+
+        ongoingCallRoomIDSubject.send("1")
+        staticRoomListSubject.send([incomingCallRoomSummary(id: "1", isDirect: false, activeRoomCallParticipants: ["@caller:junchat.yyzs120.cn"])])
+        try await Task.sleep(for: .milliseconds(100))
+
+        staticRoomListSubject.send([incomingCallRoomSummary(id: "1", isDirect: false, hasOngoingCall: false, activeRoomCallParticipants: [])])
+        try await Task.sleep(for: .milliseconds(1500))
+
+        #expect(tabCoordinator?.overlayCoordinator is CallScreenCoordinator)
+        #expect(!elementCallService.tearDownCallSessionCalled)
     }
 
     @Test
@@ -887,13 +923,14 @@ struct UserSessionFlowCoordinatorTests {
     }
 
     private func incomingCallRoomSummary(id: String,
+                                         isDirect: Bool = true,
                                          hasOngoingCall: Bool = true,
                                          activeRoomCallParticipants: [String] = ["@caller:junchat.yyzs120.cn"]) -> RoomSummary {
         RoomSummary(room: RoomSDKMock(),
                     id: id,
                     joinRequestType: nil,
                     name: "测试用户 2",
-                    isDirect: true,
+                    isDirect: isDirect,
                     isSpace: false,
                     avatarURL: nil,
                     heroes: [],

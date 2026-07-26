@@ -900,6 +900,16 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
             return
         }
 
+        // Only a direct room auto-dismisses once the local user is the last participant,
+        // because that is an unanswered 1:1 call. In a group room the person who started
+        // the call waits for others to join for as long as they want and ends the call
+        // themselves, so the overlay stays until the call screen reports it has ended.
+        guard room.isDirect else {
+            endedCallDismissalWorkItem?.cancel()
+            endedCallDismissalWorkItem = nil
+            return
+        }
+
         let initialSyncGracePeriod: TimeInterval = 8
         let callScreenAge = presentedCallScreenStartedAt.map { Date().timeIntervalSince($0) } ?? 0
         if !callScreenHasSeenRemoteParticipant, callScreenAge < initialSyncGracePeriod {
