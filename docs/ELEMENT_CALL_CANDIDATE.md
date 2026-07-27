@@ -1,6 +1,6 @@
 # Local Element Call Candidate Builds
 
-`build-element-call-candidate` performs a one-shot Debug build with a retained Element Call schema-v4 candidate. Its default mode is an unsigned iOS Simulator build. An explicit `--device-udid` adds an ephemeral Apple Development-signed iOS build, validates it, installs it on that registered device, and then removes the staged app. Neither mode replaces the checked-in dependency or creates a release artifact.
+`build-element-call-candidate` performs a one-shot build with a retained Element Call schema-v4 candidate. Its default mode is an unsigned Debug iOS Simulator build. An explicit `--device-udid` adds an ephemeral Apple Development-signed iOS build, validates it, installs it on that registered device, and then removes the staged app. An explicit `--archive-path` creates a Release iphoneos archive, and optional `--export-path` plus `--export-options-plist` exports that archive. None of these modes replaces the checked-in dependency.
 
 ## Usage
 
@@ -27,6 +27,22 @@ To install the same transient candidate on a registered development device, add 
     --device-udid <hardware-udid>
 ```
 
+To create a local distribution archive from the same candidate, provide a fresh
+archive output path outside the repository. Add export arguments only when an IPA
+is needed:
+
+```sh
+/usr/bin/xcrun swift run --disable-automatic-resolution tools \
+    build-element-call-candidate \
+    --manifest-path /canonical/absolute/path/to/manifest.json \
+    --manifest-sha256 <64-lowercase-hex-digest> \
+    --source-commit <40-lowercase-hex-commit> \
+    --source-packages-path /canonical/absolute/path/to/SourcePackages \
+    --archive-path /canonical/absolute/path/to/Junchat.xcarchive \
+    --export-path /canonical/absolute/path/to/export-directory \
+    --export-options-plist /canonical/absolute/path/to/ExportOptions.plist
+```
+
 Device mode requires matching Apple Development identities and development provisioning profiles for Junchat, NSE, and ShareExtension to already exist locally and include the selected UDID. The fixed build does not pass `-allowProvisioningUpdates` or `-allowProvisioningDeviceRegistration`, so it cannot repair or mutate signing configuration. It uses a generic iOS build destination, verifies all three embedded profiles and bundle identities, verifies the complete code signature, and invokes the fixed `xcrun devicectl device install app` operation only after those checks pass.
 
 With no candidate options, the command only verifies that `project.yml` still uses the public `element-call-swift` package at exact version `0.19.1`, then exits. This is also the dependency used by normal, release, and signing workflows. The SourcePackages seed is required only when all three candidate identity options are present and is rejected otherwise.
@@ -51,7 +67,7 @@ The command snapshots `project.yml`, `app.yml`, the checked-in project and lock,
 
 The caller-supplied manifest SHA-256 proves equality with the bytes selected by the caller; it does not authenticate who produced them. Schema-v4 command and tool records are checked for exact semantics, but same-user build inputs and invocation records remain inside the trust base. The retained candidate must therefore come from a trusted local workflow and remain protected from same-user modification until verification snapshots it.
 
-SourcePackages artifact records retain the checksum of each original remote archive, but this local seed retains only the extracted XCFramework directories, so those archive checksums cannot re-authenticate the extracted files. The SwiftSyntax prebuilt record likewise has no independently trusted content digest. Their paths, real entry types, and internal symlink confinement are validated, but their contents remain explicit trusted-local operational inputs. A result that consumed them must not be distribution-signed, archived for distribution, published, rolled out, or cited as release provenance. Explicit device mode permits only an ephemeral Apple Development-signed Debug install on the selected registered device for manual acceptance.
+SourcePackages artifact records retain the checksum of each original remote archive, but this local seed retains only the extracted XCFramework directories, so those archive checksums cannot re-authenticate the extracted files. The SwiftSyntax prebuilt record likewise has no independently trusted content digest. Their paths, real entry types, and internal symlink confinement are validated, but their contents remain explicit trusted-local operational inputs. Distribution archives are therefore local release-candidate artifacts that require the manifest digest, source commit, archive path, export options, signing material, and upload decision to be reviewed together. Explicit device mode permits only an ephemeral Apple Development-signed Debug install on the selected registered device for manual acceptance.
 
 This consumer does not extend release gates, publish candidates, request signing updates, or make server changes. Passing the local simulator build or installing the development-device build is evidence that the verified retained package integrates with this checkout; neither is release provenance.
 

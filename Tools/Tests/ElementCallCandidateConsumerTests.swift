@@ -517,6 +517,92 @@ final class ElementCallCandidateConsumerTests: XCTestCase {
             ])
     }
 
+    func testDistributionArchiveInvocationUsesReleaseArchiveAndExportArguments() {
+        let projectURL = URL(filePath: "/private/tmp/candidate/ElementX.xcodeproj")
+        let derivedDataURL = URL(filePath: "/private/tmp/candidate/DerivedData")
+        let sourcePackagesURL = URL(filePath: "/private/tmp/candidate/SourcePackages")
+        let repositoryURL = URL(filePath: "/private/repository")
+        let archiveURL = URL(filePath: "/private/tmp/candidate/Junchat.xcarchive")
+        let exportURL = URL(filePath: "/private/tmp/candidate/export")
+        let exportOptionsURL = URL(filePath: "/private/tmp/candidate/ExportOptions.plist")
+
+        XCTAssertEqual(ElementCallCandidateBuildInvocation.archiveArguments(projectURL: projectURL,
+                                                                            derivedDataURL: derivedDataURL,
+                                                                            sourcePackagesURL: sourcePackagesURL,
+                                                                            repositoryURL: repositoryURL,
+                                                                            archiveURL: archiveURL), [
+                "-IDEPackageSupportDisableManifestSandbox=1",
+                "-project", projectURL.path,
+                "-scheme", "ElementX",
+                "-configuration", "Release",
+                "-sdk", "iphoneos",
+                "-destination", "generic/platform=iOS",
+                "-archivePath", archiveURL.path,
+                "-derivedDataPath", derivedDataURL.path,
+                "-resultBundlePath", "/private/tmp/candidate/Archive.xcresult",
+                "-clonedSourcePackagesDirPath", sourcePackagesURL.path,
+                "-disableAutomaticPackageResolution",
+                "-onlyUsePackageVersionsFromResolvedFile",
+                "OTHER_SWIFT_FLAGS=$(inherited) -disable-sandbox",
+                "SRCROOT=/private/repository",
+                "archive"
+            ])
+        XCTAssertEqual(ElementCallCandidateBuildInvocation.exportArguments(archiveURL: archiveURL,
+                                                                           exportURL: exportURL,
+                                                                           exportOptionsURL: exportOptionsURL), [
+                "-exportArchive",
+                "-archivePath", archiveURL.path,
+                "-exportPath", exportURL.path,
+                "-exportOptionsPlist", exportOptionsURL.path
+            ])
+    }
+
+    func testDistributionArchiveRequestRequiresCompleteCandidateAndFreshOutputs() throws {
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let archiveURL = temporaryDirectory.appending(path: "Junchat.xcarchive")
+        let exportURL = temporaryDirectory.appending(path: "export")
+        let exportOptionsURL = temporaryDirectory.appending(path: "ExportOptions.plist")
+        try Data("<plist/>".utf8).write(to: exportOptionsURL)
+
+        XCTAssertThrowsError(try ElementCallCandidateArchiveRequest.resolve(archivePath: archiveURL.path,
+                                                                            exportPath: nil,
+                                                                            exportOptionsPlist: nil,
+                                                                            deviceRequested: false,
+                                                                            candidateRequested: false))
+        XCTAssertThrowsError(try ElementCallCandidateArchiveRequest.resolve(archivePath: archiveURL.path,
+                                                                            exportPath: nil,
+                                                                            exportOptionsPlist: nil,
+                                                                            deviceRequested: true,
+                                                                            candidateRequested: true))
+        XCTAssertThrowsError(try ElementCallCandidateArchiveRequest.resolve(archivePath: nil,
+                                                                            exportPath: exportURL.path,
+                                                                            exportOptionsPlist: exportOptionsURL.path,
+                                                                            deviceRequested: false,
+                                                                            candidateRequested: true))
+        XCTAssertThrowsError(try ElementCallCandidateArchiveRequest.resolve(archivePath: archiveURL.path,
+                                                                            exportPath: exportURL.path,
+                                                                            exportOptionsPlist: nil,
+                                                                            deviceRequested: false,
+                                                                            candidateRequested: true))
+
+        let request = try XCTUnwrap(ElementCallCandidateArchiveRequest.resolve(archivePath: archiveURL.path,
+                                                                               exportPath: exportURL.path,
+                                                                               exportOptionsPlist: exportOptionsURL.path,
+                                                                               deviceRequested: false,
+                                                                               candidateRequested: true))
+        XCTAssertEqual(request.archiveURL.path, archiveURL.path)
+        XCTAssertEqual(request.exportURL?.path, exportURL.path)
+        XCTAssertEqual(request.exportOptionsURL?.path, exportOptionsURL.path)
+
+        try FileManager.default.createDirectory(at: archiveURL, withIntermediateDirectories: false)
+        XCTAssertThrowsError(try ElementCallCandidateArchiveRequest.resolve(archivePath: archiveURL.path,
+                                                                            exportPath: nil,
+                                                                            exportOptionsPlist: nil,
+                                                                            deviceRequested: false,
+                                                                            candidateRequested: true))
+    }
+
     func testDevelopmentDeviceInstallationRequiresExactProfileIdentity() throws {
         let appURL = URL(filePath: "/private/tmp/candidate/DerivedData/Build/Products/Debug-iphoneos/Junchat.app")
         let deviceUDID = "00008150-001264C60163401C"

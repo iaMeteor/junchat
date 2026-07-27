@@ -299,6 +299,65 @@ enum ElementCallCandidateDeviceRequest {
     }
 }
 
+struct ElementCallCandidateArchiveRequest {
+    let archiveURL: URL
+    let exportURL: URL?
+    let exportOptionsURL: URL?
+
+    static func resolve(archivePath: String?,
+                        exportPath: String?,
+                        exportOptionsPlist: String?,
+                        deviceRequested: Bool,
+                        candidateRequested: Bool) throws -> Self? {
+        guard archivePath != nil || exportPath != nil || exportOptionsPlist != nil else {
+            return nil
+        }
+        try candidateProjectRequire(candidateRequested,
+                                    "A distribution archive may only be used with a complete Element Call candidate request.")
+        try candidateProjectRequire(!deviceRequested,
+                                    "A distribution archive cannot be combined with a development device install.")
+        guard let archivePath else {
+            throw ElementCallCandidateError.validation("A distribution archive requires --archive-path.")
+        }
+
+        let archiveURL = try outputURL(path: archivePath,
+                                       label: "candidate distribution archive path",
+                                       expectedExtension: "xcarchive")
+        try candidateProjectRequire((exportPath == nil) == (exportOptionsPlist == nil),
+                                    "--export-path and --export-options-plist must be provided together.")
+        let exportURL = try exportPath.map {
+            try outputURL(path: $0,
+                          label: "candidate distribution export path",
+                          expectedExtension: nil)
+        }
+        let exportOptionsURL = try exportOptionsPlist.map {
+            try ElementCallCandidatePath.validateExisting(URL(filePath: $0),
+                                                          kind: .file,
+                                                          label: "candidate export options plist")
+        }
+        return Self(archiveURL: archiveURL,
+                    exportURL: exportURL,
+                    exportOptionsURL: exportOptionsURL)
+    }
+
+    private static func outputURL(path: String,
+                                  label: String,
+                                  expectedExtension: String?) throws -> URL {
+        try ElementCallCandidatePath.validateRecordedAbsolute(path, label: label)
+        let url = URL(filePath: path)
+        if let expectedExtension {
+            try candidateProjectRequire(url.pathExtension == expectedExtension,
+                                        "\(label) must use .\(expectedExtension).")
+        }
+        _ = try ElementCallCandidatePath.validateExisting(url.deletingLastPathComponent(),
+                                                          kind: .directory,
+                                                          label: "\(label) parent")
+        try candidateProjectRequire(!FileManager.default.fileExists(atPath: url.path),
+                                    "\(label) must not already exist.")
+        return url
+    }
+}
+
 enum ElementCallCandidateBuildInvocation {
     static func resolveArguments(projectURL: URL,
                                  derivedDataURL: URL,
@@ -353,6 +412,42 @@ enum ElementCallCandidateBuildInvocation {
             "build"
         ]
         return arguments
+    }
+
+    static func archiveArguments(projectURL: URL,
+                                 derivedDataURL: URL,
+                                 sourcePackagesURL: URL,
+                                 repositoryURL: URL,
+                                 archiveURL: URL) -> [String] {
+        let temporaryRootURL = derivedDataURL.deletingLastPathComponent()
+        return [
+            "-IDEPackageSupportDisableManifestSandbox=1",
+            "-project", projectURL.path,
+            "-scheme", "ElementX",
+            "-configuration", "Release",
+            "-sdk", "iphoneos",
+            "-destination", "generic/platform=iOS",
+            "-archivePath", archiveURL.path,
+            "-derivedDataPath", derivedDataURL.path,
+            "-resultBundlePath", temporaryRootURL.appending(path: "Archive.xcresult").path,
+            "-clonedSourcePackagesDirPath", sourcePackagesURL.path,
+            "-disableAutomaticPackageResolution",
+            "-onlyUsePackageVersionsFromResolvedFile",
+            "OTHER_SWIFT_FLAGS=$(inherited) -disable-sandbox",
+            "SRCROOT=\(repositoryURL.path)",
+            "archive"
+        ]
+    }
+
+    static func exportArguments(archiveURL: URL,
+                                exportURL: URL,
+                                exportOptionsURL: URL) -> [String] {
+        [
+            "-exportArchive",
+            "-archivePath", archiveURL.path,
+            "-exportPath", exportURL.path,
+            "-exportOptionsPlist", exportOptionsURL.path
+        ]
     }
 
     static func environment(repositoryURL: URL,
@@ -483,6 +578,15 @@ struct BuildElementCallCandidate: ParsableCommand {
     @Option(name: .customLong("device-udid"), help: "Explicit hardware UDID for a development-signed Debug install.")
     var deviceUDID: String?
 
+    @Option(name: .customLong("archive-path"), help: "Canonical absolute output path for a distribution archive.")
+    var archivePath: String?
+
+    @Option(name: .customLong("export-path"), help: "Canonical absolute output directory for an exported archive.")
+    var exportPath: String?
+
+    @Option(name: .customLong("export-options-plist"), help: "Canonical absolute path to export options for archive export.")
+    var exportOptionsPlist: String?
+
     func run() throws {
         let repositoryURL = URL.projectDirectory.standardizedFileURL
         let request = try ElementCallCandidateRequest.resolve(manifestPath: manifestPath,
@@ -490,6 +594,11 @@ struct BuildElementCallCandidate: ParsableCommand {
                                                               sourceCommit: sourceCommit)
         let resolvedDeviceUDID = try ElementCallCandidateDeviceRequest.resolve(deviceUDID: deviceUDID,
                                                                                candidateRequested: request != nil)
+        let archiveRequest = try ElementCallCandidateArchiveRequest.resolve(archivePath: archivePath,
+                                                                            exportPath: exportPath,
+                                                                            exportOptionsPlist: exportOptionsPlist,
+                                                                            deviceRequested: resolvedDeviceUDID != nil,
+                                                                            candidateRequested: request != nil)
         let sourcePackagesSeedURL = try ElementCallCandidateSourcePackages.resolve(path: sourcePackagesPath,
                                                                                    candidateRequested: request != nil)
         guard let request, let sourcePackagesSeedURL else {
@@ -536,11 +645,19 @@ struct BuildElementCallCandidate: ParsableCommand {
             try ElementCallCandidatePackageResolution.validate(publicData: packageResolution.publicData,
                                                                candidateData: candidateResolution)
             try trackedState.validateUnchanged()
-            try build(projectURL: generatedProjectURL,
-                      derivedDataURL: derivedDataURL,
-                      sourcePackagesURL: sourcePackagesURL,
-                      deviceUDID: resolvedDeviceUDID,
-                      protectedState: protectedState)
+            if let archiveRequest {
+                try archive(projectURL: generatedProjectURL,
+                            derivedDataURL: derivedDataURL,
+                            sourcePackagesURL: sourcePackagesURL,
+                            archiveRequest: archiveRequest,
+                            protectedState: protectedState)
+            } else {
+                try build(projectURL: generatedProjectURL,
+                          derivedDataURL: derivedDataURL,
+                          sourcePackagesURL: sourcePackagesURL,
+                          deviceUDID: resolvedDeviceUDID,
+                          protectedState: protectedState)
+            }
             try trackedState.validateUnchanged()
             if let resolvedDeviceUDID {
                 try ElementCallCandidateDeviceInstallation.validateAndInstall(appURL: ElementCallCandidateDeviceInstallation.appURL(derivedDataURL: derivedDataURL),
@@ -567,6 +684,9 @@ struct BuildElementCallCandidate: ParsableCommand {
         }
         if let resolvedDeviceUDID {
             logger.info("Installed Element Call candidate \(package.version) as an ephemeral development-signed Debug build on \(resolvedDeviceUDID).")
+        } else if let archiveRequest {
+            let exportSuffix = archiveRequest.exportURL.map { " and exported it to \($0.path)" } ?? ""
+            logger.info("Archived Element Call candidate \(package.version) to \(archiveRequest.archiveURL.path)\(exportSuffix).")
         } else {
             logger.info("Verified Element Call candidate \(package.version) with an unsigned Debug simulator build.")
         }
@@ -630,6 +750,28 @@ struct BuildElementCallCandidate: ParsableCommand {
                                                                                    deviceUDID: deviceUDID),
                           derivedDataURL: derivedDataURL,
                           protectedState: protectedState)
+    }
+
+    private func archive(projectURL: URL,
+                         derivedDataURL: URL,
+                         sourcePackagesURL: URL,
+                         archiveRequest: ElementCallCandidateArchiveRequest,
+                         protectedState: ProtectedRepositoryState) throws {
+        try runXcodebuild(arguments: ElementCallCandidateBuildInvocation.archiveArguments(projectURL: projectURL,
+                                                                                          derivedDataURL: derivedDataURL,
+                                                                                          sourcePackagesURL: sourcePackagesURL,
+                                                                                          repositoryURL: protectedState.repositoryURL,
+                                                                                          archiveURL: archiveRequest.archiveURL),
+                          derivedDataURL: derivedDataURL,
+                          protectedState: protectedState)
+        if let exportURL = archiveRequest.exportURL,
+           let exportOptionsURL = archiveRequest.exportOptionsURL {
+            try runXcodebuild(arguments: ElementCallCandidateBuildInvocation.exportArguments(archiveURL: archiveRequest.archiveURL,
+                                                                                             exportURL: exportURL,
+                                                                                             exportOptionsURL: exportOptionsURL),
+                              derivedDataURL: derivedDataURL,
+                              protectedState: protectedState)
+        }
     }
 
     private func runXcodebuild(arguments: [String],
