@@ -2,6 +2,7 @@
 "a11y_message_selection_not_selected" = "未選取";
 "a11y_message_selection_selected" = "已選取";
 "action_select_messages" = "多選訊息";
+"action_mark_all_as_read" = "全部標為已讀";
 "crypto_history_sharing_confirm_invite_dialog_content" = "你目前還沒有與這些聯絡人聊天。繼續前請確認是否邀請他們加入此聊天室。";
 "crypto_history_sharing_confirm_invite_dialog_title" = "邀請新聯絡人加入此聊天室？";
 "crypto_history_sharing_confirm_start_chat_dialog_content" = "你目前還沒有與此人聊天。繼續前請確認是否邀請對方。";
@@ -22,6 +23,8 @@
 "screen_message_forwarding_send_again" = "再次傳送";
 "screen_room_message_selection_changed_error" = "部分所選訊息已無法使用，請重新選取後再轉傳。";
 "screen_room_message_selection_delete_confirmation_title" = "刪除訊息？";
+"screen_roomlist_mark_all_as_read_dialog_content" = "此操作會傳送已讀回條，並可能開始訊息過期計時。待處理邀請將保留。";
+"screen_roomlist_mark_all_as_read_success" = "所有聊天已標為已讀";
 "soft_logout_clear_data_dialog_content" = "要清除此裝置上目前儲存的所有資料嗎？\n重新登入後可存取你的帳號資料和訊息。";
 "soft_logout_clear_data_dialog_title" = "清除資料";
 "soft_logout_clear_data_notice" = "警告：你的個人資料（包括加密金鑰）仍儲存在此裝置上。\n\n如果你已不再使用此裝置，或想登入其他帳號，請清除這些資料。";

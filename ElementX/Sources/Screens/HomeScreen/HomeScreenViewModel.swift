@@ -268,6 +268,14 @@ class HomeScreenViewModel: HomeScreenViewModelType, HomeScreenViewModelProtocol 
                     MXLog.error("Failed flagging room \(roomIdentifier) as read with error: \(error)")
                 }
             }
+        case .markAllRoomsAsRead:
+            state.bindings.alertInfo = AlertInfo(id: UUID(),
+                                                 title: UntranslatedL10n.actionMarkAllAsRead,
+                                                 message: UntranslatedL10n.screenRoomlistMarkAllAsReadDialogContent,
+                                                 primaryButton: .init(title: L10n.actionCancel, role: .cancel, action: nil),
+                                                 secondaryButton: .init(title: UntranslatedL10n.actionMarkAllAsRead) { [weak self] in
+                                                     Task { await self?.markAllRoomsAsRead() }
+                                                 })
         case .markRoomAsFavourite(let roomIdentifier, let isFavourite):
             Task {
                 await markRoomAsFavourite(roomIdentifier, isFavourite: isFavourite)
@@ -295,6 +303,49 @@ class HomeScreenViewModel: HomeScreenViewModelType, HomeScreenViewModelProtocol 
     }
 
     // MARK: - Private
+
+    private static let markAllRoomsAsReadLoadingID = "MarkAllRoomsAsReadLoading"
+
+    private func markAllRoomsAsRead() async {
+        state.isMarkingAllRoomsAsRead = true
+        userIndicatorController.submitIndicator(UserIndicator(id: Self.markAllRoomsAsReadLoadingID,
+                                                              type: .modal,
+                                                              title: L10n.commonLoading,
+                                                              persistent: true))
+
+        defer {
+            state.isMarkingAllRoomsAsRead = false
+            userIndicatorController.retractIndicatorWithId(Self.markAllRoomsAsReadLoadingID)
+        }
+
+        let roomIdentifiers = await userSession.clientProxy.unreadJoinedRoomIdentifiers()
+        var failedRoomCount = 0
+
+        for roomIdentifier in roomIdentifiers {
+            guard case let .joined(roomProxy) = await userSession.clientProxy.roomForIdentifier(roomIdentifier) else {
+                failedRoomCount += 1
+                continue
+            }
+
+            if case let .failure(error) = await roomProxy.flagAsUnread(false) {
+                MXLog.error("Failed flagging room \(roomIdentifier) as read with error: \(error)")
+                failedRoomCount += 1
+            }
+
+            if case let .failure(error) = await roomProxy.markAsRead(receiptType: appSettings.sharePresence ? .read : .readPrivate) {
+                MXLog.error("Failed marking room \(roomIdentifier) as read with error: \(error)")
+                failedRoomCount += 1
+            }
+        }
+
+        if failedRoomCount == 0 {
+            userIndicatorController.submitIndicator(UserIndicator(title: UntranslatedL10n.screenRoomlistMarkAllAsReadSuccess,
+                                                                  iconName: "checkmark"))
+        } else {
+            userIndicatorController.submitIndicator(UserIndicator(title: L10n.errorUnknown,
+                                                                  iconName: "xmark"))
+        }
+    }
 
     private func updateFilter() {
         if state.shouldHideRoomList {

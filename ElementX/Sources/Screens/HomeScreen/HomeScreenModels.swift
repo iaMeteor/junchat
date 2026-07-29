@@ -47,6 +47,7 @@ enum HomeScreenViewAction {
     case spaceFilters
     case markRoomAsUnread(roomIdentifier: String)
     case markRoomAsRead(roomIdentifier: String)
+    case markAllRoomsAsRead
     case markRoomAsFavourite(roomIdentifier: String, isFavourite: Bool)
 
     case acceptInvite(roomIdentifier: String)
@@ -104,6 +105,7 @@ struct HomeScreenViewState: BindableState {
     var roomListMode: HomeScreenRoomListMode = .skeletons
 
     var hasPendingInvitations = false
+    var isMarkingAllRoomsAsRead = false
 
     var selectedRoomID: String?
 

@@ -166,6 +166,42 @@ final class HomeScreenViewModelTests {
         #expect(context.alertInfo == nil)
         #expect(correctResult)
     }
+
+    @Test
+    func markAllRoomsAsReadMarksOnlyUnreadJoinedRoomsReturnedByClient() async {
+        appSettings.sharePresence = false
+        setupViewModel()
+
+        let firstRoom = JoinedRoomProxyMock(.init(id: "1"))
+        let secondRoom = JoinedRoomProxyMock(.init(id: "2"))
+        let rooms = ["1": firstRoom, "2": secondRoom]
+
+        clientProxy.unreadJoinedRoomIdentifiersReturnValue = Array(rooms.keys)
+        clientProxy.roomForIdentifierClosure = { roomID in
+            rooms[roomID].map(RoomProxyType.joined)
+        }
+
+        context.send(viewAction: .markAllRoomsAsRead)
+        #expect(context.alertInfo != nil)
+
+        await waitForConfirmation("Wait for all unread rooms to be marked as read", expectedCount: 2) { confirmation in
+            firstRoom.markAsReadReceiptTypeClosure = { _ in
+                confirmation()
+                return .success(())
+            }
+            secondRoom.markAsReadReceiptTypeClosure = { _ in
+                confirmation()
+                return .success(())
+            }
+
+            context.alertInfo?.secondaryButton?.action?()
+        }
+
+        #expect(firstRoom.flagAsUnreadReceivedInvocations == [false])
+        #expect(secondRoom.flagAsUnreadReceivedInvocations == [false])
+        #expect(firstRoom.markAsReadReceiptTypeReceivedInvocations == [.readPrivate])
+        #expect(secondRoom.markAsReadReceiptTypeReceivedInvocations == [.readPrivate])
+    }
     
     @Test
     func filters() async throws {

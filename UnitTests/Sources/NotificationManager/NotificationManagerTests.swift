@@ -134,6 +134,16 @@ final class NotificationManagerTests {
     }
 
     @Test
+    func whenRemovingNotificationsForFullyReadRoomsAndAnInviteIsPending_badgeIsNotCleared() async {
+        await notificationManager.removeDeliveredNotificationsForFullyReadRooms([
+            roomSummary(id: "1", hasUnreadMessages: false),
+            roomSummary(id: "2", hasUnreadMessages: false, joinRequestType: .invite(inviter: nil))
+        ])
+
+        #expect(!notificationCenter.setBadgeCountCalled)
+    }
+
+    @Test
     func whenShowLocalNotification_notificationRequestGetsAdded() async throws {
         await notificationManager.showLocalNotification(with: "Title", subtitle: "Subtitle")
         let request = try #require(notificationCenter.addReceivedRequest)
@@ -287,10 +297,12 @@ extension NotificationManagerTests: @MainActor NotificationManagerDelegate {
     }
 }
 
-private func roomSummary(id: String, hasUnreadMessages: Bool) -> RoomSummary {
+private func roomSummary(id: String,
+                         hasUnreadMessages: Bool,
+                         joinRequestType: RoomSummary.JoinRequestType? = nil) -> RoomSummary {
     RoomSummary(room: .init(noHandle: .init()),
                 id: id,
-                joinRequestType: nil,
+                joinRequestType: joinRequestType,
                 name: id,
                 isDirect: false,
                 isSpace: false,

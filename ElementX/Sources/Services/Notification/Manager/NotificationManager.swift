@@ -138,7 +138,7 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
     
     func removeDeliveredNotificationsForFullyReadRooms(_ rooms: [RoomSummary]) async {
         let roomsToLastMessageDates = rooms
-            .filter { $0.hasUnreadMessages == false }
+            .filter { $0.hasUnreadMessages == false && $0.joinRequestType?.isInvite != true }
             .reduce(into: [:]) { partialResult, roomSummary in
                 partialResult[roomSummary.id] = roomSummary.lastMessageDate
             }
@@ -158,7 +158,12 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
         notificationCenter.removeDeliveredNotifications(withIdentifiers: notificationsIdentifiers)
         
         guard !rooms.isEmpty,
-              rooms.allSatisfy({ !$0.hasUnreadMessages && !$0.hasUnreadNotifications && !$0.isMarkedUnread }) else {
+              rooms.allSatisfy({
+                  !$0.hasUnreadMessages &&
+                      !$0.hasUnreadNotifications &&
+                      !$0.isMarkedUnread &&
+                      $0.joinRequestType?.isInvite != true
+              }) else {
             return
         }
         

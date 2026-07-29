@@ -2,6 +2,7 @@
 "a11y_message_selection_not_selected" = "Not selected";
 "a11y_message_selection_selected" = "Selected";
 "action_select_messages" = "Select messages";
+"action_mark_all_as_read" = "Mark all as read";
 "crypto_history_sharing_confirm_invite_dialog_content" = "You currently don’t have any chats with these contacts. Confirm inviting them to this room before continuing.";
 "crypto_history_sharing_confirm_invite_dialog_title" = "Invite new contacts to this room?";
 "crypto_history_sharing_confirm_start_chat_dialog_content" = "You currently don’t have any chats with this person. Confirm inviting them before continuing.";
@@ -22,6 +23,8 @@
 "screen_message_forwarding_send_again" = "Send again";
 "screen_room_message_selection_changed_error" = "Some selected messages are no longer available. Select them again and try forwarding.";
 "screen_room_message_selection_delete_confirmation_title" = "Delete messages?";
+"screen_roomlist_mark_all_as_read_dialog_content" = "This sends read receipts and may start message expiry timers. Pending invitations will remain.";
+"screen_roomlist_mark_all_as_read_success" = "All chats marked as read";
 "soft_logout_clear_data_dialog_content" = "Clear all data currently stored on this device?\nSign in again to access your account data and messages.";
 "soft_logout_clear_data_dialog_title" = "Clear data";
 "soft_logout_clear_data_notice" = "Warning: Your personal data (including encryption keys) is still stored on this device.\n\nClear it if you’re finished using this device, or want to sign in to another account.";

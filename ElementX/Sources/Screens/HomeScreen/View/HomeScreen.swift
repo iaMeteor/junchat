@@ -56,6 +56,15 @@ struct HomeScreen: View {
             settingsButton
                 .buttonStyle(.borderless)
         }
+
+        ToolbarItem(placement: .primaryAction) {
+            if #available(iOS 26, *) {
+                markAllRoomsAsReadButton
+            } else {
+                markAllRoomsAsReadButton
+                    .buttonStyle(.compound(.tertiary, size: .toolbarIcon))
+            }
+        }
         
         ToolbarItem(placement: .primaryAction) {
             if #available(iOS 26, *) {
@@ -96,6 +105,16 @@ struct HomeScreen: View {
                 .compositingGroup()
         }
         .accessibilityLabel(L10n.commonSettings)
+    }
+
+    private var markAllRoomsAsReadButton: some View {
+        Button {
+            context.send(viewAction: .markAllRoomsAsRead)
+        } label: {
+            CompoundIcon(\.markAsRead)
+        }
+        .disabled(context.viewState.isMarkingAllRoomsAsRead)
+        .accessibilityLabel(UntranslatedL10n.actionMarkAllAsRead)
     }
     
     @ViewBuilder

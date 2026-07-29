@@ -16,6 +16,8 @@ internal enum UntranslatedL10n {
   internal static var a11yMessageSelectionNotSelected: String { return UntranslatedL10n.tr("Untranslated", "a11y_message_selection_not_selected") }
   /// Selected
   internal static var a11yMessageSelectionSelected: String { return UntranslatedL10n.tr("Untranslated", "a11y_message_selection_selected") }
+  /// Mark all as read
+  internal static var actionMarkAllAsRead: String { return UntranslatedL10n.tr("Untranslated", "action_mark_all_as_read") }
   /// Select messages
   internal static var actionSelectMessages: String { return UntranslatedL10n.tr("Untranslated", "action_select_messages") }
   /// You currently don’t have any chats with these contacts. Confirm inviting them to this room before continuing.
@@ -72,6 +74,10 @@ internal enum UntranslatedL10n {
   internal static func screenRoomMessageSelectionSelectedCount(_ p1: Int) -> String {
     return UntranslatedL10n.tr("Untranslated", "screen_room_message_selection_selected_count", p1)
   }
+  /// This sends read receipts and may start message expiry timers. Pending invitations will remain.
+  internal static var screenRoomlistMarkAllAsReadDialogContent: String { return UntranslatedL10n.tr("Untranslated", "screen_roomlist_mark_all_as_read_dialog_content") }
+  /// All chats marked as read
+  internal static var screenRoomlistMarkAllAsReadSuccess: String { return UntranslatedL10n.tr("Untranslated", "screen_roomlist_mark_all_as_read_success") }
   /// Clear all data currently stored on this device?
   /// Sign in again to access your account data and messages.
   internal static var softLogoutClearDataDialogContent: String { return UntranslatedL10n.tr("Untranslated", "soft_logout_clear_data_dialog_content") }

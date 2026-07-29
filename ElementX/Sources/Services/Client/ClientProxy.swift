@@ -646,6 +646,28 @@ class ClientProxy: ClientProxyProtocol {
         
         return await buildRoomForIdentifier(identifier)
     }
+
+    func unreadJoinedRoomIdentifiers() async -> [String] {
+        var identifiers = [String]()
+
+        for room in client.rooms() where room.membership() == .joined {
+            do {
+                let info = try await room.roomInfo()
+                guard info.numUnreadMessages > 0 ||
+                    info.numUnreadNotifications > 0 ||
+                    info.numUnreadMentions > 0 ||
+                    info.isMarkedUnread else {
+                    continue
+                }
+
+                identifiers.append(room.id())
+            } catch {
+                MXLog.error("Failed retrieving room info for \(room.id()) with error: \(error)")
+            }
+        }
+
+        return identifiers
+    }
     
     func roomPreviewForIdentifier(_ identifier: String, via: [String]) async -> Result<RoomPreviewProxyProtocol, ClientProxyError> {
         do {

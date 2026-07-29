@@ -194,6 +194,8 @@ protocol ClientProxyProtocol: AnyObject {
     func uploadMedia(_ media: MediaInfo) async -> Result<String, ClientProxyError>
     
     func roomForIdentifier(_ identifier: String) async -> RoomProxyType?
+
+    func unreadJoinedRoomIdentifiers() async -> [String]
     
     func roomPreviewForIdentifier(_ identifier: String, via: [String]) async -> Result<RoomPreviewProxyProtocol, ClientProxyError>
     

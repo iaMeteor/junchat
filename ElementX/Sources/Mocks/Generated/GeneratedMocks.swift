@@ -3938,6 +3938,70 @@ class ClientProxyMock: ClientProxyProtocol, @unchecked Sendable {
             return roomForIdentifierReturnValue
         }
     }
+    //MARK: - unreadJoinedRoomIdentifiers
+
+    var unreadJoinedRoomIdentifiersUnderlyingCallsCount = 0
+    var unreadJoinedRoomIdentifiersCallsCount: Int {
+        get {
+            if Thread.isMainThread {
+                return unreadJoinedRoomIdentifiersUnderlyingCallsCount
+            } else {
+                var returnValue: Int? = nil
+                DispatchQueue.main.sync {
+                    returnValue = unreadJoinedRoomIdentifiersUnderlyingCallsCount
+                }
+
+                return returnValue!
+            }
+        }
+        set {
+            if Thread.isMainThread {
+                unreadJoinedRoomIdentifiersUnderlyingCallsCount = newValue
+            } else {
+                DispatchQueue.main.sync {
+                    unreadJoinedRoomIdentifiersUnderlyingCallsCount = newValue
+                }
+            }
+        }
+    }
+    var unreadJoinedRoomIdentifiersCalled: Bool {
+        return unreadJoinedRoomIdentifiersCallsCount > 0
+    }
+
+    var unreadJoinedRoomIdentifiersUnderlyingReturnValue: [String]!
+    var unreadJoinedRoomIdentifiersReturnValue: [String]! {
+        get {
+            if Thread.isMainThread {
+                return unreadJoinedRoomIdentifiersUnderlyingReturnValue
+            } else {
+                var returnValue: [String]? = nil
+                DispatchQueue.main.sync {
+                    returnValue = unreadJoinedRoomIdentifiersUnderlyingReturnValue
+                }
+
+                return returnValue!
+            }
+        }
+        set {
+            if Thread.isMainThread {
+                unreadJoinedRoomIdentifiersUnderlyingReturnValue = newValue
+            } else {
+                DispatchQueue.main.sync {
+                    unreadJoinedRoomIdentifiersUnderlyingReturnValue = newValue
+                }
+            }
+        }
+    }
+    var unreadJoinedRoomIdentifiersClosure: (() async -> [String])?
+
+    func unreadJoinedRoomIdentifiers() async -> [String] {
+        unreadJoinedRoomIdentifiersCallsCount += 1
+        if let unreadJoinedRoomIdentifiersClosure = unreadJoinedRoomIdentifiersClosure {
+            return await unreadJoinedRoomIdentifiersClosure()
+        } else {
+            return unreadJoinedRoomIdentifiersReturnValue
+        }
+    }
     //MARK: - roomPreviewForIdentifier
 
     var roomPreviewForIdentifierViaUnderlyingCallsCount = 0
