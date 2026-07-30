@@ -1145,6 +1145,121 @@ struct CallScreenJunchatTests {
     }
 }
 
+extension CallScreenJunchatTests {
+    @Test
+    func callWebViewMessageTrustAcceptsMatchingHTTPSMainFrame() throws {
+        let callURL = try #require(URL(string: "https://call.junchat.example/room?id=one"))
+        let frameURL = try #require(URL(string: "https://call.junchat.example/room/active?id=two"))
+
+        #expect(CallWebViewMessageTrustPolicy.isTrusted(.init(isMainFrame: true,
+                                                              frameURL: frameURL,
+                                                              securityOrigin: .init(scheme: "https",
+                                                                                    host: "call.junchat.example",
+                                                                                    port: 443)),
+                                                        callURL: callURL))
+    }
+
+    @Test
+    func callWebViewMessageTrustRejectsChildFrame() throws {
+        let callURL = try #require(URL(string: "https://call.junchat.example/room"))
+
+        #expect(!CallWebViewMessageTrustPolicy.isTrusted(.init(isMainFrame: false,
+                                                               frameURL: callURL,
+                                                               securityOrigin: .init(scheme: "https",
+                                                                                     host: "call.junchat.example",
+                                                                                     port: 443)),
+                                                         callURL: callURL))
+    }
+
+    @Test
+    func callWebViewMessageTrustRejectsSecurityOriginBoundaryMismatch() throws {
+        let callURL = try #require(URL(string: "https://call.junchat.example/room"))
+
+        for (scheme, host, port) in [
+            ("http", "call.junchat.example", 80),
+            ("https", "embedded.junchat.example", 443),
+            ("https", "call.junchat.example", 8443)
+        ] {
+            #expect(!CallWebViewMessageTrustPolicy.isTrusted(.init(isMainFrame: true,
+                                                                   frameURL: callURL,
+                                                                   securityOrigin: .init(scheme: scheme,
+                                                                                         host: host,
+                                                                                         port: port)),
+                                                             callURL: callURL))
+        }
+    }
+
+    @Test
+    func callWebViewMessageTrustRejectsFrameURLBoundaryMismatch() throws {
+        let callURL = try #require(URL(string: "https://call.junchat.example/room"))
+
+        for frameURLString in [
+            "http://call.junchat.example/room",
+            "https://embedded.junchat.example/room",
+            "https://call.junchat.example:8443/room"
+        ] {
+            let frameURL = try #require(URL(string: frameURLString))
+            #expect(!CallWebViewMessageTrustPolicy.isTrusted(.init(isMainFrame: true,
+                                                                   frameURL: frameURL,
+                                                                   securityOrigin: .init(scheme: "https",
+                                                                                         host: "call.junchat.example",
+                                                                                         port: 443)),
+                                                             callURL: callURL))
+        }
+    }
+
+    @Test
+    func callWebViewMessageTrustTreatsImplicitAndExplicitDefaultPortsAsTheSameOrigin() throws {
+        let callURL = try #require(URL(string: "https://call.junchat.example/room"))
+        let frameURL = try #require(URL(string: "https://call.junchat.example:443/room"))
+
+        #expect(CallWebViewMessageTrustPolicy.isTrusted(.init(isMainFrame: true,
+                                                              frameURL: frameURL,
+                                                              securityOrigin: .init(scheme: "https",
+                                                                                    host: "call.junchat.example",
+                                                                                    port: 0)),
+                                                        callURL: callURL))
+    }
+
+    @Test
+    func callWebViewMessageTrustAcceptsMatchingNonDefaultPort() throws {
+        let callURL = try #require(URL(string: "https://call.junchat.example:8443/room"))
+
+        #expect(CallWebViewMessageTrustPolicy.isTrusted(.init(isMainFrame: true,
+                                                              frameURL: callURL,
+                                                              securityOrigin: .init(scheme: "https",
+                                                                                    host: "call.junchat.example",
+                                                                                    port: 8443)),
+                                                        callURL: callURL))
+    }
+
+    @Test
+    func callWebViewMessageTrustAcceptsExactLocalBundleFile() {
+        let callURL = URL(fileURLWithPath: "/Applications/JunChat.app/ElementCall/index.html")
+        let frameURL = callURL.appending(queryItems: [.init(name: "room", value: "one")])
+
+        #expect(CallWebViewMessageTrustPolicy.isTrusted(.init(isMainFrame: true,
+                                                              frameURL: frameURL,
+                                                              securityOrigin: .init(scheme: "file",
+                                                                                    host: "",
+                                                                                    port: 0)),
+                                                        callURL: callURL))
+    }
+
+    @Test
+    func callWebViewMessageTrustRejectsDifferentLocalBundleFile() {
+        let callURL = URL(fileURLWithPath: "/Applications/JunChat.app/ElementCall/index.html")
+        let frameURL = URL(fileURLWithPath: "/Applications/JunChat.app/ElementCall/embedded.html")
+
+        #expect(!CallWebViewMessageTrustPolicy.isTrusted(.init(isMainFrame: true,
+                                                               frameURL: frameURL,
+                                                               securityOrigin: .init(scheme: "file",
+                                                                                     host: "",
+                                                                                     port: 0)),
+                                                         callURL: callURL))
+    }
+}
+
 private enum CallScreenJunchatTestError: Error {
     case javaScriptEvaluationFailed
 }

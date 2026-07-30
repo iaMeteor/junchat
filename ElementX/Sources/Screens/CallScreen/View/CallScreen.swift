@@ -54,6 +54,91 @@ struct CallScreen: View {
     }
 }
 
+enum CallWebViewMessageTrustPolicy {
+    struct Source {
+        struct SecurityOrigin {
+            let scheme: String
+            let host: String
+            let port: Int
+        }
+
+        let isMainFrame: Bool
+        let frameURL: URL?
+        let securityOrigin: SecurityOrigin
+    }
+
+    static func isTrusted(_ source: Source, callURL: URL?) -> Bool {
+        guard source.isMainFrame,
+              let callURL,
+              let frameURL = source.frameURL else {
+            return false
+        }
+
+        if callURL.isFileURL {
+            return frameURL.isFileURL &&
+                callURL.host == frameURL.host &&
+                callURL.standardizedFileURL.path == frameURL.standardizedFileURL.path &&
+                source.securityOrigin.scheme.caseInsensitiveCompare("file") == .orderedSame &&
+                source.securityOrigin.host.isEmpty &&
+                source.securityOrigin.port == 0
+        }
+
+        guard let callOrigin = Origin(url: callURL),
+              let frameOrigin = Origin(url: frameURL),
+              let securityOrigin = Origin(securityOrigin: source.securityOrigin) else {
+            return false
+        }
+
+        return callOrigin == frameOrigin && callOrigin == securityOrigin
+    }
+
+    private struct Origin: Equatable {
+        let scheme: String
+        let host: String
+        let port: Int
+
+        init?(url: URL) {
+            guard let scheme = url.scheme?.lowercased(),
+                  let host = url.host?.lowercased(),
+                  let port = Self.normalizedPort(url.port, scheme: scheme) else {
+                return nil
+            }
+
+            self.scheme = scheme
+            self.host = host
+            self.port = port
+        }
+
+        init?(securityOrigin: Source.SecurityOrigin) {
+            let scheme = securityOrigin.scheme.lowercased()
+            guard !securityOrigin.host.isEmpty,
+                  let port = Self.normalizedPort(securityOrigin.port == 0 ? nil : securityOrigin.port,
+                                                 scheme: scheme) else {
+                return nil
+            }
+
+            self.scheme = scheme
+            host = securityOrigin.host.lowercased()
+            self.port = port
+        }
+
+        private static func normalizedPort(_ port: Int?, scheme: String) -> Int? {
+            if let port {
+                return port
+            }
+
+            switch scheme {
+            case "http":
+                return 80
+            case "https":
+                return 443
+            default:
+                return nil
+            }
+        }
+    }
+}
+
 private struct CallView: UIViewRepresentable {
     /// The top-level view this representable displays. It wraps the web view when picture in picture isn't running.
     typealias WebViewWrapper = UIView
@@ -626,18 +711,22 @@ private struct CallView: UIViewRepresentable {
 
             let liveKitBootstrapScript = WKUserScript(source: Self.junchatLiveKitBootstrapScript(),
                                                       injectionTime: .atDocumentStart,
-                                                      forMainFrameOnly: false)
+                                                      forMainFrameOnly: true)
             configuration.userContentController.addUserScript(liveKitBootstrapScript)
 
             if let script = viewModelContext.viewState.script {
-                let userScript = WKUserScript(source: script, injectionTime: .atDocumentEnd, forMainFrameOnly: false)
+                let userScript = WKUserScript(source: script, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
                 configuration.userContentController.addUserScript(userScript)
             }
 
             webView = WKWebView(frame: .zero, configuration: configuration)
             webView.uiDelegate = self
             webView.navigationDelegate = self
+            #if DEBUG
             webView.isInspectable = true
+            #else
+            webView.isInspectable = false
+            #endif
 
             webView.customUserAgent = UserAgentBuilder.makeASCIIUserAgent()
 
@@ -728,6 +817,16 @@ private struct CallView: UIViewRepresentable {
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             guard let handlerID = CallScreenJavaScriptMessageName(rawValue: message.name) else {
+                return
+            }
+
+            let source = CallWebViewMessageTrustPolicy.Source(isMainFrame: message.frameInfo.isMainFrame,
+                                                              frameURL: message.frameInfo.request.url,
+                                                              securityOrigin: .init(scheme: message.frameInfo.securityOrigin.protocol,
+                                                                                    host: message.frameInfo.securityOrigin.host,
+                                                                                    port: message.frameInfo.securityOrigin.port))
+            guard CallWebViewMessageTrustPolicy.isTrusted(source, callURL: url) else {
+                MXLog.warning("[JunchatCallWebView] rejected \(handlerID.rawValue) from untrusted frame main=\(message.frameInfo.isMainFrame)")
                 return
             }
 
