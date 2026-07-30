@@ -30,6 +30,10 @@ XCODEGEN_EXECUTABLE=$(command -v xcodegen)
 TOOLS_BIN_DIRECTORY=$($SWIFT_EXECUTABLE build --disable-automatic-resolution --show-bin-path)
 REAL_TOOLS_BINARY="$TOOLS_BIN_DIRECTORY/tools"
 PREFLIGHT_PATH="$(dirname "$XCODEGEN_EXECUTABLE"):/usr/bin:/bin:/usr/sbin:/sbin"
+IFS=$'\t' read -r FIXTURE_VERSION FIXTURE_BUILD < <(
+    "$REAL_TOOLS_BINARY" ci current-release-version --include-build
+)
+[[ -n "$FIXTURE_VERSION" && "$FIXTURE_BUILD" =~ ^[1-9][0-9]*$ ]]
 export REPOSITORY_ROOT SWIFT_EXECUTABLE
 mkdir -p "$FIXTURE_ROOT" "$FAKE_BIN"
 git archive HEAD | tar -x -C "$FIXTURE_ROOT"
@@ -47,30 +51,30 @@ create_valid_archive() {
     local dsym_contents="$archive_path/dSYMs/Junchat.app.dSYM/Contents"
 
     mkdir -p "$app_path" "$dsym_contents/Resources/DWARF"
-    cat > "$archive_path/Info.plist" <<'EOF'
+    cat > "$archive_path/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>ApplicationProperties</key><dict>
 <key>ApplicationPath</key><string>Applications/Junchat.app</string>
 <key>CFBundleIdentifier</key><string>com.heyujk.junchat</string>
-<key>CFBundleShortVersionString</key><string>1.8.2</string>
-<key>CFBundleVersion</key><string>37</string>
+<key>CFBundleShortVersionString</key><string>$FIXTURE_VERSION</string>
+<key>CFBundleVersion</key><string>$FIXTURE_BUILD</string>
 </dict>
 <key>ArchiveVersion</key><integer>2</integer>
 <key>Name</key><string>Junchat</string>
 <key>SchemeName</key><string>Junchat</string>
 </dict></plist>
 EOF
-    cat > "$app_path/Info.plist" <<'EOF'
+    cat > "$app_path/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>CFBundleExecutable</key><string>Junchat</string>
 <key>CFBundleIdentifier</key><string>com.heyujk.junchat</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.8.2</string>
-<key>CFBundleVersion</key><string>37</string>
+<key>CFBundleShortVersionString</key><string>$FIXTURE_VERSION</string>
+<key>CFBundleVersion</key><string>$FIXTURE_BUILD</string>
 </dict></plist>
 EOF
     cat > "$dsym_contents/Info.plist" <<'EOF'
