@@ -98,12 +98,12 @@ struct CallRoomScenario: CustomTestStringConvertible {
         name
     }
 
-    private var isTrueDirectMessage: Bool {
-        isDirect && !isSpace && activeMembersCount == 2
+    private var usesDirectCallIntent: Bool {
+        isDirect && !isSpace
     }
 
     func expectedIntent(hasActiveCall: Bool, voiceOnly: Bool) -> Intent {
-        switch (hasActiveCall, isTrueDirectMessage) {
+        switch (hasActiveCall, usesDirectCallIntent) {
         case (true, true): voiceOnly ? .joinExistingDmVoice : .joinExistingDm
         case (true, false): .joinExisting
         case (false, true): voiceOnly ? .startCallDmVoice : .startCallDm
@@ -112,7 +112,7 @@ struct CallRoomScenario: CustomTestStringConvertible {
     }
 
     var expectedSkipLobby: Bool? {
-        !isSpace && !isTrueDirectMessage ? true : nil
+        !isSpace && !usesDirectCallIntent ? true : nil
     }
 }
 

@@ -120,22 +120,19 @@ final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked
     struct CallRoomClassification {
         let isDirect: Bool
         let isSpace: Bool
-        let activeMembersCount: UInt64
 
         init(roomInfo: RoomInfo) {
             self.init(isDirect: roomInfo.isDirect,
-                      isSpace: roomInfo.isSpace,
-                      activeMembersCount: roomInfo.activeMembersCount)
+                      isSpace: roomInfo.isSpace)
         }
 
-        init(isDirect: Bool, isSpace: Bool, activeMembersCount: UInt64) {
+        init(isDirect: Bool, isSpace: Bool) {
             self.isDirect = isDirect
             self.isSpace = isSpace
-            self.activeMembersCount = activeMembersCount
         }
 
-        var isTrueDirectMessage: Bool {
-            !isSpace && isDirect && activeMembersCount == 2
+        var usesDirectCallIntent: Bool {
+            !isSpace && isDirect
         }
     }
 
@@ -189,7 +186,7 @@ final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked
     static func skipLobbyOverride(roomClassification: CallRoomClassification?) -> Bool? {
         guard let roomClassification,
               !roomClassification.isSpace,
-              !roomClassification.isTrueDirectMessage else {
+              !roomClassification.usesDirectCallIntent else {
             return nil
         }
 
@@ -208,7 +205,7 @@ final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked
         }
 
         let intent = await room.joinCallIntent(voiceOnly: voiceOnly,
-                                               isDirectMessage: roomClassification?.isTrueDirectMessage == true)
+                                               isDirectMessage: roomClassification?.usesDirectCallIntent == true)
         return .init(intent: intent,
                      skipLobby: skipLobbyOverride(roomClassification: roomClassification),
                      voiceOnly: voiceOnly)
