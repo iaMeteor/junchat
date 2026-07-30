@@ -33,6 +33,7 @@ class AppCoordinator: AppCoordinatorProtocol, AuthenticationFlowCoordinatorDeleg
     private var userSessionMigrationsOldVersion: Version?
     private var userSession: UserSessionProtocol? {
         didSet {
+            JunchatErrorReporter.setUploader((userSession as? JunchatDiagnosticsProviding)?.junchatDiagnosticsUploader)
             userSessionObserver?.cancel()
             if let userSession {
                 configureElementCallService()

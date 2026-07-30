@@ -158,23 +158,35 @@ enum JunchatErrorReporter {
     static func install() {
         // Canary diagnostics require a separately provisioned credential.
     }
+
+    static func setUploader(_ uploader: JunchatDiagnosticsUploading?) { }
 }
 #else
 enum JunchatErrorReporter {
-    private static let endpoint = JunchatServerEnvironment.current.diagnosticsEndpoint
-    private static let ingestToken = "635d21e7ea07a7e7241f92fb9b86bbbeab1f1434d542fbd1"
     private static let queue = DispatchQueue(label: "cn.yyzs120.junchat.error-reporter")
     private static let duplicateWindow: TimeInterval = 60
     private nonisolated(unsafe) static var installed = false
+    private nonisolated(unsafe) static var uploader: JunchatDiagnosticsUploading?
     private nonisolated(unsafe) static var recentReports = [String: Date]()
     
     static func install() {
         queue.async {
             guard !installed else { return }
             installed = true
-            uploadPendingCrashMarkers()
+            if uploader != nil {
+                uploadPendingCrashMarkers()
+            }
             NSSetUncaughtExceptionHandler { exception in
                 JunchatErrorReporter.persistCrashMarker(exception)
+            }
+        }
+    }
+
+    static func setUploader(_ uploader: JunchatDiagnosticsUploading?) {
+        queue.async {
+            self.uploader = uploader
+            if installed, uploader != nil {
+                uploadPendingCrashMarkers()
             }
         }
     }
@@ -278,19 +290,22 @@ enum JunchatErrorReporter {
     }
     
     private static func upload(_ payload: [String: Any], completion: ((Bool) -> Void)? = nil) {
-        guard let body = try? JSONSerialization.data(withJSONObject: payload) else {
+        guard let body = try? JSONSerialization.data(withJSONObject: payload),
+              let uploader else {
             completion?(false)
             return
         }
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.httpBody = body
-        request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
-        request.setValue(ingestToken, forHTTPHeaderField: "X-JunChat-Error-Key")
-        URLSession.shared.dataTask(with: request) { _, response, _ in
-            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            completion?(200...299 ~= status)
-        }.resume()
+        Task {
+            let result = await uploader.upload(body)
+            queue.async {
+                switch result {
+                case .success:
+                    completion?(true)
+                case .failure:
+                    completion?(false)
+                }
+            }
+        }
     }
     
     private static func isDuplicate(_ payload: [String: Any]) -> Bool {

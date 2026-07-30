@@ -19,8 +19,8 @@ struct JunchatServerEnvironment: Equatable {
 
     static let production = JunchatServerEnvironment(matrixAccountProvider: "junchat.yyzs120.cn",
                                                      oidcRedirectURL: URL(string: "https://junchat.yyzs120.cn/oidc/login")!,
-                                                     pushGatewayBaseURL: URL(string: "https://sygnal-junchat.yyzs120.cn")!,
-                                                     diagnosticsEndpoint: URL(string: "https://junchat.yyzs120.cn/junchat-errors/api/events")!,
+                                                     pushGatewayBaseURL: URL(string: "https://sygnal-junchat.yyzs120.cn/junchat-sygnal-v2")!,
+                                                     diagnosticsEndpoint: URL(string: "https://junchat.yyzs120.cn/junchat-errors/api/v2/uploads")!,
                                                      rageshakeEnabled: true,
                                                      backgroundAppRefreshTaskIdentifier: "com.heyujk.junchat.background.refresh")
 

@@ -127,12 +127,16 @@ class UserSessionStore: UserSessionStoreProtocol {
         let privacyModeService = await PrivacyModeService(userID: clientProxy.userID,
                                                           transport: privacyModeTransport,
                                                           migrationStore: PrivacyModeMigrationStore(userDefaults: AppSettings.sharedUserDefaults))
+        let junchatDiagnosticsUploader = JunchatDiagnosticsUploader(uploadsURL: appSettings.diagnosticsEndpoint) {
+            try client.session().accessToken
+        }
         
         return UserSession(clientProxy: clientProxy,
                            mediaProvider: mediaProvider,
                            voiceMessageMediaManager: voiceMessageMediaManager,
                            liveLocationManager: liveLocationManager,
-                           privacyModeService: privacyModeService)
+                           privacyModeService: privacyModeService,
+                           junchatDiagnosticsUploader: junchatDiagnosticsUploader)
     }
     
     private func restorePreviousLogin(_ credentials: KeychainCredentials) async -> Result<ClientSetup, UserSessionStoreError> {

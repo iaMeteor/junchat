@@ -334,6 +334,7 @@ final class AppSettings {
         backgroundAppRefreshTaskIdentifier = serverEnvironment.backgroundAppRefreshTaskIdentifier
         oidcRedirectURL = serverEnvironment.oidcRedirectURL
         pushGatewayBaseURL = serverEnvironment.pushGatewayBaseURL
+        diagnosticsEndpoint = serverEnvironment.diagnosticsEndpoint
         let rageshakeConfiguration: RageshakeConfiguration
         if serverEnvironment.rageshakeEnabled,
            let rageshakeURLString = Secrets.rageshakeURL,
@@ -517,6 +518,8 @@ final class AppSettings {
     var pushGatewayNotifyEndpoint: URL {
         pushGatewayBaseURL.appending(path: "_matrix/push/v1/notify")
     }
+
+    private(set) var diagnosticsEndpoint: URL
 
     @UserPreference(key: UserDefaultsKeys.enableNotifications, defaultValue: true, storageType: .userDefaults(store))
     var enableNotifications

@@ -9,7 +9,7 @@
 import Combine
 import Foundation
 
-class UserSession: UserSessionProtocol {
+class UserSession: UserSessionProtocol, JunchatDiagnosticsProviding {
     private var cancellables = Set<AnyCancellable>()
     
     private var authErrorCancellable: AnyCancellable?
@@ -19,6 +19,7 @@ class UserSession: UserSessionProtocol {
     let voiceMessageMediaManager: VoiceMessageMediaManagerProtocol
     let liveLocationManager: LiveLocationManagerProtocol
     let privacyModeService: PrivacyModeServiceProtocol
+    let junchatDiagnosticsUploader: JunchatDiagnosticsUploading
     
     let callbacks = PassthroughSubject<UserSessionCallback, Never>()
     
@@ -31,12 +32,14 @@ class UserSession: UserSessionProtocol {
          mediaProvider: MediaProviderProtocol,
          voiceMessageMediaManager: VoiceMessageMediaManagerProtocol,
          liveLocationManager: LiveLocationManagerProtocol,
-         privacyModeService: PrivacyModeServiceProtocol) {
+         privacyModeService: PrivacyModeServiceProtocol,
+         junchatDiagnosticsUploader: JunchatDiagnosticsUploading) {
         self.clientProxy = clientProxy
         self.mediaProvider = mediaProvider
         self.voiceMessageMediaManager = voiceMessageMediaManager
         self.liveLocationManager = liveLocationManager
         self.privacyModeService = privacyModeService
+        self.junchatDiagnosticsUploader = junchatDiagnosticsUploader
         
         authErrorCancellable = clientProxy.actionsPublisher
             .receive(on: DispatchQueue.main)

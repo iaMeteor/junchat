@@ -279,6 +279,7 @@
 		2AAB2A77F1762A2648078A30 /* InteractiveQuickLook.swift in Sources */ = {isa = PBXBuildFile; fileRef = 638A81B97D51591D0FCFA598 /* InteractiveQuickLook.swift */; };
 		2AB9D4146C8748CF1D007B67 /* test_pdf.pdf in Resources */ = {isa = PBXBuildFile; fileRef = BE98688578F8B0541D853695 /* test_pdf.pdf */; };
 		2AED12987603157C32C2114D /* TimelineBubbleLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5D8FEB1FED10E995CB002F7 /* TimelineBubbleLayout.swift */; };
+		2B0193EE8C838C4312497ECB /* JunchatDiagnosticsUploader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 248B0A93B20DEE8CF3FD19FC /* JunchatDiagnosticsUploader.swift */; };
 		2B52B2A5A6496C5C0F952776 /* BannedRoomProxy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C30F45308428A4D9FFDB2FB8 /* BannedRoomProxy.swift */; };
 		2B97BCE72D86645F1485C976 /* RoomDirectorySearchMock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 894EE8F5B399A165BA2A6634 /* RoomDirectorySearchMock.swift */; };
 		2BA59D0AEFB4B82A2EC2A326 /* KZFileWatchers in Frameworks */ = {isa = PBXBuildFile; productRef = A2AE110B053B55E38F8D10C7 /* KZFileWatchers */; };
@@ -1585,6 +1586,7 @@
 		FD439E183A48BE871AEEFAEA /* TimelineScrollToBottomButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = E10765FBC83B34A3BC4ADB23 /* TimelineScrollToBottomButton.swift */; };
 		FD573B5D665824EB79EABF06 /* Observable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5327E3B3C58BEB0E65F4CF98 /* Observable.swift */; };
 		FD762761C5D0C30E6255C3D8 /* ServerConfirmationScreenViewModelProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABA4CF2F5B4F68D02E412004 /* ServerConfirmationScreenViewModelProtocol.swift */; };
+		FD897770ED28BDB6D85157AE /* JunchatDiagnosticsUploaderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED4B44FF4B25FF7D085FA23A /* JunchatDiagnosticsUploaderTests.swift */; };
 		FD9777315A5D9CDC47458AD1 /* MediaEventsTimelineScreenViewModelProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = A175D0FDEDBFA44C47FE13AE /* MediaEventsTimelineScreenViewModelProtocol.swift */; };
 		FDC67E8C0EDCB00ABC66C859 /* landscape_test_video.mov in Resources */ = {isa = PBXBuildFile; fileRef = 78BBDF7A05CF53B5CDC13682 /* landscape_test_video.mov */; };
 		FDD5B4B616D9FF4DE3E9A418 /* QRCodeScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92DB574F954CC2B40F7BE892 /* QRCodeScannerView.swift */; };
@@ -1917,6 +1919,7 @@
 		2429224EB0EEA34D35CE9249 /* UserIndicatorControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserIndicatorControllerTests.swift; sourceTree = "<group>"; };
 		2441E2424E78A40FC95DBA76 /* AudioRecorderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRecorderTests.swift; sourceTree = "<group>"; };
 		248649EBA5BC33DB93698734 /* SessionVerificationControllerProxyMock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionVerificationControllerProxyMock.swift; sourceTree = "<group>"; };
+		248B0A93B20DEE8CF3FD19FC /* JunchatDiagnosticsUploader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JunchatDiagnosticsUploader.swift; sourceTree = "<group>"; };
 		24B8177BD2AF45A286F5DA31 /* GlobalSearchScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalSearchScreen.swift; sourceTree = "<group>"; };
 		24C9F99D4407127F7AFA16ED /* junchat-message-soft.caf */ = {isa = PBXFileReference; path = "junchat-message-soft.caf"; sourceTree = "<group>"; };
 		24DEE0682C95F897B6C7CB0D /* ServerConfirmationScreenViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerConfirmationScreenViewModel.swift; sourceTree = "<group>"; };
@@ -3110,6 +3113,7 @@
 		ED33988DA4FD4FC666800106 /* SessionVerificationScreenViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionVerificationScreenViewModel.swift; sourceTree = "<group>"; };
 		ED482057AE39D5C6D9C5F3D8 /* message.caf */ = {isa = PBXFileReference; path = message.caf; sourceTree = "<group>"; };
 		ED49073BB1C1FC649DAC2CCD /* LocationRoomTimelineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationRoomTimelineView.swift; sourceTree = "<group>"; };
+		ED4B44FF4B25FF7D085FA23A /* JunchatDiagnosticsUploaderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JunchatDiagnosticsUploaderTests.swift; sourceTree = "<group>"; };
 		ED60E4D2CD678E1EBF16F77A /* BlockedUsersScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BlockedUsersScreen.swift; sourceTree = "<group>"; };
 		EDDE826EAB1BAB80C1104980 /* SpaceFlowCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaceFlowCoordinator.swift; sourceTree = "<group>"; };
 		EDE4A2623B609FB8D6F8C342 /* PrivacyModeServiceProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacyModeServiceProtocol.swift; sourceTree = "<group>"; };
@@ -3437,6 +3441,7 @@
 				8039515BAA53B7C3275AC64A /* Client */,
 				8B5E91450E85A9689931B221 /* ComposerDraft */,
 				F059D68C4F65EEB56160D643 /* Contacts */,
+				839F00766299955B76729A2B /* Diagnostics */,
 				92E99C57D7F92ED16F73282C /* ElementCall */,
 				39557ADF21345E18F3865B9E /* Emojis */,
 				7649D106C37025AD13FE3EAE /* Environment */,
@@ -5207,6 +5212,7 @@
 				845DDBDE5A0887E73D38B826 /* InviteUsersViewModelTests.swift */,
 				DE5127D6EA05B2E45D0A7D59 /* JoinRoomScreenViewModelTests.swift */,
 				EFE6A09C3ECFE368D186A67D /* JunchatContactsServiceTests.swift */,
+				ED4B44FF4B25FF7D085FA23A /* JunchatDiagnosticsUploaderTests.swift */,
 				3AAE1C11B9EF94C753448D42 /* JunchatMapProviderTests.swift */,
 				FF665453493E8350DC856D67 /* JunchatServerEnvironmentTests.swift */,
 				004A433268B95DE050D303AF /* JunchatTetrisGameTests.swift */,
@@ -5642,6 +5648,14 @@
 				23EE69982BBA18C6D51AD08E /* UserProfileScreen.swift */,
 			);
 			path = View;
+			sourceTree = "<group>";
+		};
+		839F00766299955B76729A2B /* Diagnostics */ = {
+			isa = PBXGroup;
+			children = (
+				248B0A93B20DEE8CF3FD19FC /* JunchatDiagnosticsUploader.swift */,
+			);
+			path = Diagnostics;
 			sourceTree = "<group>";
 		};
 		8428BD1821586CEE0B9C9ECA /* Messages */ = {
@@ -8292,6 +8306,7 @@
 				A216C83ADCF32BA5EF8A6FBC /* InviteUsersViewModelTests.swift in Sources */,
 				7C0E29E0279866C62EC67A28 /* JoinRoomScreenViewModelTests.swift in Sources */,
 				C4DA99DD9C4C5ABE7A23FA64 /* JunchatContactsServiceTests.swift in Sources */,
+				FD897770ED28BDB6D85157AE /* JunchatDiagnosticsUploaderTests.swift in Sources */,
 				C16A16C9D6733131B8505FAE /* JunchatMapProviderTests.swift in Sources */,
 				19A143CB56F734295C068650 /* JunchatServerEnvironmentTests.swift in Sources */,
 				B3513365C11F2D8AD08FD9EF /* JunchatTetrisGameTests.swift in Sources */,
@@ -8860,6 +8875,7 @@
 				7D249465ED00988EEEC14E05 /* JoinedRoomProxyMock.swift in Sources */,
 				E3CA565A4B9704F191B191F0 /* JoinedRoomSize+MemberCount.swift in Sources */,
 				0BA9F76219FABBA3C4A21651 /* JunchatContactsService.swift in Sources */,
+				2B0193EE8C838C4312497ECB /* JunchatDiagnosticsUploader.swift in Sources */,
 				D60192D7DFBF1F46AB3767D4 /* JunchatMapKitMapView.swift in Sources */,
 				A3FE793EDF5ABA839898F258 /* JunchatMapProvider.swift in Sources */,
 				BB814FB8ACF92803794D20F7 /* JunchatPasswordChangeRequest.swift in Sources */,
@@ -9917,7 +9933,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 40;
+				CURRENT_PROJECT_VERSION = 41;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = W834S4TA7S;
 				ENABLE_BITCODE = NO;
@@ -9940,10 +9956,10 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
 				JUNCHAT_ASSOCIATED_DOMAIN = junchat.yyzs120.cn;
 				JUNCHAT_BACKGROUND_APP_REFRESH_TASK_IDENTIFIER = com.heyujk.junchat.background.refresh;
-				JUNCHAT_DIAGNOSTICS_ENDPOINT = "https://junchat.yyzs120.cn/junchat-errors/api/events";
+				JUNCHAT_DIAGNOSTICS_ENDPOINT = "https://junchat.yyzs120.cn/junchat-errors/api/v2/uploads";
 				JUNCHAT_MATRIX_ACCOUNT_PROVIDER = junchat.yyzs120.cn;
 				JUNCHAT_OIDC_REDIRECT_URL = "https://junchat.yyzs120.cn/oidc/login";
-				JUNCHAT_PUSH_GATEWAY_BASE_URL = "https://sygnal-junchat.yyzs120.cn";
+				JUNCHAT_PUSH_GATEWAY_BASE_URL = "https://sygnal-junchat.yyzs120.cn/junchat-sygnal-v2";
 				JUNCHAT_RAGESHAKE_ENABLED = YES;
 				JUNCHAT_URL_SCHEME = matrix;
 				KEYCHAIN_ACCESS_GROUP_IDENTIFIER = "$(DEVELOPMENT_TEAM).$(BASE_BUNDLE_IDENTIFIER)";
@@ -10344,7 +10360,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 40;
+				CURRENT_PROJECT_VERSION = 41;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = W834S4TA7S;
 				ENABLE_BITCODE = NO;
@@ -10361,10 +10377,10 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
 				JUNCHAT_ASSOCIATED_DOMAIN = junchat.yyzs120.cn;
 				JUNCHAT_BACKGROUND_APP_REFRESH_TASK_IDENTIFIER = com.heyujk.junchat.background.refresh;
-				JUNCHAT_DIAGNOSTICS_ENDPOINT = "https://junchat.yyzs120.cn/junchat-errors/api/events";
+				JUNCHAT_DIAGNOSTICS_ENDPOINT = "https://junchat.yyzs120.cn/junchat-errors/api/v2/uploads";
 				JUNCHAT_MATRIX_ACCOUNT_PROVIDER = junchat.yyzs120.cn;
 				JUNCHAT_OIDC_REDIRECT_URL = "https://junchat.yyzs120.cn/oidc/login";
-				JUNCHAT_PUSH_GATEWAY_BASE_URL = "https://sygnal-junchat.yyzs120.cn";
+				JUNCHAT_PUSH_GATEWAY_BASE_URL = "https://sygnal-junchat.yyzs120.cn/junchat-sygnal-v2";
 				JUNCHAT_RAGESHAKE_ENABLED = YES;
 				JUNCHAT_URL_SCHEME = matrix;
 				KEYCHAIN_ACCESS_GROUP_IDENTIFIER = "$(DEVELOPMENT_TEAM).$(BASE_BUNDLE_IDENTIFIER)";
@@ -10422,7 +10438,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 40;
+				CURRENT_PROJECT_VERSION = 41;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = W834S4TA7S;
 				ENABLE_BITCODE = NO;
@@ -10445,10 +10461,10 @@
 				IPHONEOS_DEPLOYMENT_TARGET = 18.5;
 				JUNCHAT_ASSOCIATED_DOMAIN = junchat.yyzs120.cn;
 				JUNCHAT_BACKGROUND_APP_REFRESH_TASK_IDENTIFIER = com.heyujk.junchat.background.refresh;
-				JUNCHAT_DIAGNOSTICS_ENDPOINT = "https://junchat.yyzs120.cn/junchat-errors/api/events";
+				JUNCHAT_DIAGNOSTICS_ENDPOINT = "https://junchat.yyzs120.cn/junchat-errors/api/v2/uploads";
 				JUNCHAT_MATRIX_ACCOUNT_PROVIDER = junchat.yyzs120.cn;
 				JUNCHAT_OIDC_REDIRECT_URL = "https://junchat.yyzs120.cn/oidc/login";
-				JUNCHAT_PUSH_GATEWAY_BASE_URL = "https://sygnal-junchat.yyzs120.cn";
+				JUNCHAT_PUSH_GATEWAY_BASE_URL = "https://sygnal-junchat.yyzs120.cn/junchat-sygnal-v2";
 				JUNCHAT_RAGESHAKE_ENABLED = YES;
 				JUNCHAT_URL_SCHEME = matrix;
 				KEYCHAIN_ACCESS_GROUP_IDENTIFIER = "$(DEVELOPMENT_TEAM).$(BASE_BUNDLE_IDENTIFIER)";

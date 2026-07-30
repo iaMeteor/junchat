@@ -141,8 +141,17 @@ struct AppSettingsTests {
         #expect(settings.accountProviders == ["canary.junchat.yyzs120.cn"])
         #expect(settings.oidcRedirectURL == URL(string: "https://canary.junchat.yyzs120.cn/oidc/login"))
         #expect(settings.pushGatewayBaseURL == URL(string: "https://canary.junchat.yyzs120.cn/push"))
+        #expect(settings.pushGatewayNotifyEndpoint == URL(string: "https://canary.junchat.yyzs120.cn/push/_matrix/push/v1/notify"))
+        #expect(settings.diagnosticsEndpoint == URL(string: "https://canary.junchat.yyzs120.cn/diagnostics/api/events"))
         #expect(settings.backgroundAppRefreshTaskIdentifier == "com.heyujk.junchat.canary.background.refresh")
         #expect(settings.bugReportRageshakeURL.publisher.value == RageshakeConfiguration.disabled)
+    }
+
+    @Test
+    func productionPushNotifyEndpointUsesTheVersionedSygnalRoute() {
+        let settings = AppSettings(serverEnvironment: .production)
+
+        #expect(settings.pushGatewayNotifyEndpoint == URL(string: "https://sygnal-junchat.yyzs120.cn/junchat-sygnal-v2/_matrix/push/v1/notify"))
     }
     
     @Test

@@ -16,8 +16,8 @@ struct JunchatServerEnvironmentTests {
 
         #expect(environment.matrixAccountProvider == "junchat.yyzs120.cn")
         #expect(environment.oidcRedirectURL == URL(string: "https://junchat.yyzs120.cn/oidc/login"))
-        #expect(environment.pushGatewayBaseURL == URL(string: "https://sygnal-junchat.yyzs120.cn"))
-        #expect(environment.diagnosticsEndpoint == URL(string: "https://junchat.yyzs120.cn/junchat-errors/api/events"))
+        #expect(environment.pushGatewayBaseURL == URL(string: "https://sygnal-junchat.yyzs120.cn/junchat-sygnal-v2"))
+        #expect(environment.diagnosticsEndpoint == URL(string: "https://junchat.yyzs120.cn/junchat-errors/api/v2/uploads"))
         #expect(environment.rageshakeEnabled)
         #expect(environment.backgroundAppRefreshTaskIdentifier == "com.heyujk.junchat.background.refresh")
     }
