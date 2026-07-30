@@ -319,6 +319,9 @@ private final class ReleaseArchiveFixture {
     private let fileManager = FileManager.default
 
     init() throws {
+        let projectYAML = try String(contentsOf: URL.projectDirectory.appending(path: "project.yml"),
+                                     encoding: .utf8)
+        let releaseVersion = try JunchatReleaseVersion.parse(projectYAML)
         rootURL = fileManager.temporaryDirectory
             .appending(path: "junchat-release-preflight-tests")
             .appending(path: UUID().uuidString)
@@ -334,8 +337,8 @@ private final class ReleaseArchiveFixture {
             "ApplicationProperties": [
                 "ApplicationPath": "Applications/Junchat.app",
                 "CFBundleIdentifier": "com.heyujk.junchat",
-                "CFBundleShortVersionString": "1.8.2",
-                "CFBundleVersion": "37"
+                "CFBundleShortVersionString": releaseVersion.name,
+                "CFBundleVersion": String(releaseVersion.build)
             ],
             "ArchiveVersion": 2,
             "Name": "Junchat",
@@ -344,8 +347,8 @@ private final class ReleaseArchiveFixture {
         try writePropertyList([
             "CFBundleExecutable": "Junchat",
             "CFBundleIdentifier": "com.heyujk.junchat",
-            "CFBundleShortVersionString": "1.8.2",
-            "CFBundleVersion": "37",
+            "CFBundleShortVersionString": releaseVersion.name,
+            "CFBundleVersion": String(releaseVersion.build),
             "CFBundlePackageType": "APPL"
         ], to: appURL.appending(path: "Info.plist"))
         try writePropertyList([
@@ -371,7 +374,12 @@ private final class ReleaseArchiveFixture {
     }
 
     func setArchiveBundleIdentifier(_ bundleIdentifier: String) throws {
-        try writeArchivePropertyList(version: "1.8.2", build: 37, bundleIdentifier: bundleIdentifier)
+        let projectYAML = try String(contentsOf: URL.projectDirectory.appending(path: "project.yml"),
+                                     encoding: .utf8)
+        let releaseVersion = try JunchatReleaseVersion.parse(projectYAML)
+        try writeArchivePropertyList(version: releaseVersion.name,
+                                     build: releaseVersion.build,
+                                     bundleIdentifier: bundleIdentifier)
     }
 
     func remove() {
