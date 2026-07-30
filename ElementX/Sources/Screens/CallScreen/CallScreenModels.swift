@@ -71,6 +71,11 @@ enum CallScreenJavaScriptMessageName: String, CaseIterable {
             window.addEventListener(
                 "message",
                 (event) => {
+                    const expectedOrigin = window.location.protocol === "file:" ? "null" : window.location.origin;
+                    if (event.source !== window || event.origin !== expectedOrigin) {
+                        console.warn("-- skipped event handling from an untrusted window.");
+                        return;
+                    }
                     let message = {data: event.data, origin: event.origin};
                     if (message.data.response && message.data.api == "toWidget"
                     || !message.data.response && message.data.api == "fromWidget") {

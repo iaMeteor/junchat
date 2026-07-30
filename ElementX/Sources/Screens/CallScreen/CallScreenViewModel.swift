@@ -50,10 +50,12 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
     private var hasCleanedUpLocalCallState = false
     private var hasCompletedCall = false
     private var hasRequestedHangup = false
+    private var hasWidgetLoaded = false
     private var shouldDismissAfterHangup = false
     private var pendingHangupAcknowledgement: PendingHangupAcknowledgement?
     private let hangupDeliveryTimeout: Duration
     private let callCloseTimeout: Duration
+    private let readyTimeout: Duration
 
     /// Designated initialiser
     /// - Parameters:
@@ -75,7 +77,8 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
          applicationStateProvider: @escaping @MainActor () -> UIApplication.State = { UIApplication.shared.applicationState },
          callMediaCoordinator: CallMediaCoordinatorProtocol? = nil,
          hangupDeliveryTimeout: Duration = .seconds(1),
-         callCloseTimeout: Duration = .seconds(2)) {
+         callCloseTimeout: Duration = .seconds(2),
+         readyTimeout: Duration = .seconds(10)) {
         self.elementCallService = elementCallService
         self.configuration = configuration
         self.appSettings = appSettings
@@ -93,6 +96,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         self.callEndedTonePlayer = callEndedTonePlayer
         self.hangupDeliveryTimeout = hangupDeliveryTimeout
         self.callCloseTimeout = callCloseTimeout
+        self.readyTimeout = readyTimeout
         isPictureInPictureAllowed = allowPictureInPicture
 
         guard let deviceID = configuration.clientProxy.deviceID else { fatalError("Missing device ID for the call.") }
@@ -312,8 +316,9 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
                 return
             }
 
-            if timeoutTask != nil, decodedMessage.hasLoaded {
-                // This means that the call room was joined succesfully, we can stop the timeout task
+            if decodedMessage.hasLoaded {
+                hasWidgetLoaded = true
+                // This means that the call room was joined successfully, we can stop the timeout task.
                 MXLog.info("[JunchatCall] widget loaded")
                 timeoutTask = nil
             }
@@ -425,12 +430,19 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
 
             await elementCallService.setupCallSession(roomID: configuration.roomProxy.id,
                                                       roomDisplayName: configuration.roomProxy.infoPublisher.value.displayName ?? configuration.roomProxy.id,
+                                                      isVoiceCall: configuration.voiceOnly,
                                                       incomingCallIdentity: configuration.incomingCallIdentity,
                                                       generation: callSessionGeneration)
+            guard !Task.isCancelled, !hasRequestedHangup, !hasCleanedUpLocalCallState else { return }
+            startReadyTimeout()
         }
+    }
 
+    private func startReadyTimeout() {
+        guard !hasWidgetLoaded, timeoutTask == nil else { return }
+        let duration = readyTimeout
         timeoutTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(10))
+            try? await Task.sleep(for: duration)
             guard !Task.isCancelled, let self else { return }
             MXLog.error("Failed to join Element Call: Timeout")
             state.bindings.alertInfo = .init(id: UUID(),

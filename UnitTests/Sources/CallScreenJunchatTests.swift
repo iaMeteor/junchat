@@ -52,11 +52,59 @@ struct CallScreenJunchatTests {
 
         #expect(!script.contains("livekit_service_url"))
         #expect(!script.contains("junchatConfig.livekit"))
+        #expect(!script.contains("localStorage.setItem(\"matrix-setting-custom-livekit-url\""))
         #expect(script.contains("delete sanitizedConfig.livekit"))
         #expect(script.contains("localStorage.removeItem(\"matrix-setting-custom-livekit-url\")"))
         #expect(script.contains("matrix_rtc_session"))
     }
 
+    @Test
+    func elementCallBootstrapReliesOnSupportedOpusNegotiation() {
+        let script = CallScreen.junchatElementCallBootstrapScript(language: "zh-Hans")
+
+        #expect(!script.contains("normalizeJunchatRemoteSdp"))
+        #expect(!script.contains("usedtx=1"))
+        #expect(script.contains("originalSetRemoteDescription.call(this, description)"))
+    }
+
+    @Test
+    func elementCallBootstrapForcesAudioOnlyIntentToDisableCameraCapture() {
+        let script = CallScreen.junchatElementCallBootstrapScript(language: "zh-Hans")
+
+        #expect(script.contains("junchat_call_intent"))
+        #expect(script.contains("constraints.video = false"))
+        #expect(script.contains("originalGetUserMedia.call(this, constraints)"))
+    }
+
+    @Test
+    func widgetBridgeAcceptsOnlyMessagesPostedByTheTrustedMainWindow() {
+        let script = CallScreenJavaScriptMessageName.allCasesInjectionScript
+
+        #expect(script.contains("event.source !== window"))
+        #expect(script.contains("event.origin !== expectedOrigin"))
+        #expect(script.contains("window.location.origin"))
+        #expect(script.contains("window.location.protocol === \"file:\" ? \"null\""))
+    }
+
+    @Test
+    func mediaCaptureTrustAcceptsOnlyTheExactBundledCallFile() {
+        let callURL = URL(fileURLWithPath: "/Applications/JunChat.app/ElementCall/index.html")
+        let source = CallWebViewMessageTrustPolicy.Source(isMainFrame: true,
+                                                          frameURL: callURL,
+                                                          securityOrigin: .init(scheme: "file",
+                                                                                host: "",
+                                                                                port: 0))
+
+        #expect(CallWebViewMessageTrustPolicy.isMediaCaptureTrusted(source,
+                                                                    callURL: callURL,
+                                                                    bundledCallURL: callURL))
+        #expect(!CallWebViewMessageTrustPolicy.isMediaCaptureTrusted(source,
+                                                                     callURL: callURL,
+                                                                     bundledCallURL: URL(fileURLWithPath: "/Applications/JunChat.app/Other/index.html")))
+    }
+}
+
+struct CallScreenJunchatBehaviorTests {
     @Test
     func elementCallBootstrapReportsRemoteMediaTrackForConnectedTone() {
         let script = CallScreen.junchatElementCallBootstrapScript(language: "zh-Hans")
@@ -545,11 +593,54 @@ struct CallScreenJunchatTests {
         try await Task.sleep(for: .milliseconds(50))
 
         #expect(elementCallService.registerCallSessionGenerationCallsCount == 1)
-        #expect(elementCallService.setupCallSessionRoomIDRoomDisplayNameIncomingCallIdentityGenerationCallsCount == 0)
+        #expect(elementCallService.setupCallSessionRoomIDRoomDisplayNameIsVoiceCallIncomingCallIdentityGenerationCallsCount == 0)
         #expect(elementCallService.tearDownCallSessionGenerationCallsCount == 1)
         #expect(elementCallService.tearDownCallSessionGenerationReceivedGeneration == elementCallService.registerCallSessionGenerationReceivedGeneration)
         #expect(viewModel.context.viewState.url == nil)
         #expect(widgetDriver.stopCallsCount == 1)
+    }
+
+    @Test
+    @MainActor
+    func readyTimeoutStartsOnlyAfterWidgetPreparationCompletes() async throws {
+        let widgetDriver = ElementCallWidgetDriverMock()
+        widgetDriver.underlyingWidgetID = "widget"
+        widgetDriver.underlyingMessagePublisher = .init()
+        widgetDriver.underlyingActions = Empty().eraseToAnyPublisher()
+        var releaseStart: CheckedContinuation<Result<URL, ElementCallWidgetDriverError>, Never>?
+        widgetDriver.startBaseURLClientIDColorSchemeVoiceOnlyRageshakeURLAnalyticsConfigurationClosure = { _, _, _, _, _, _ in
+            await withCheckedContinuation { releaseStart = $0 }
+        }
+
+        let roomProxy = JoinedRoomProxyMock(.init(id: "room-id", name: "Call Room"))
+        roomProxy.elementCallWidgetDriverDeviceIDReturnValue = widgetDriver
+        let appSettings = AppSettings()
+        let viewModel = CallScreenViewModel(elementCallService: ElementCallServiceMock(.init()),
+                                            configuration: .init(roomProxy: roomProxy,
+                                                                 clientProxy: ClientProxyMock(.init(deviceID: "device-id")),
+                                                                 clientID: "com.heyujk.junchat",
+                                                                 elementCallBaseURL: URL.homeDirectory,
+                                                                 elementCallBaseURLOverride: nil,
+                                                                 voiceOnly: true,
+                                                                 colorScheme: .dark),
+                                            allowPictureInPicture: false,
+                                            appHooks: AppHooks(),
+                                            appSettings: appSettings,
+                                            analyticsService: AnalyticsService(client: AnalyticsClientMock(), appSettings: appSettings),
+                                            callConnectedTonePlayer: { },
+                                            callEndedTonePlayer: { },
+                                            readyTimeout: .milliseconds(20))
+
+        for _ in 0..<20 where releaseStart == nil {
+            await Task.yield()
+        }
+        try await Task.sleep(for: .milliseconds(40))
+        #expect(viewModel.context.alertInfo == nil)
+
+        releaseStart?.resume(returning: .success(URL.userDirectory))
+        try await Task.sleep(for: .milliseconds(40))
+        #expect(viewModel.context.alertInfo != nil)
+        viewModel.stop()
     }
 
     @Test
@@ -1257,6 +1348,30 @@ extension CallScreenJunchatTests {
                                                                                      host: "",
                                                                                      port: 0)),
                                                          callURL: callURL))
+    }
+
+    @Test
+    func callWebViewMediaTrustUsesTheSameFullOriginAndMainFrameBoundary() throws {
+        let callURL = try #require(URL(string: "https://call.junchat.example/room"))
+
+        #expect(CallWebViewMessageTrustPolicy.isMediaCaptureTrusted(.init(isMainFrame: true,
+                                                                          frameURL: callURL,
+                                                                          securityOrigin: .init(scheme: "https",
+                                                                                                host: "call.junchat.example",
+                                                                                                port: 443)),
+                                                                    callURL: callURL))
+        #expect(!CallWebViewMessageTrustPolicy.isMediaCaptureTrusted(.init(isMainFrame: false,
+                                                                           frameURL: callURL,
+                                                                           securityOrigin: .init(scheme: "https",
+                                                                                                 host: "call.junchat.example",
+                                                                                                 port: 443)),
+                                                                     callURL: callURL))
+        #expect(try !CallWebViewMessageTrustPolicy.isMediaCaptureTrusted(.init(isMainFrame: true,
+                                                                               frameURL: #require(URL(string: "https://call.junchat.example:8443/room")),
+                                                                               securityOrigin: .init(scheme: "https",
+                                                                                                     host: "call.junchat.example",
+                                                                                                     port: 8443)),
+                                                                         callURL: callURL))
     }
 }
 

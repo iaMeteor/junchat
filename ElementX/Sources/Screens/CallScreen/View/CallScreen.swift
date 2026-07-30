@@ -92,6 +92,24 @@ enum CallWebViewMessageTrustPolicy {
         return callOrigin == frameOrigin && callOrigin == securityOrigin
     }
 
+    static func isMediaCaptureTrusted(_ source: Source,
+                                      callURL: URL?,
+                                      bundledCallURL: URL? = EmbeddedElementCall.appURL) -> Bool {
+        guard isTrusted(source, callURL: callURL) else {
+            return false
+        }
+
+        guard callURL?.isFileURL == true else {
+            return true
+        }
+
+        guard let callURL, let bundledCallURL else {
+            return false
+        }
+
+        return callURL.standardizedFileURL.path == bundledCallURL.standardizedFileURL.path
+    }
+
     private struct Origin: Equatable {
         let scheme: String
         let host: String
@@ -200,6 +218,7 @@ private struct CallView: UIViewRepresentable {
             """
         (() => {
             const junchatLanguage = "\(language)";
+            const junchatCallIntent = new URL(window.location.href).searchParams.get("junchat_call_intent");
             const junchatConfig = {
                 matrix_rtc_session: {
                     wait_for_key_rotation_ms: 5000,
@@ -393,39 +412,6 @@ private struct CallView: UIViewRepresentable {
                 }
 
                 window.__junchatSdpDiagnosticsPatched = true;
-                const normalizeJunchatRemoteSdp = (description) => {
-                    const sdp = description && description.sdp;
-                    if (!sdp || typeof sdp !== "string") {
-                        return description;
-                    }
-
-                    const normalizedSdp = sdp
-                        .split(/\\r?\\n/)
-                        .map((line) => {
-                            if (!line.startsWith("a=fmtp:111 ")) {
-                                return line;
-                            }
-
-                            const params = line
-                                .slice("a=fmtp:111 ".length)
-                                .split(";")
-                                .map((value) => value.trim())
-                                .filter((value) => value.length > 0 && value.toLowerCase() !== "usedtx=1");
-                            return "a=fmtp:111 " + params.join(";");
-                        })
-                        .join("\\r\\n");
-
-                    if (normalizedSdp === sdp) {
-                        return description;
-                    }
-
-                    console.warn("[JunchatSDP] normalized remote SDP opus DTX parameters");
-                    return {
-                        type: description.type,
-                        sdp: normalizedSdp
-                    };
-                };
-
                 const summarizeSdp = (description) => {
                     const sdp = typeof description === "string" ? description : description && description.sdp;
                     if (!sdp) {
@@ -464,14 +450,32 @@ private struct CallView: UIViewRepresentable {
                 const originalSetRemoteDescription = RTCPeerConnection.prototype.setRemoteDescription;
                 if (typeof originalSetRemoteDescription === "function") {
                     RTCPeerConnection.prototype.setRemoteDescription = function(description) {
-                        const patchedDescription = normalizeJunchatRemoteSdp(description);
-                        console.log("[JunchatSDP] setRemoteDescription " + summarizeSdp(patchedDescription));
-                        return originalSetRemoteDescription.call(this, patchedDescription).catch((error) => {
-                            console.error("[JunchatSDP] setRemoteDescription failed " + summarizeSdp(patchedDescription), error);
+                        console.log("[JunchatSDP] setRemoteDescription " + summarizeSdp(description));
+                        return originalSetRemoteDescription.call(this, description).catch((error) => {
+                            console.error("[JunchatSDP] setRemoteDescription failed " + summarizeSdp(description), error);
                             throw error;
                         });
                     };
                 }
+            };
+
+            const installJunchatAudioOnlyCapture = () => {
+                if (junchatCallIntent !== "audio" || window.__junchatAudioOnlyCapturePatched) {
+                    return;
+                }
+
+                if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
+                    window.setTimeout(installJunchatAudioOnlyCapture, 50);
+                    return;
+                }
+
+                window.__junchatAudioOnlyCapturePatched = true;
+                const originalGetUserMedia = navigator.mediaDevices.getUserMedia;
+                navigator.mediaDevices.getUserMedia = function(requestedConstraints) {
+                    const constraints = { ...(requestedConstraints || {}) };
+                    constraints.video = false;
+                    return originalGetUserMedia.call(this, constraints);
+                };
             };
 
             const mergeJunchatConfig = (config) => {
@@ -632,6 +636,7 @@ private struct CallView: UIViewRepresentable {
             } else {
                 startJunchatTextObserver();
             }
+            installJunchatAudioOnlyCapture();
             installJunchatSdpDiagnostics();
             installJunchatCallConnectedToneBridge();
 
@@ -877,13 +882,17 @@ private struct CallView: UIViewRepresentable {
         // MARK: - WKUIDelegate
 
         func webView(_ webView: WKWebView, decideMediaCapturePermissionsFor origin: WKSecurityOrigin, initiatedBy frame: WKFrameInfo, type: WKMediaCaptureType) async -> WKPermissionDecision {
-            // Allow if the origin is local, otherwise don't allow permissions for domains different than what the call was started on
-            guard origin.protocol == "file" || origin.host == url.host else {
-                MXLog.warning("[JunchatCallWebView] deny media capture type=\(String(describing: type)) originIsLocal=false hostMatches=false")
+            let source = CallWebViewMessageTrustPolicy.Source(isMainFrame: frame.isMainFrame,
+                                                              frameURL: frame.request.url,
+                                                              securityOrigin: .init(scheme: origin.protocol,
+                                                                                    host: origin.host,
+                                                                                    port: origin.port))
+            guard CallWebViewMessageTrustPolicy.isMediaCaptureTrusted(source, callURL: url) else {
+                MXLog.warning("[JunchatCallWebView] deny media capture type=\(String(describing: type)) main=\(frame.isMainFrame)")
                 return .deny
             }
 
-            MXLog.info("[JunchatCallWebView] grant media capture type=\(String(describing: type)) originIsLocal=\(origin.protocol == "file") hostMatches=\(origin.host == url.host)")
+            MXLog.info("[JunchatCallWebView] grant media capture type=\(String(describing: type)) main=true")
             viewModelContext?.send(viewAction: .mediaCapturePermissionGranted)
             return .grant
         }

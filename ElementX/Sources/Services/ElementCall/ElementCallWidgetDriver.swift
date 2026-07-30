@@ -142,6 +142,7 @@ final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked
     struct CallConfiguration {
         let intent: Intent
         let skipLobby: Bool?
+        let voiceOnly: Bool
     }
 
     struct Session {
@@ -209,7 +210,8 @@ final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked
         let intent = await room.joinCallIntent(voiceOnly: voiceOnly,
                                                isDirectMessage: roomClassification?.isTrueDirectMessage == true)
         return .init(intent: intent,
-                     skipLobby: skipLobbyOverride(roomClassification: roomClassification))
+                     skipLobby: skipLobbyOverride(roomClassification: roomClassification),
+                     voiceOnly: voiceOnly)
     }
 
     func start(baseURL: URL,
@@ -243,7 +245,7 @@ final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked
 
         switch sessionResult {
         case .success(let session):
-            return start(session: session)
+            return start(session: session, voiceOnly: voiceOnly)
         case .failure(let error):
             return .failure(error)
         }
@@ -374,7 +376,7 @@ final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked
         return .success(.init(url: url, runtime: runtime))
     }
 
-    private func start(session: Session) -> Result<URL, ElementCallWidgetDriverError> {
+    private func start(session: Session, voiceOnly: Bool) -> Result<URL, ElementCallWidgetDriverError> {
         let result: Result<URL, ElementCallWidgetDriverError> = lifecycleLock.withLock {
             guard !hasStopped, !Task.isCancelled else {
                 return .failure(.cancelled)
@@ -412,7 +414,7 @@ final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked
                 await runtime.run()
             }
 
-            return .success(session.url)
+            return .success(Self.callURL(session.url, voiceOnly: voiceOnly))
         }
 
         if case .failure = result {
@@ -421,10 +423,24 @@ final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked
         return result
     }
 
+    private static func callURL(_ url: URL, voiceOnly: Bool) -> URL {
+        guard voiceOnly,
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url
+        }
+
+        var queryItems = components.queryItems ?? []
+        queryItems.removeAll { $0.name == "junchat_call_intent" }
+        queryItems.append(.init(name: "junchat_call_intent", value: "audio"))
+        components.queryItems = queryItems
+        return components.url ?? url
+    }
+
     private func decodeHostHandledMessage(_ message: String) -> ElementCallWidgetMessage? {
         guard let data = message.data(using: .utf8),
               let widgetMessage = try? JSONDecoder().decode(ElementCallWidgetMessage.self, from: data),
               widgetMessage.direction == .fromWidget,
+              widgetMessage.widgetId == widgetID,
               widgetMessage.isHostHandledAction else {
             return nil
         }
@@ -439,7 +455,7 @@ final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked
         
         do {
             let widgetMessage = try JSONDecoder().decode(ElementCallWidgetMessage.self, from: data)
-            if widgetMessage.direction == .fromWidget {
+            if widgetMessage.direction == .fromWidget, widgetMessage.widgetId == widgetID {
                 if widgetMessage.isCallEndingAction {
                     sendActionIfActive(.callEnded)
                     return

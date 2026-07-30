@@ -255,7 +255,6 @@ class OnboardingFlowCoordinator: FlowCoordinatorProtocol {
     private func presentIdentityConfirmationScreen() {
         let parameters = IdentityConfirmationScreenCoordinatorParameters(userSession: userSession,
                                                                          appSettings: appSettings,
-                                                                         verificationPromptDecisionStore: verificationPromptDecisionStore,
                                                                          userIndicatorController: userIndicatorController)
         
         let coordinator = IdentityConfirmationScreenCoordinator(parameters: parameters)
@@ -269,6 +268,7 @@ class OnboardingFlowCoordinator: FlowCoordinatorProtocol {
                 presentRecoveryKeyScreen()
             case .skip:
                 guard stateMachine.state == .identityConfirmation else { return }
+                verificationPromptDecisionStore.hidePermanently(for: userSession.clientProxy.userID)
                 appSettings.hasRunIdentityConfirmationOnboarding = true
                 stateMachine.tryEvent(.nextSkippingIdentityConfirmed)
             case .reset:

@@ -193,6 +193,24 @@ struct UserSessionFlowCoordinatorTests {
     }
 
     @Test
+    func currentIdentitySkipPersistsTheAccountDecision() throws {
+        let (userDefaults, suiteName) = try makeVerificationPromptUserDefaults()
+        defer { userDefaults.removePersistentDomain(forName: suiteName) }
+        let decisionStore = VerificationPromptDecisionStore(userDefaults: userDefaults)
+        let navigationStackCoordinator = NavigationStackCoordinator()
+        let coordinator = makeOnboardingFlowCoordinator(userID: "@alice:example.org",
+                                                        verificationState: .unverified,
+                                                        decisionStore: decisionStore,
+                                                        navigationStackCoordinator: navigationStackCoordinator)
+
+        coordinator.start()
+        let identityCoordinator = try #require(navigationStackCoordinator.rootCoordinator as? IdentityConfirmationScreenCoordinator)
+        identityCoordinator.send(viewAction: .skip)
+
+        #expect(decisionStore.isPermanentlyHidden(for: "@alice:example.org"))
+    }
+
+    @Test
     func staleIdentitySkipAfterVerificationDoesNotAdvanceOnboarding() async throws {
         let (userDefaults, suiteName) = try makeVerificationPromptUserDefaults()
         defer { userDefaults.removePersistentDomain(forName: suiteName) }
@@ -243,6 +261,7 @@ struct UserSessionFlowCoordinatorTests {
         staleIdentityCoordinator.send(viewAction: .skip)
 
         #expect(dismissCount == 1)
+        #expect(!decisionStore.isPermanentlyHidden(for: "@alice:example.org"))
         withExtendedLifetime(actionCancellable) { }
     }
 
@@ -409,6 +428,26 @@ struct UserSessionFlowCoordinatorTests {
 
         #expect(callScreenCoordinatorFactory.makeCount == 1)
         #expect(tabCoordinator?.overlayCoordinator === firstCoordinator)
+    }
+
+    @Test
+    mutating func rapidSameRoomPresentationIsRejectedBeforeRoomLookup() async throws {
+        let defaultRoomLookup = try #require(clientProxy.roomForIdentifierClosure)
+        let delayedLookup = SuspendedCallRoomLookup()
+        clientProxy.roomForIdentifierClosure = { roomID in
+            await delayedLookup.wait()
+            return await defaultRoomLookup(roomID)
+        }
+
+        userSessionFlowCoordinator.handleAppRoute(.call(roomID: "1", isVoiceCall: true), animated: false)
+        try await waitUntil { delayedLookup.hasRequest }
+        userSessionFlowCoordinator.handleAppRoute(.call(roomID: "1", isVoiceCall: true), animated: false)
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(clientProxy.roomForIdentifierCallsCount == 1)
+
+        delayedLookup.resume()
+        try await waitUntil { callScreenCoordinatorFactory.makeCount == 1 }
     }
 
     @Test

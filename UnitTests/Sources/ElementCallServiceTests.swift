@@ -17,6 +17,7 @@ import Testing
 @MainActor
 final class ElementCallServiceTests {
     private var callKitActionRecorder: CallKitActionRecorder!
+    private var callController: CXCallControllerRecorder!
     private var callProvider: CXProviderMock!
     private var currentDate: Date!
     private var testClock: TestClock<Duration>!
@@ -29,10 +30,12 @@ final class ElementCallServiceTests {
         currentDate = Date()
         testClock = TestClock()
         callKitActionRecorder = CallKitActionRecorder()
+        callController = CXCallControllerRecorder()
         let dateProvider: () -> Date = {
             self.currentDate
         }
         service = ElementCallService(callProvider: callProvider,
+                                     callController: callController,
                                      timeProvider: TimeProvider(clock: testClock, now: dateProvider),
                                      ignoresCallKitEndActions: false,
                                      fulfillCallKitAction: callKitActionRecorder.fulfill)
@@ -40,6 +43,7 @@ final class ElementCallServiceTests {
     
     deinit {
         callKitActionRecorder = nil
+        callController = nil
         callProvider = nil
         currentDate = nil
         testClock = nil
@@ -92,7 +96,7 @@ final class ElementCallServiceTests {
     }
 
     @Test
-    func acceptingIncomingCallStopsCallKitRingingImmediately() async throws {
+    func acceptingIncomingCallAnswersAndKeepsTheCallKitSessionActive() async throws {
         await confirmation { confirmation in
             let pkPushPayloadMock = PKPushPayloadMock().updatingExpiration(currentDate, lifetime: 30)
                 .updateIsVoice(true)
@@ -110,9 +114,10 @@ final class ElementCallServiceTests {
                                                                                          isVoiceCall: true,
                                                                                          incomingCallIdentity: incomingCallIdentity))
         
-        #expect(callProvider.reportCallWithEndedAtReasonCalled)
-        #expect(callProvider.reportCallWithEndedAtReasonReceivedArguments?.reason == .remoteEnded)
-        #expect(callProvider.reportCallWithEndedAtReasonCallsCount == 1)
+        #expect(callController.requestedActions.contains {
+            ($0 as? CXAnswerCallAction)?.callUUID == incomingCallIdentity.callKitID
+        })
+        #expect(!callProvider.reportCallWithEndedAtReasonCalled)
         #expect(service.incomingCallRoomIDPublisher.value == nil)
         
         let generation = ElementCallSessionGeneration()
@@ -122,9 +127,153 @@ final class ElementCallServiceTests {
                                        incomingCallIdentity: acceptedIncomingCallIdentity,
                                        generation: generation)
         
-        #expect(callProvider.reportCallWithEndedAtReasonCallsCount == 1)
+        #expect(!callController.requestedActions.contains { $0 is CXStartCallAction })
+        #expect(!callProvider.reportCallWithEndedAtReasonCalled)
         #expect(service.incomingCallRoomIDPublisher.value == nil)
         #expect(service.ongoingCallRoomIDPublisher.value == "!room:example.com")
+    }
+
+    @Test
+    func inAppAnswerCancelsTheProviderHandoffCreatedByItsCallKitTransaction() async throws {
+        await receiveIncomingPush(PKPushPayloadMock()
+            .updatingExpiration(currentDate, lifetime: 30)
+            .updateIsVoice(true))
+        let incomingCallIdentity = try #require(service.incomingCallIdentityPublisher.value)
+        callController.suspendNextAsyncRequest = true
+        let acceptTask = Task {
+            await service.acceptIncomingCall(roomID: incomingCallIdentity.roomID,
+                                             isVoiceCall: true,
+                                             incomingCallIdentity: incomingCallIdentity)
+        }
+        await waitUntil { self.callController.hasSuspendedAsyncRequest }
+
+        let provider = CXProvider(configuration: CXProviderConfiguration())
+        service.provider(provider, perform: CXAnswerCallAction(call: incomingCallIdentity.callKitID))
+        callController.resumeAsyncRequest()
+        let acceptedIdentity = await acceptTask.value
+
+        #expect(acceptedIdentity == incomingCallIdentity)
+        #expect(!service.hasPendingAnswerCallHandoff)
+        #expect(service.incomingCallIdentityPublisher.value == nil)
+        withExtendedLifetime(provider) { }
+    }
+
+    @Test
+    func outgoingCallUsesOneActiveCallKitUUIDForStartMuteAndEnd() async throws {
+        let generation = ElementCallSessionGeneration()
+        var endRooms = [String]()
+        let cancellable = service.actions.sink { action in
+            if case .endCall(let roomID) = action {
+                endRooms.append(roomID)
+            }
+        }
+        service.registerCallSession(generation: generation)
+
+        await service.setupCallSession(roomID: "!outgoing:example.com",
+                                       roomDisplayName: "Outgoing",
+                                       isVoiceCall: true,
+                                       incomingCallIdentity: nil,
+                                       generation: generation)
+
+        let startAction = try #require(callController.requestedActions.compactMap { $0 as? CXStartCallAction }.first)
+        #expect(!startAction.isVideo)
+        #expect(callProvider.reportOutgoingCallWithStartedConnectingAtReceivedInvocations.map(\.uuid) == [startAction.callUUID])
+        #expect(callProvider.reportOutgoingCallWithConnectedAtReceivedInvocations.map(\.uuid) == [startAction.callUUID])
+
+        service.setAudioEnabled(false, roomID: "!outgoing:example.com")
+        let muteAction = try #require(callController.requestedActions.compactMap { $0 as? CXSetMutedCallAction }.last)
+        #expect(muteAction.callUUID == startAction.callUUID)
+        #expect(muteAction.isMuted)
+
+        service.tearDownCallSession(generation: generation)
+        let endAction = try #require(callController.requestedActions.compactMap { $0 as? CXEndCallAction }.last)
+        #expect(endAction.callUUID == startAction.callUUID)
+        #expect(service.ongoingCallRoomIDPublisher.value == nil)
+
+        let provider = CXProvider(configuration: CXProviderConfiguration())
+        service.provider(provider, perform: endAction)
+        #expect(endRooms.isEmpty)
+        #expect(callKitActionRecorder.fulfilledActionIDs.filter { $0 == endAction.uuid }.count == 1)
+        withExtendedLifetime((cancellable, provider)) { }
+    }
+
+    @Test
+    func failedOutgoingCallKitStartEndsTheWebCall() async {
+        var endRooms = [String]()
+        let cancellable = service.actions.sink { action in
+            if case .endCall(let roomID) = action {
+                endRooms.append(roomID)
+            }
+        }
+        callController.error = ElementCallServiceTestError.callKitReportFailed
+        let generation = ElementCallSessionGeneration()
+        service.registerCallSession(generation: generation)
+
+        await service.setupCallSession(roomID: "!outgoing:example.com",
+                                       roomDisplayName: "Outgoing",
+                                       isVoiceCall: true,
+                                       incomingCallIdentity: nil,
+                                       generation: generation)
+
+        #expect(endRooms == ["!outgoing:example.com"])
+        #expect(service.ongoingCallRoomIDPublisher.value == nil)
+        #expect(callProvider.reportOutgoingCallWithConnectedAtCallsCount == 0)
+        withExtendedLifetime(cancellable) { }
+    }
+
+    @Test
+    func delayedOutgoingCallKitStartCannotReactivateASupersededCall() async throws {
+        callController.suspendNextAsyncRequest = true
+        let firstGeneration = ElementCallSessionGeneration()
+        service.registerCallSession(generation: firstGeneration)
+        let firstSetupTask = Task {
+            await service.setupCallSession(roomID: "!first:example.com",
+                                           roomDisplayName: "First",
+                                           isVoiceCall: true,
+                                           incomingCallIdentity: nil,
+                                           generation: firstGeneration)
+        }
+        await waitUntil { self.callController.hasSuspendedAsyncRequest }
+
+        let replacementGeneration = ElementCallSessionGeneration()
+        service.registerCallSession(generation: replacementGeneration)
+        await service.setupCallSession(roomID: "!replacement:example.com",
+                                       roomDisplayName: "Replacement",
+                                       isVoiceCall: true,
+                                       incomingCallIdentity: nil,
+                                       generation: replacementGeneration)
+        callController.resumeAsyncRequest()
+        await firstSetupTask.value
+
+        let activeCallKitID = try #require(callProvider.reportOutgoingCallWithConnectedAtReceivedInvocations.first?.uuid)
+        let staleStartAction = try #require(callController.requestedActions.compactMap { $0 as? CXStartCallAction }
+            .first { $0.callUUID != activeCallKitID })
+
+        #expect(callProvider.reportOutgoingCallWithConnectedAtReceivedInvocations.map(\.uuid) == [activeCallKitID])
+        #expect(callController.requestedActions.compactMap { $0 as? CXEndCallAction }.contains {
+            $0.callUUID == staleStartAction.callUUID
+        })
+        #expect(service.ongoingCallRoomIDPublisher.value == "!replacement:example.com")
+    }
+
+    @Test
+    func failedInAppAnswerKeepsTheUnansweredCallTimeout() async throws {
+        await receiveIncomingPush(PKPushPayloadMock()
+            .updatingExpiration(currentDate, lifetime: 2))
+        let incomingCallIdentity = try #require(service.incomingCallIdentityPublisher.value)
+        callController.error = ElementCallServiceTestError.callKitReportFailed
+
+        let acceptedIdentity = await service.acceptIncomingCall(roomID: incomingCallIdentity.roomID,
+                                                                isVoiceCall: false,
+                                                                incomingCallIdentity: incomingCallIdentity)
+        #expect(acceptedIdentity == nil)
+
+        await testClock.advance(by: .seconds(2))
+        await waitUntil {
+            self.callProvider.reportCallWithEndedAtReasonReceivedInvocations.contains {
+                $0.uuid == incomingCallIdentity.callKitID && $0.reason == .unanswered
+            }
+        }
     }
 
     @Test
@@ -160,7 +309,7 @@ final class ElementCallServiceTests {
     }
 
     @Test
-    func videoAnswerWaitsForCallKitAudioSessionDeactivationBeforeStartingWebKit() async throws {
+    func videoAnswerStartsWebKitWhileKeepingCallKitActive() async throws {
         let roomID = "!video:example.com"
         await receiveIncomingPush(PKPushPayloadMock()
             .updatingExpiration(currentDate, lifetime: 30)
@@ -179,19 +328,15 @@ final class ElementCallServiceTests {
         service.provider(provider, perform: action)
         await Task.yield()
         await testClock.advance(by: .seconds(1))
-        await waitUntil { self.callProvider.reportCallWithEndedAtReasonCalled }
-
-        #expect(startedRoomID == nil)
-
-        service.provider(provider, didDeactivate: AVAudioSession.sharedInstance())
         await waitUntil { startedRoomID != nil }
 
         #expect(startedRoomID == roomID)
+        #expect(!callProvider.reportCallWithEndedAtReasonCalled)
         withExtendedLifetime((cancellable, provider)) { }
     }
 
     @Test
-    func answerCancelsUnansweredTimerWhileWaitingForCallKitAudioSessionDeactivation() async throws {
+    func answerCancelsUnansweredTimerWhileCallKitRemainsActive() async throws {
         let roomID = "!timer:example.com"
         await receiveIncomingPush(PKPushPayloadMock()
             .updatingExpiration(currentDate, lifetime: 2)
@@ -210,23 +355,17 @@ final class ElementCallServiceTests {
         service.provider(provider, perform: action)
         await Task.yield()
         await testClock.advance(by: .seconds(1))
-        await waitUntil {
-            self.callProvider.reportCallWithEndedAtReasonReceivedInvocations.contains {
-                $0.uuid == incomingCallIdentity.callKitID && $0.reason == .remoteEnded
-            }
-        }
+        await waitUntil { startedRoomID != nil }
 
         await testClock.advance(by: .seconds(1))
 
         #expect(!callProvider.reportCallWithEndedAtReasonReceivedInvocations.contains {
             $0.uuid == incomingCallIdentity.callKitID && $0.reason == .unanswered
         })
-        #expect(startedRoomID == nil)
-
-        service.provider(provider, didDeactivate: AVAudioSession.sharedInstance())
-        await waitUntil { startedRoomID != nil }
-
         #expect(startedRoomID == roomID)
+        #expect(!callProvider.reportCallWithEndedAtReasonReceivedInvocations.contains {
+            $0.uuid == incomingCallIdentity.callKitID && $0.reason == .remoteEnded
+        })
         withExtendedLifetime((cancellable, provider)) { }
     }
 
@@ -251,19 +390,18 @@ final class ElementCallServiceTests {
         service.provider(provider, perform: action)
         await Task.yield()
         await testClock.advance(by: .seconds(1))
-        service.provider(provider, didDeactivate: AVAudioSession.sharedInstance())
         await waitUntil { startedIncomingCallIdentity != nil }
 
         #expect(callKitActionRecorder.fulfilledActionIDs.filter { $0 == action.uuid }.count == 1)
         #expect(startedIncomingCallIdentity == incomingCallIdentity)
         #expect(service.acceptedIncomingCallIdentity == incomingCallIdentity)
         #expect(service.incomingCallIdentityPublisher.value == nil)
-        #expect(callProvider.reportCallWithEndedAtReasonReceivedArguments?.uuid == incomingCallIdentity.callKitID)
+        #expect(!callProvider.reportCallWithEndedAtReasonCalled)
         withExtendedLifetime((cancellable, provider)) { }
     }
 
     @Test
-    func answerStartsWebKitAfterBoundedCallKitAudioSessionDeactivationTimeout() async throws {
+    func answerHandoffRemainsBoundedWithoutEndingCallKit() async throws {
         let roomID = "!timeout:example.com"
         await receiveIncomingPush(PKPushPayloadMock()
             .updatingExpiration(currentDate, lifetime: 30)
@@ -281,10 +419,11 @@ final class ElementCallServiceTests {
 
         service.provider(provider, perform: action)
         await Task.yield()
-        await testClock.advance(by: .seconds(3))
+        await testClock.advance(by: .seconds(1))
         await waitUntil { startedRoomID != nil }
 
         #expect(startedRoomID == roomID)
+        #expect(!callProvider.reportCallWithEndedAtReasonCalled)
         withExtendedLifetime((cancellable, provider)) { }
     }
 
@@ -307,9 +446,6 @@ final class ElementCallServiceTests {
 
         service.provider(provider, perform: action)
         await Task.yield()
-        await testClock.advance(by: .seconds(1))
-        await waitUntil { self.callProvider.reportCallWithEndedAtReasonCalled }
-
         service.providerDidReset(provider)
 
         #expect(service.incomingCallIdentityPublisher.value == nil)
@@ -343,25 +479,19 @@ final class ElementCallServiceTests {
 
         service.provider(provider, perform: firstAction)
         await Task.yield()
-        await testClock.advance(by: .seconds(1))
-        await waitUntil { self.callProvider.reportCallWithEndedAtReasonCalled }
-
         service.provider(provider, perform: duplicateAction)
-        service.provider(provider, didDeactivate: AVAudioSession.sharedInstance())
+        await testClock.advance(by: .seconds(1))
         await waitUntil { startedIncomingCallIdentities.count == 1 }
-        await testClock.advance(by: .seconds(3))
 
         #expect(callKitActionRecorder.fulfilledActionIDs.filter { $0 == firstAction.uuid }.count == 1)
         #expect(callKitActionRecorder.fulfilledActionIDs.filter { $0 == duplicateAction.uuid }.count == 1)
-        #expect(callProvider.reportCallWithEndedAtReasonReceivedInvocations.filter {
-            $0.uuid == incomingCallIdentity.callKitID && $0.reason == .remoteEnded
-        }.count == 1)
+        #expect(!callProvider.reportCallWithEndedAtReasonCalled)
         #expect(startedIncomingCallIdentities == [incomingCallIdentity])
         withExtendedLifetime((cancellable, provider)) { }
     }
 
     @Test
-    func inAppAcceptCannotBypassActiveCallKitAudioSessionDeactivationBarrier() async throws {
+    func inAppAcceptCannotDuplicateAnActiveCallKitAnswerHandoff() async throws {
         let roomID = "!in-app:example.com"
         await receiveIncomingPush(PKPushPayloadMock()
             .updatingExpiration(currentDate, lifetime: 30)
@@ -379,8 +509,6 @@ final class ElementCallServiceTests {
 
         service.provider(provider, perform: action)
         await Task.yield()
-        await testClock.advance(by: .seconds(1))
-        await waitUntil { self.callProvider.reportCallWithEndedAtReasonCalled }
 
         let inAppAcceptedIdentity = await service.acceptIncomingCall(roomID: roomID,
                                                                      isVoiceCall: false,
@@ -389,11 +517,9 @@ final class ElementCallServiceTests {
         #expect(inAppAcceptedIdentity == nil)
         #expect(service.incomingCallIdentityPublisher.value == incomingCallIdentity)
         #expect(service.acceptedIncomingCallIdentity == nil)
-        #expect(callProvider.reportCallWithEndedAtReasonReceivedInvocations.filter {
-            $0.uuid == incomingCallIdentity.callKitID && $0.reason == .remoteEnded
-        }.count == 1)
+        #expect(!callProvider.reportCallWithEndedAtReasonCalled)
 
-        service.provider(provider, didDeactivate: AVAudioSession.sharedInstance())
+        await testClock.advance(by: .seconds(1))
         await waitUntil { startedIncomingCallIdentity != nil }
 
         #expect(startedIncomingCallIdentity == incomingCallIdentity)
@@ -401,7 +527,7 @@ final class ElementCallServiceTests {
     }
 
     @Test
-    func incomingReplacementImmediatelySettlesAnswerHandoffWithoutCallKitDeactivation() async throws {
+    func incomingReplacementImmediatelyCancelsAnswerHandoff() async throws {
         let firstRoomID = "!first:example.com"
         await receiveIncomingPush(PKPushPayloadMock()
             .updatingExpiration(currentDate, lifetime: 30)
@@ -419,8 +545,6 @@ final class ElementCallServiceTests {
 
         service.provider(provider, perform: action)
         await Task.yield()
-        await testClock.advance(by: .seconds(1))
-        await waitUntil { self.callProvider.reportCallWithEndedAtReasonCalled }
         #expect(startedRooms.isEmpty)
         #expect(service.hasPendingAnswerCallHandoff)
 
@@ -1039,6 +1163,44 @@ private final class SuspendedIncomingCallRoomLookup {
     func resume() {
         continuation?.resume()
         continuation = nil
+    }
+}
+
+private final class CXCallControllerRecorder: CXCallControllerProtocol {
+    private(set) var requestedTransactions = [CXTransaction]()
+    private var asyncRequestContinuation: CheckedContinuation<Void, Never>?
+    var suspendNextAsyncRequest = false
+    var error: Error?
+
+    var hasSuspendedAsyncRequest: Bool {
+        asyncRequestContinuation != nil
+    }
+
+    var requestedActions: [CXAction] {
+        requestedTransactions.flatMap(\.actions)
+    }
+
+    func request(_ transaction: CXTransaction) async throws {
+        if suspendNextAsyncRequest {
+            suspendNextAsyncRequest = false
+            await withCheckedContinuation { asyncRequestContinuation = $0 }
+        }
+        if let error {
+            throw error
+        }
+        requestedTransactions.append(transaction)
+    }
+
+    func request(_ transaction: CXTransaction, completion: @escaping @Sendable (Error?) -> Void) {
+        if error == nil {
+            requestedTransactions.append(transaction)
+        }
+        completion(error)
+    }
+
+    func resumeAsyncRequest() {
+        asyncRequestContinuation?.resume()
+        asyncRequestContinuation = nil
     }
 }
 

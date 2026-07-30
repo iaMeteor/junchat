@@ -148,6 +148,31 @@ struct ElementCallWidgetDriverTests {
     }
 
     @Test
+    func hostHandledMessagesRequireTheActiveWidgetID() async {
+        let probe = ElementCallWidgetDriverLifecycleProbe()
+        let driver = makeDriver(probe: probe)
+        var actions = [ElementCallWidgetDriverAction]()
+        let cancellable = driver.actions.sink { actions.append($0) }
+        await expectSuccess(start(driver))
+
+        driver.handleMessageIfNeeded(#"{"api":"fromWidget","action":"im.vector.hangup","widgetId":"sibling-widget","requestId":"request-id"}"#)
+
+        #expect(actions.isEmpty)
+        withExtendedLifetime(cancellable) { }
+    }
+
+    @Test
+    func voiceOnlySessionCarriesAnAudioIntentWithoutChangingTheGroupWidgetIntent() async throws {
+        let probe = ElementCallWidgetDriverLifecycleProbe()
+        let driver = makeDriver(probe: probe)
+
+        let url = try #require(await start(driver, voiceOnly: true).get())
+        let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
+
+        #expect(components.queryItems?.first { $0.name == "junchat_call_intent" }?.value == "audio")
+    }
+
+    @Test
     func stopWaitsForInFlightRustCallbackBeforeFreeingFuture() async throws {
         let probe = ElementCallRustFutureABIProbe()
         let registry = ElementCallRustFutureRegistry()
@@ -222,11 +247,12 @@ struct ElementCallWidgetDriverTests {
         #"{"api":"fromWidget","action":"io.element.device_mute","data":{"audio_enabled":true,"video_enabled":false},"widgetId":"widget-id","requestId":"request-id"}"#
     }
 
-    private func start(_ driver: ElementCallWidgetDriver) async -> Result<URL, ElementCallWidgetDriverError> {
+    private func start(_ driver: ElementCallWidgetDriver,
+                       voiceOnly: Bool = false) async -> Result<URL, ElementCallWidgetDriverError> {
         await driver.start(baseURL: .homeDirectory,
                            clientID: "io.element.test",
                            colorScheme: .dark,
-                           voiceOnly: true,
+                           voiceOnly: voiceOnly,
                            rageshakeURL: nil,
                            analyticsConfiguration: nil)
     }

@@ -45,6 +45,7 @@ protocol ElementCallServiceProtocol {
 
     func setupCallSession(roomID: String,
                           roomDisplayName: String,
+                          isVoiceCall: Bool,
                           incomingCallIdentity: ElementCallIncomingCallIdentity?,
                           generation: ElementCallSessionGeneration) async
 

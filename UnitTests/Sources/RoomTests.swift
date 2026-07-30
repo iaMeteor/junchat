@@ -26,6 +26,7 @@ struct RoomTests {
 
                 #expect(configuration.intent == scenario.expectedIntent(hasActiveCall: hasActiveCall,
                                                                         voiceOnly: voiceOnly))
+                #expect(configuration.voiceOnly == voiceOnly)
                 #expect(configuration.skipLobby == scenario.expectedSkipLobby)
                 #expect(room.roomInfoCallsCount == 1)
                 #expect(room.hasActiveRoomCallCallsCount == 1)
@@ -50,6 +51,7 @@ struct RoomTests {
 
             #expect(configuration.intent == scenario.expectedIntent(hasActiveCall: false,
                                                                     voiceOnly: option.isVoiceCall))
+            #expect(configuration.voiceOnly == option.isVoiceCall)
             #expect(configuration.skipLobby == scenario.expectedSkipLobby)
         }
     }
@@ -65,6 +67,7 @@ struct RoomTests {
                                                                             voiceOnly: voiceOnly)
 
         #expect(configuration.intent == (hasActiveCall ? .joinExisting : .startCall))
+        #expect(configuration.voiceOnly == voiceOnly)
         #expect(configuration.skipLobby == nil)
         #expect(room.roomInfoCallsCount == 1)
         #expect(room.hasActiveRoomCallCallsCount == 1)

@@ -2460,6 +2460,23 @@ class CXProviderMock: CXProviderProtocol, @unchecked Sendable {
         }
         reportNewIncomingCallWithUpdateCompletionClosure?(uuid, update, completion)
     }
+    //MARK: - reportOutgoingCall
+
+    var reportOutgoingCallWithStartedConnectingAtCallsCount = 0
+    var reportOutgoingCallWithStartedConnectingAtReceivedInvocations: [(uuid: UUID, dateStartedConnecting: Date?)] = []
+
+    func reportOutgoingCall(with uuid: UUID, startedConnectingAt dateStartedConnecting: Date?) {
+        reportOutgoingCallWithStartedConnectingAtCallsCount += 1
+        reportOutgoingCallWithStartedConnectingAtReceivedInvocations.append((uuid: uuid, dateStartedConnecting: dateStartedConnecting))
+    }
+
+    var reportOutgoingCallWithConnectedAtCallsCount = 0
+    var reportOutgoingCallWithConnectedAtReceivedInvocations: [(uuid: UUID, dateConnected: Date?)] = []
+
+    func reportOutgoingCall(with uuid: UUID, connectedAt dateConnected: Date?) {
+        reportOutgoingCallWithConnectedAtCallsCount += 1
+        reportOutgoingCallWithConnectedAtReceivedInvocations.append((uuid: uuid, dateConnected: dateConnected))
+    }
     //MARK: - reportCall
 
     var reportCallWithEndedAtReasonUnderlyingCallsCount = 0
@@ -7253,15 +7270,15 @@ class ElementCallServiceMock: ElementCallServiceProtocol, @unchecked Sendable {
     }
     //MARK: - setupCallSession
 
-    var setupCallSessionRoomIDRoomDisplayNameIncomingCallIdentityGenerationUnderlyingCallsCount = 0
-    var setupCallSessionRoomIDRoomDisplayNameIncomingCallIdentityGenerationCallsCount: Int {
+    var setupCallSessionRoomIDRoomDisplayNameIsVoiceCallIncomingCallIdentityGenerationUnderlyingCallsCount = 0
+    var setupCallSessionRoomIDRoomDisplayNameIsVoiceCallIncomingCallIdentityGenerationCallsCount: Int {
         get {
             if Thread.isMainThread {
-                return setupCallSessionRoomIDRoomDisplayNameIncomingCallIdentityGenerationUnderlyingCallsCount
+                return setupCallSessionRoomIDRoomDisplayNameIsVoiceCallIncomingCallIdentityGenerationUnderlyingCallsCount
             } else {
                 var returnValue: Int? = nil
                 DispatchQueue.main.sync {
-                    returnValue = setupCallSessionRoomIDRoomDisplayNameIncomingCallIdentityGenerationUnderlyingCallsCount
+                    returnValue = setupCallSessionRoomIDRoomDisplayNameIsVoiceCallIncomingCallIdentityGenerationUnderlyingCallsCount
                 }
 
                 return returnValue!
@@ -7269,28 +7286,28 @@ class ElementCallServiceMock: ElementCallServiceProtocol, @unchecked Sendable {
         }
         set {
             if Thread.isMainThread {
-                setupCallSessionRoomIDRoomDisplayNameIncomingCallIdentityGenerationUnderlyingCallsCount = newValue
+                setupCallSessionRoomIDRoomDisplayNameIsVoiceCallIncomingCallIdentityGenerationUnderlyingCallsCount = newValue
             } else {
                 DispatchQueue.main.sync {
-                    setupCallSessionRoomIDRoomDisplayNameIncomingCallIdentityGenerationUnderlyingCallsCount = newValue
+                    setupCallSessionRoomIDRoomDisplayNameIsVoiceCallIncomingCallIdentityGenerationUnderlyingCallsCount = newValue
                 }
             }
         }
     }
-    var setupCallSessionRoomIDRoomDisplayNameIncomingCallIdentityGenerationCalled: Bool {
-        return setupCallSessionRoomIDRoomDisplayNameIncomingCallIdentityGenerationCallsCount > 0
+    var setupCallSessionRoomIDRoomDisplayNameIsVoiceCallIncomingCallIdentityGenerationCalled: Bool {
+        return setupCallSessionRoomIDRoomDisplayNameIsVoiceCallIncomingCallIdentityGenerationCallsCount > 0
     }
-    var setupCallSessionRoomIDRoomDisplayNameIncomingCallIdentityGenerationReceivedArguments: (roomID: String, roomDisplayName: String, incomingCallIdentity: ElementCallIncomingCallIdentity?, generation: ElementCallSessionGeneration)?
-    var setupCallSessionRoomIDRoomDisplayNameIncomingCallIdentityGenerationReceivedInvocations: [(roomID: String, roomDisplayName: String, incomingCallIdentity: ElementCallIncomingCallIdentity?, generation: ElementCallSessionGeneration)] = []
-    var setupCallSessionRoomIDRoomDisplayNameIncomingCallIdentityGenerationClosure: ((String, String, ElementCallIncomingCallIdentity?, ElementCallSessionGeneration) async -> Void)?
+    var setupCallSessionRoomIDRoomDisplayNameIsVoiceCallIncomingCallIdentityGenerationReceivedArguments: (roomID: String, roomDisplayName: String, isVoiceCall: Bool, incomingCallIdentity: ElementCallIncomingCallIdentity?, generation: ElementCallSessionGeneration)?
+    var setupCallSessionRoomIDRoomDisplayNameIsVoiceCallIncomingCallIdentityGenerationReceivedInvocations: [(roomID: String, roomDisplayName: String, isVoiceCall: Bool, incomingCallIdentity: ElementCallIncomingCallIdentity?, generation: ElementCallSessionGeneration)] = []
+    var setupCallSessionRoomIDRoomDisplayNameIsVoiceCallIncomingCallIdentityGenerationClosure: ((String, String, Bool, ElementCallIncomingCallIdentity?, ElementCallSessionGeneration) async -> Void)?
 
-    func setupCallSession(roomID: String, roomDisplayName: String, incomingCallIdentity: ElementCallIncomingCallIdentity?, generation: ElementCallSessionGeneration) async {
-        setupCallSessionRoomIDRoomDisplayNameIncomingCallIdentityGenerationCallsCount += 1
-        setupCallSessionRoomIDRoomDisplayNameIncomingCallIdentityGenerationReceivedArguments = (roomID: roomID, roomDisplayName: roomDisplayName, incomingCallIdentity: incomingCallIdentity, generation: generation)
+    func setupCallSession(roomID: String, roomDisplayName: String, isVoiceCall: Bool, incomingCallIdentity: ElementCallIncomingCallIdentity?, generation: ElementCallSessionGeneration) async {
+        setupCallSessionRoomIDRoomDisplayNameIsVoiceCallIncomingCallIdentityGenerationCallsCount += 1
+        setupCallSessionRoomIDRoomDisplayNameIsVoiceCallIncomingCallIdentityGenerationReceivedArguments = (roomID: roomID, roomDisplayName: roomDisplayName, isVoiceCall: isVoiceCall, incomingCallIdentity: incomingCallIdentity, generation: generation)
         DispatchQueue.main.async {
-            self.setupCallSessionRoomIDRoomDisplayNameIncomingCallIdentityGenerationReceivedInvocations.append((roomID: roomID, roomDisplayName: roomDisplayName, incomingCallIdentity: incomingCallIdentity, generation: generation))
+            self.setupCallSessionRoomIDRoomDisplayNameIsVoiceCallIncomingCallIdentityGenerationReceivedInvocations.append((roomID: roomID, roomDisplayName: roomDisplayName, isVoiceCall: isVoiceCall, incomingCallIdentity: incomingCallIdentity, generation: generation))
         }
-        await setupCallSessionRoomIDRoomDisplayNameIncomingCallIdentityGenerationClosure?(roomID, roomDisplayName, incomingCallIdentity, generation)
+        await setupCallSessionRoomIDRoomDisplayNameIsVoiceCallIncomingCallIdentityGenerationClosure?(roomID, roomDisplayName, isVoiceCall, incomingCallIdentity, generation)
     }
     //MARK: - acceptIncomingCall
 
