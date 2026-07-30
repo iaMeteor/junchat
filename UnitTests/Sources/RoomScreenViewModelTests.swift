@@ -295,6 +295,7 @@ final class RoomScreenViewModelTests {
         configuration.name = "NewName"
         configuration.avatarURL = .mockMXCAvatar
         configuration.hasOngoingCall = true
+        configuration.activeRoomCallParticipants = ["@caller:junchat.yyzs120.cn"]
         powerLevelsMock.canUserJoinCallUserIDReturnValue = .success(true)
 
         infoSubject.send(RoomInfoProxyMock(configuration))
@@ -452,7 +453,10 @@ final class RoomScreenViewModelTests {
         let deferredDecline = deferFulfillment(declineStream) { _ in true }
         
         do {
-            let configuration = JoinedRoomProxyMockConfiguration(id: "MyRoomID", name: "Caller", hasOngoingCall: true)
+            let configuration = JoinedRoomProxyMockConfiguration(id: "MyRoomID",
+                                                                 name: "Caller",
+                                                                 hasOngoingCall: true,
+                                                                 activeRoomCallParticipants: ["@caller:junchat.yyzs120.cn"])
 
             let powerLevelsMock = RoomPowerLevelsProxyMock(configuration: .init())
             powerLevelsMock.canOwnUserJoinCallReturnValue = true

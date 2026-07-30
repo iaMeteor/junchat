@@ -24,6 +24,7 @@ struct JoinedRoomProxyMockConfiguration {
     var isSpace = false
     var isEncrypted = true
     var hasOngoingCall = true
+    var activeRoomCallParticipants: [String] = []
     var canonicalAlias: String?
     var alternativeAliases: [String] = []
     var pinnedEventIDs: Set<String> = []
@@ -187,7 +188,7 @@ extension RoomInfoProxyMock {
         notificationCount = 0
         cachedUserDefinedNotificationMode = .allMessages
         hasRoomCall = configuration.hasOngoingCall
-        activeRoomCallParticipants = []
+        activeRoomCallParticipants = configuration.activeRoomCallParticipants
         isMarkedUnread = false
         unreadMessagesCount = 0
         unreadNotificationsCount = 0
