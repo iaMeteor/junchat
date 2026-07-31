@@ -51,8 +51,14 @@ extension ClientBuilder {
                 .roomKeyRecipientStrategy(strategy: .identityBasedStrategy)
                 .decryptionSettings(decryptionSettings: .init(senderDeviceTrustRequirement: .crossSignedOrLegacy))
         } else {
+            // Junchat is an internal deployment where accounts are password gated and devices are
+            // not routinely cross-signed, so most sessions are unsigned. errorOnVerifiedUserProblem
+            // makes the send queue fail outright once a recipient has been verified but still owns
+            // an unsigned device, or has replaced their identity, and the resend that follows lands
+            // under a new transaction ID, leaving the unreconciled echo behind as a duplicate
+            // bubble. Share with every device instead so sending never depends on verification.
             builder = builder
-                .roomKeyRecipientStrategy(strategy: .errorOnVerifiedUserProblem)
+                .roomKeyRecipientStrategy(strategy: .allDevices)
                 .decryptionSettings(decryptionSettings: .init(senderDeviceTrustRequirement: .untrusted))
         }
         

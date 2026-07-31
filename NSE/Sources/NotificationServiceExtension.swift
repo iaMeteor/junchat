@@ -165,6 +165,12 @@ enum NSERequestPolicy {
 // called on the same instance of `NotificationService` as a previous
 // notification.
 
+/// The details of an already delivered notification needed to recognise a duplicate of it.
+struct DeliveredNotificationSummary: Equatable {
+    let identifier: String
+    let eventID: String?
+}
+
 class NotificationServiceExtension: UNNotificationServiceExtension {
     static let receivedWhileOfflineNotificationID = "io.element.elementx.receivedWhileOfflineNotification"
 
@@ -209,7 +215,46 @@ class NotificationServiceExtension: UNNotificationServiceExtension {
         super.init()
     }
 
+    /// The already delivered notifications that describe the same event as `content`.
+    ///
+    /// The homeserver pushes an event once per registered pusher, so a user who still has sessions
+    /// from an earlier login receives one copy of every notification per session. They all arrive on
+    /// the same device under different APNs request identifiers, which stacks them as separate
+    /// banners, so the earlier copies are dropped to leave a single notification per event.
+    static func duplicateNotificationIdentifiers(of content: UNNotificationContent,
+                                                 in delivered: [DeliveredNotificationSummary]) -> [String] {
+        guard let eventID = content.eventID else {
+            return []
+        }
+
+        return delivered
+            .filter { $0.eventID == eventID }
+            .map(\.identifier)
+    }
+
+    private func removeDuplicateDeliveredNotifications(for content: UNNotificationContent) {
+        guard content.eventID != nil else {
+            return
+        }
+
+        let center = UNUserNotificationCenter.current()
+        center.getDeliveredNotifications { notifications in
+            let delivered = notifications.map {
+                DeliveredNotificationSummary(identifier: $0.request.identifier, eventID: $0.request.content.eventID)
+            }
+            let duplicates = Self.duplicateNotificationIdentifiers(of: content, in: delivered)
+
+            guard !duplicates.isEmpty else {
+                return
+            }
+
+            center.removeDeliveredNotifications(withIdentifiers: duplicates)
+        }
+    }
+
     override func didReceive(_ request: UNNotificationRequest, withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void) {
+        removeDuplicateDeliveredNotifications(for: request.content)
+
         let mutableContent = request.content.normalizedMutableContentForBadgeDelivery()
         let normalizedContent = mutableContent ?? request.content.badgeReplacementContentForDelivery
         let bestAttemptContent = normalizedContent.copy() as? UNNotificationContent
