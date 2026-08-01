@@ -218,10 +218,12 @@ class NotificationServiceExtension: UNNotificationServiceExtension {
     /// The already delivered notifications that describe the same event as `content`.
     ///
     /// The homeserver pushes an event once per registered pusher, so a user who still has sessions
-    /// from an earlier login receives one copy of every notification per session. They all arrive on
-    /// the same device under different APNs request identifiers, which stacks them as separate
-    /// banners, so the earlier copies are dropped to leave a single notification per event.
-    static func duplicateNotificationIdentifiers(of content: UNNotificationContent,
+    /// from an earlier login can receive more than one copy. Removing matching delivered requests
+    /// keeps sequential copies from accumulating in Notification Center. This is a best-effort
+    /// client-side cleanup: it cannot suppress a banner or sound that already appeared, concurrent
+    /// delivery can race this lookup, and notification centers belonging to another app bundle are
+    /// outside this extension's sandbox.
+    static func deliveredNotificationIdentifiers(matching content: UNNotificationContent,
                                                  in delivered: [DeliveredNotificationSummary]) -> [String] {
         guard let eventID = content.eventID else {
             return []
@@ -242,13 +244,13 @@ class NotificationServiceExtension: UNNotificationServiceExtension {
             let delivered = notifications.map {
                 DeliveredNotificationSummary(identifier: $0.request.identifier, eventID: $0.request.content.eventID)
             }
-            let duplicates = Self.duplicateNotificationIdentifiers(of: content, in: delivered)
+            let matchingIdentifiers = Self.deliveredNotificationIdentifiers(matching: content, in: delivered)
 
-            guard !duplicates.isEmpty else {
+            guard !matchingIdentifiers.isEmpty else {
                 return
             }
 
-            center.removeDeliveredNotifications(withIdentifiers: duplicates)
+            center.removeDeliveredNotifications(withIdentifiers: matchingIdentifiers)
         }
     }
 

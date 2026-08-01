@@ -7,7 +7,7 @@ import Foundation
 import Testing
 import UserNotifications
 
-struct NotificationDuplicateSuppressionTests {
+struct DeliveredNotificationCollapseTests {
     private func content(eventID: String?) -> UNNotificationContent {
         let content = UNMutableNotificationContent()
         content.eventID = eventID
@@ -15,16 +15,17 @@ struct NotificationDuplicateSuppressionTests {
     }
 
     @Test
-    func copiesOfTheSameEventAreRemoved() {
+    func deliveredCopiesOfTheSameEventAreSelectedForRemoval() {
         // A user with sessions left behind by an earlier login gets one push per pusher. They land
-        // on the same device under different request identifiers, so the earlier ones are dropped.
+        // on the same device under different request identifiers, so delivered copies are removed
+        // before the incoming copy is added to Notification Center.
         let delivered = [DeliveredNotificationSummary(identifier: "apns-1", eventID: "$event1"),
                          DeliveredNotificationSummary(identifier: "apns-2", eventID: "$event1")]
 
-        let duplicates = NotificationServiceExtension.duplicateNotificationIdentifiers(of: content(eventID: "$event1"),
-                                                                                       in: delivered)
+        let matchingIdentifiers = NotificationServiceExtension.deliveredNotificationIdentifiers(matching: content(eventID: "$event1"),
+                                                                                                in: delivered)
 
-        #expect(duplicates == ["apns-1", "apns-2"])
+        #expect(matchingIdentifiers == ["apns-1", "apns-2"])
     }
 
     @Test
@@ -32,10 +33,10 @@ struct NotificationDuplicateSuppressionTests {
         let delivered = [DeliveredNotificationSummary(identifier: "apns-1", eventID: "$event1"),
                          DeliveredNotificationSummary(identifier: "apns-2", eventID: "$event2")]
 
-        let duplicates = NotificationServiceExtension.duplicateNotificationIdentifiers(of: content(eventID: "$event2"),
-                                                                                       in: delivered)
+        let matchingIdentifiers = NotificationServiceExtension.deliveredNotificationIdentifiers(matching: content(eventID: "$event2"),
+                                                                                                in: delivered)
 
-        #expect(duplicates == ["apns-2"])
+        #expect(matchingIdentifiers == ["apns-2"])
     }
 
     @Test
@@ -44,19 +45,19 @@ struct NotificationDuplicateSuppressionTests {
         let delivered = [DeliveredNotificationSummary(identifier: "apns-1", eventID: nil),
                          DeliveredNotificationSummary(identifier: "apns-2", eventID: "$event1")]
 
-        let duplicates = NotificationServiceExtension.duplicateNotificationIdentifiers(of: content(eventID: nil),
-                                                                                       in: delivered)
+        let matchingIdentifiers = NotificationServiceExtension.deliveredNotificationIdentifiers(matching: content(eventID: nil),
+                                                                                                in: delivered)
 
-        #expect(duplicates.isEmpty)
+        #expect(matchingIdentifiers.isEmpty)
     }
 
     @Test
     func deliveredNotificationsWithoutAnEventAreLeftAlone() {
         let delivered = [DeliveredNotificationSummary(identifier: "apns-1", eventID: nil)]
 
-        let duplicates = NotificationServiceExtension.duplicateNotificationIdentifiers(of: content(eventID: "$event1"),
-                                                                                       in: delivered)
+        let matchingIdentifiers = NotificationServiceExtension.deliveredNotificationIdentifiers(matching: content(eventID: "$event1"),
+                                                                                                in: delivered)
 
-        #expect(duplicates.isEmpty)
+        #expect(matchingIdentifiers.isEmpty)
     }
 }

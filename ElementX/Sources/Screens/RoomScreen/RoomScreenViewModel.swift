@@ -147,8 +147,8 @@ class RoomScreenViewModel: RoomScreenViewModelType, RoomScreenViewModelProtocol 
         // visible (during a call, in the background, or scrolled away) never reach the visible
         // item receipt in TimelineViewModel, which is what leaves rooms permanently unread.
         Task {
-            await roomProxy.markAsRead(receiptType: appSettings.sharePresence ? .read : .readPrivate)
-            await roomProxy.markAsRead(receiptType: .fullyRead)
+            _ = await roomProxy.markAsRead(receiptType: appSettings.sharePresence ? .read : .readPrivate)
+            _ = await roomProxy.markAsRead(receiptType: .fullyRead)
         }
         cancelMediaPreviewForwardingHandoff()
         // Work around QLPreviewController dismissal issues, see the InteractiveQuickLookModifier.
