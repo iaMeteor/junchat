@@ -62,8 +62,8 @@ create_valid_archive() {
 <key>CFBundleVersion</key><string>$FIXTURE_BUILD</string>
 </dict>
 <key>ArchiveVersion</key><integer>2</integer>
-<key>Name</key><string>Junchat</string>
-<key>SchemeName</key><string>Junchat</string>
+<key>Name</key><string>ElementX</string>
+<key>SchemeName</key><string>ElementX</string>
 </dict></plist>
 EOF
     cat > "$app_path/Info.plist" <<EOF
