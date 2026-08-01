@@ -49,6 +49,18 @@ extension UNNotificationContent {
         return unreadCount as NSNumber?
     }
 
+    var badgeContribution: Bool? {
+        guard userInfo[NotificationConstants.UserInfoKey.badgeContract] as? String == NotificationConstants.BadgeContract.identifier,
+              Self.validBadgeNumber(userInfo[NotificationConstants.UserInfoKey.badgeTotal],
+                                    maximum: NotificationConstants.BadgeContract.maximumSafeInteger) != nil,
+              let number = userInfo[NotificationConstants.UserInfoKey.badgeContribution] as? NSNumber,
+              CFGetTypeID(number) == CFBooleanGetTypeID() else {
+            return nil
+        }
+
+        return number.boolValue
+    }
+
     func normalizedMutableContentForBadgeDelivery() -> UNMutableNotificationContent? {
         guard let content = mutableCopy() as? UNMutableNotificationContent else {
             return nil
@@ -98,6 +110,20 @@ extension UNNotificationContent {
 }
 
 extension UNMutableNotificationContent {
+    func overrideBadgeForDelivery(_ badge: NSNumber?) {
+        self.badge = badge
+
+        if userInfo[NotificationConstants.UserInfoKey.unreadCount] != nil {
+            userInfo[NotificationConstants.UserInfoKey.unreadCount] = badge
+        }
+
+        guard userInfo[NotificationConstants.UserInfoKey.badgeContract] as? String == NotificationConstants.BadgeContract.identifier else {
+            return
+        }
+
+        userInfo[NotificationConstants.UserInfoKey.badgeTotal] = badge
+    }
+
     override var receiverID: String? {
         get {
             userInfo[NotificationConstants.UserInfoKey.receiverIdentifier] as? String

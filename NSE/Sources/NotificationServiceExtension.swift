@@ -11,22 +11,28 @@ import MatrixRustSDK
 import UserNotifications
 
 final class NotificationContentCompletion: @unchecked Sendable {
+    typealias ContentFinalizer = (UNNotificationContent, @escaping (UNNotificationContent) -> Void) -> Void
+
     private let lock = NSLock()
     private var bestAttemptContent: UNNotificationContent?
     private var contentHandler: ((UNNotificationContent) -> Void)?
     private var completionHook: (() -> Void)?
+    private var contentFinalizer: ContentFinalizer?
 
     init(bestAttemptContent: UNNotificationContent,
-         contentHandler: @escaping (UNNotificationContent) -> Void,
-         completionHook: (() -> Void)? = nil) {
+         contentFinalizer: @escaping ContentFinalizer = { content, contentHandler in contentHandler(content) },
+         completionHook: (() -> Void)? = nil,
+         contentHandler: @escaping (UNNotificationContent) -> Void) {
         self.bestAttemptContent = bestAttemptContent
         self.contentHandler = contentHandler
+        self.contentFinalizer = contentFinalizer
         self.completionHook = completionHook
     }
 
     func complete(with content: UNNotificationContent? = nil) {
         lock.lock()
         guard let contentHandler,
+              let contentFinalizer,
               let content = content ?? bestAttemptContent else {
             lock.unlock()
             return
@@ -35,11 +41,28 @@ final class NotificationContentCompletion: @unchecked Sendable {
         let completionHook = completionHook
         bestAttemptContent = nil
         self.contentHandler = nil
+        self.contentFinalizer = nil
         self.completionHook = nil
         lock.unlock()
 
         completionHook?()
-        contentHandler(content)
+        contentFinalizer(content, contentHandler)
+    }
+}
+
+enum NSEBadgeContentFinalizer {
+    static func finalize(_ content: UNNotificationContent,
+                         userID: String?,
+                         ledger: NotificationBadgeRoomLedger,
+                         delivery: (UNNotificationContent) -> Void) {
+        ledger.withCurrentBadge(userID: userID, fallback: content.badgeForDelivery) { badge in
+            guard let content = content.mutableCopy() as? UNMutableNotificationContent else {
+                delivery(content)
+                return
+            }
+            content.overrideBadgeForDelivery(badge)
+            delivery(content)
+        }
     }
 }
 
@@ -54,12 +77,15 @@ final class NotificationContentCompletionRegistry: @unchecked Sendable {
 
     @discardableResult
     func register(bestAttemptContent: UNNotificationContent,
+                  contentFinalizer: @escaping NotificationContentCompletion.ContentFinalizer = { content, contentHandler in contentHandler(content) },
                   contentHandler: @escaping (UNNotificationContent) -> Void) -> NotificationContentCompletion {
         let identifier = UUID()
         let completion = NotificationContentCompletion(bestAttemptContent: bestAttemptContent,
-                                                       contentHandler: contentHandler) { [weak self] in
-            self?.remove(identifier)
-        }
+                                                       contentFinalizer: contentFinalizer,
+                                                       completionHook: { [weak self] in
+                                                           self?.remove(identifier)
+                                                       },
+                                                       contentHandler: contentHandler)
         let shouldComplete = lock.withLock {
             guard !hasExpired else {
                 return true
@@ -258,10 +284,23 @@ class NotificationServiceExtension: UNNotificationServiceExtension {
         removeDuplicateDeliveredNotifications(for: request.content)
 
         let mutableContent = request.content.normalizedMutableContentForBadgeDelivery()
+        if let mutableContent {
+            let reconciledBadge = settings.notificationBadgeRoomLedger.applyNotification(userID: request.content.receiverID,
+                                                                                         roomID: request.content.roomID,
+                                                                                         contributesToBadge: request.content.badgeContribution,
+                                                                                         fallback: mutableContent.badgeForDelivery)
+            mutableContent.overrideBadgeForDelivery(reconciledBadge)
+        }
         let normalizedContent = mutableContent ?? request.content.badgeReplacementContentForDelivery
         let bestAttemptContent = normalizedContent.copy() as? UNNotificationContent
             ?? request.content.badgeReplacementContentForDelivery
         let completion = Self.notificationContentCompletions.register(bestAttemptContent: bestAttemptContent,
+                                                                      contentFinalizer: { [settings, receiverID = request.content.receiverID] content, contentHandler in
+                                                                          NSEBadgeContentFinalizer.finalize(content,
+                                                                                                            userID: receiverID,
+                                                                                                            ledger: settings.notificationBadgeRoomLedger,
+                                                                                                            delivery: contentHandler)
+                                                                      },
                                                                       contentHandler: contentHandler)
 
         guard let mutableContent else {
@@ -291,14 +330,14 @@ class NotificationServiceExtension: UNNotificationServiceExtension {
             // Don't log until the app hooks have been run:
             // swiftlint:disable:next print_deprecation
             print(isTargetConfigured ? "Device is unlocked but may have missed notifications while offline." : "Device is locked after reboot.")
-            let offlineCompletionContent = NSERequestPolicy.offlineCompletionContent(for: request.content)
-            deliverReceivedWhileOfflineNotification(for: request)
+            let offlineCompletionContent = NSERequestPolicy.offlineCompletionContent(for: notificationContent)
+            deliverReceivedWhileOfflineNotification(for: notificationContent)
             return completion.complete(with: offlineCompletionContent)
         case .deliverOfflineReplacement:
             // MXLog isn't configured:
             // swiftlint:disable:next print_deprecation
             print("Device is locked after reboot.")
-            let offlineCompletionContent = NSERequestPolicy.offlineCompletionContent(for: request.content)
+            let offlineCompletionContent = NSERequestPolicy.offlineCompletionContent(for: notificationContent)
             return completion.complete(with: offlineCompletionContent)
         case .missingRoomID:
             // Don't log until the app hooks have been run:
@@ -350,6 +389,7 @@ class NotificationServiceExtension: UNNotificationServiceExtension {
                                                           settings: settings,
                                                           contentHandler: completion.complete(with:),
                                                           notificationContent: notificationContent,
+                                                          receiverID: request.content.receiverID,
                                                           tag: tag)
 
             ExtensionLogger.logMemory(with: tag)
@@ -415,17 +455,21 @@ class NotificationServiceExtension: UNNotificationServiceExtension {
     ///
     /// Note: it is safe to call this method multiple times as it simply replaces any existing instance of the notification
     /// with a fresh copy, meaning it won't queue multiple copies but will still re-play the notification sound.
-    private func deliverReceivedWhileOfflineNotification(for originalRequest: UNNotificationRequest) {
+    private func deliverReceivedWhileOfflineNotification(for contentForDelivery: UNNotificationContent) {
         // This is intended to be called before the app hooks have been run, so don't log:
         // swiftlint:disable:next print_deprecation
         print("Delivering the 'received while offline' notification.")
 
-        let content = originalRequest.content.badgeReplacementContentForDelivery
-        content.body = L10n.notificationReceivedWhileOfflineIos
-        content.sound = .init(named: settings.notificationSoundName.publisher.value)
+        NSEBadgeContentFinalizer.finalize(contentForDelivery,
+                                          userID: contentForDelivery.receiverID,
+                                          ledger: settings.notificationBadgeRoomLedger) { [settings] finalizedContent in
+            let content = finalizedContent.badgeReplacementContentForDelivery
+            content.body = L10n.notificationReceivedWhileOfflineIos
+            content.sound = .init(named: settings.notificationSoundName.publisher.value)
 
-        let request = UNNotificationRequest(identifier: Self.receivedWhileOfflineNotificationID, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request)
+            let request = UNNotificationRequest(identifier: Self.receivedWhileOfflineNotificationID, content: content, trigger: nil)
+            UNUserNotificationCenter.current().add(request)
+        }
     }
 
     // MARK: - Logging

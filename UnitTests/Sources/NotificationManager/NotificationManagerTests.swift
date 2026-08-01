@@ -118,29 +118,91 @@ final class NotificationManagerTests {
         await notificationManager.removeDeliveredNotificationsForFullyReadRooms([
             roomSummary(id: "1", hasUnreadMessages: false),
             roomSummary(id: "2", hasUnreadMessages: false)
-        ])
+        ], userID: clientProxy.userID)
         
         #expect(notificationCenter.setBadgeCountReceivedCount == 0)
     }
 
     @Test
-    func whenRemovingNotificationsForFullyReadRoomsAndSomeRoomsAreUnread_badgeIsNotCleared() async {
+    func whenRemovingNotificationsForFullyReadRoomsAndSomeRoomsAreUnread_badgeMatchesUnreadRooms() async {
         await notificationManager.removeDeliveredNotificationsForFullyReadRooms([
             roomSummary(id: "1", hasUnreadMessages: false),
             roomSummary(id: "2", hasUnreadMessages: true)
-        ])
+        ], userID: clientProxy.userID)
         
-        #expect(!notificationCenter.setBadgeCountCalled)
+        #expect(notificationCenter.setBadgeCountReceivedCount == 1)
     }
 
     @Test
-    func whenRemovingNotificationsForFullyReadRoomsAndAnInviteIsPending_badgeIsNotCleared() async {
+    func whenRemovingNotificationsForFullyReadRoomsAndAnInviteIsPending_badgeIncludesTheInvite() async {
         await notificationManager.removeDeliveredNotificationsForFullyReadRooms([
             roomSummary(id: "1", hasUnreadMessages: false),
             roomSummary(id: "2", hasUnreadMessages: false, joinRequestType: .invite(inviter: nil))
-        ])
+        ], userID: clientProxy.userID)
 
-        #expect(!notificationCenter.setBadgeCountCalled)
+        #expect(notificationCenter.setBadgeCountReceivedCount == 1)
+    }
+
+    @Test
+    func whenUnreadRoomDoesNotNotify_badgeDoesNotIncludeIt() async {
+        await notificationManager.removeDeliveredNotificationsForFullyReadRooms([
+            roomSummary(id: "1", hasUnreadMessages: true, hasUnreadNotifications: false, isMarkedUnread: true),
+            roomSummary(id: "2", hasUnreadMessages: false)
+        ], userID: clientProxy.userID)
+
+        #expect(notificationCenter.setBadgeCountReceivedCount == 0)
+    }
+
+    @Test
+    func whenOpeningAReconciledUnreadRoom_badgeRemovesTheRoom() async {
+        await notificationManager.removeDeliveredNotificationsForFullyReadRooms([
+            roomSummary(id: "1", hasUnreadMessages: true),
+            roomSummary(id: "2", hasUnreadMessages: true)
+        ], userID: clientProxy.userID)
+        await notificationManager.removeDeliveredMessageNotifications(for: "1")
+
+        #expect(notificationCenter.setBadgeCountReceivedCount == 1)
+    }
+
+    @Test
+    func staleRoomSnapshotFromAnotherAccountIsIgnored() async {
+        await notificationManager.removeDeliveredNotificationsForFullyReadRooms([
+            roomSummary(id: "1", hasUnreadMessages: true)
+        ], userID: "@stale:user.net")
+
+        #expect(notificationCenter.setBadgeCountCallsCount == 0)
+    }
+
+    @Test
+    func accountSwitchCorrectsAnInFlightOldAccountBadgeWrite() async throws {
+        let (writeStarted, writeStartedContinuation) = AsyncStream.makeStream(of: Void.self)
+        var releaseWrite: CheckedContinuation<Void, Never>?
+        var shouldSuspend = true
+        notificationCenter.setBadgeCountClosure = { count in
+            guard count == 1, shouldSuspend else { return }
+            shouldSuspend = false
+            writeStartedContinuation.yield()
+            await withCheckedContinuation { releaseWrite = $0 }
+        }
+
+        let oldAccountWrite = Task {
+            await notificationManager.removeDeliveredNotificationsForFullyReadRooms([
+                roomSummary(id: "1", hasUnreadMessages: true)
+            ], userID: clientProxy.userID)
+        }
+        for await _ in writeStarted {
+            break
+        }
+
+        let newClientProxy = ClientProxyMock(.init(userID: "@other:user.net"))
+        let newUserSession = UserSessionMock(.init(clientProxy: newClientProxy))
+        notificationManager.setUserSession(newUserSession)
+        releaseWrite?.resume()
+        await oldAccountWrite.value
+        await Task.yield()
+
+        let lastBadge = try #require(notificationCenter.setBadgeCountReceivedInvocations.last)
+        #expect(lastBadge == 0)
     }
 
     @Test
@@ -299,6 +361,8 @@ extension NotificationManagerTests: @MainActor NotificationManagerDelegate {
 
 private func roomSummary(id: String,
                          hasUnreadMessages: Bool,
+                         hasUnreadNotifications: Bool? = nil,
+                         isMarkedUnread: Bool? = nil,
                          joinRequestType: RoomSummary.JoinRequestType? = nil) -> RoomSummary {
     RoomSummary(room: .init(noHandle: .init()),
                 id: id,
@@ -314,13 +378,13 @@ private func roomSummary(id: String,
                 lastMessageState: nil,
                 unreadMessagesCount: hasUnreadMessages ? 1 : 0,
                 unreadMentionsCount: 0,
-                unreadNotificationsCount: hasUnreadMessages ? 1 : 0,
+                unreadNotificationsCount: (hasUnreadNotifications ?? hasUnreadMessages) ? 1 : 0,
                 notificationMode: .allMessages,
                 canonicalAlias: nil,
                 alternativeAliases: [],
                 hasOngoingCall: false,
                 activeCallIntent: nil,
-                isMarkedUnread: hasUnreadMessages,
+                isMarkedUnread: isMarkedUnread ?? hasUnreadMessages,
                 isFavourite: false,
                 isTombstoned: false)
 }

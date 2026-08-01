@@ -181,6 +181,59 @@ struct NotificationBadgePolicyTests {
     }
 
     @Test
+    func localBadgeOverrideUpdatesTheContractTotal() {
+        let content = makeContent(contract: expectedBadgeContract, total: 3, badge: 3)
+
+        content.overrideBadgeForDelivery(1)
+
+        #expect(content.badgeForDelivery == 1)
+        #expect(content.userInfo["badge_total"] as? NSNumber == 1)
+    }
+
+    @Test
+    func localBadgeOverrideUpdatesAndClearsLegacyUnreadCount() {
+        let content = makeContent(unreadCount: 3, badge: 3)
+
+        content.overrideBadgeForDelivery(1)
+
+        #expect(content.badgeForDelivery == 1)
+        #expect(content.userInfo["unread_count"] as? NSNumber == 1)
+
+        content.overrideBadgeForDelivery(nil)
+
+        #expect(content.badgeForDelivery == nil)
+        #expect(content.userInfo["unread_count"] == nil)
+    }
+
+    @Test
+    func badgeContributionRequiresTheKnownContractAndABoolean() {
+        let contributing = makeContent(userInfo: ["badge_contract": expectedBadgeContract,
+                                                  "badge_total": 1,
+                                                  "junchat_badge_contribution": true])
+        let nonContributing = makeContent(userInfo: ["badge_contract": expectedBadgeContract,
+                                                     "badge_total": 1,
+                                                     "junchat_badge_contribution": false])
+        let unknownContract = makeContent(userInfo: ["badge_contract": "junchat.notification-badge/v2",
+                                                     "badge_total": 1,
+                                                     "junchat_badge_contribution": true])
+        let missingTotal = makeContent(userInfo: ["badge_contract": expectedBadgeContract,
+                                                  "junchat_badge_contribution": true])
+        let malformedTotal = makeContent(userInfo: ["badge_contract": expectedBadgeContract,
+                                                    "badge_total": "1",
+                                                    "junchat_badge_contribution": true])
+        let numericLookalike = makeContent(userInfo: ["badge_contract": expectedBadgeContract,
+                                                      "badge_total": 1,
+                                                      "junchat_badge_contribution": 1])
+
+        #expect(contributing.badgeContribution == true)
+        #expect(nonContributing.badgeContribution == false)
+        #expect(unknownContract.badgeContribution == nil)
+        #expect(missingTotal.badgeContribution == nil)
+        #expect(malformedTotal.badgeContribution == nil)
+        #expect(numericLookalike.badgeContribution == nil)
+    }
+
+    @Test
     func countOnlyContentIsNormalizedForEarlyFallback() throws {
         let content = makeContent(contract: expectedBadgeContract, total: 6)
         let normalizedContent = try #require(content.normalizedMutableContentForBadgeDelivery())
@@ -202,6 +255,51 @@ struct NotificationBadgePolicyTests {
         completion.complete()
 
         #expect(deliveredContent?.badge == 7)
+    }
+
+    @Test
+    func completionFinalizerRefreshesReverseOrderedSnapshots() throws {
+        let firstContent = try #require(makeContent(contract: expectedBadgeContract, total: 1)
+            .normalizedMutableContentForBadgeDelivery())
+        let secondContent = try #require(makeContent(contract: expectedBadgeContract, total: 2)
+            .normalizedMutableContentForBadgeDelivery())
+        let latestBadge = NSNumber(value: 2)
+        var deliveredBadges = [NSNumber?]()
+        let finalizer: NotificationContentCompletion.ContentFinalizer = { content, contentHandler in
+            let content = content.mutableCopy() as? UNMutableNotificationContent
+            content?.overrideBadgeForDelivery(latestBadge)
+            contentHandler(content ?? UNMutableNotificationContent())
+        }
+        let firstCompletion = NotificationContentCompletion(bestAttemptContent: firstContent,
+                                                            contentFinalizer: finalizer) { content in
+            deliveredBadges.append(content.badge)
+        }
+        let secondCompletion = NotificationContentCompletion(bestAttemptContent: secondContent,
+                                                             contentFinalizer: finalizer) { content in
+            deliveredBadges.append(content.badge)
+        }
+
+        secondCompletion.complete()
+        firstCompletion.complete()
+
+        #expect(deliveredBadges == [NSNumber(value: 2), NSNumber(value: 2)])
+    }
+
+    @Test
+    func offlineDeliveryFinalizerUsesTheLatestLedgerBadge() throws {
+        let fixture = try NotificationBadgeFinalizerFixture()
+        fixture.ledger.prepare(for: "@alice:example.org")
+        _ = fixture.ledger.reconcile(userID: "@alice:example.org", unreadRoomIDs: ["!real:example.org"])
+        let content = sensitiveContentWithBadge(total: 3)
+        var offlineContent: UNNotificationContent?
+
+        NSEBadgeContentFinalizer.finalize(content,
+                                          userID: "@alice:example.org",
+                                          ledger: fixture.ledger) { content in
+            offlineContent = NSERequestPolicy.offlineCompletionContent(for: content)
+        }
+
+        #expect(offlineContent?.badge == 1)
     }
 
     @Test
@@ -348,11 +446,11 @@ struct NotificationBadgePolicyTests {
             weakCallbackToken = callbackToken
             weakCompletionToken = completionToken
             completion = NotificationContentCompletion(bestAttemptContent: content,
-                                                       contentHandler: { [callbackToken] _ in
-                                                           _ = callbackToken
-                                                       },
                                                        completionHook: { [completionToken] in
                                                            _ = completionToken
+                                                       },
+                                                       contentHandler: { [callbackToken] _ in
+                                                           _ = callbackToken
                                                        })
         }
 
@@ -434,6 +532,16 @@ struct NotificationBadgePolicyTests {
 
         #expect(action == .deliverOfflineNotification)
         expectBadgeOnlyCompletion(completionContent, total: 12)
+    }
+
+    @Test
+    func offlineFallbackUsesTheLocallyCorrectedBadge() {
+        let content = sensitiveContentWithBadge(total: 12)
+        content.overrideBadgeForDelivery(1)
+
+        let completionContent = NSERequestPolicy.offlineCompletionContent(for: content)
+
+        expectBadgeOnlyCompletion(completionContent, total: 1)
     }
 
     @Test
@@ -544,6 +652,30 @@ struct NotificationBadgePolicyTests {
 }
 
 private final class NotificationBadgePolicyFixtureToken { }
+
+private final class NotificationBadgeFinalizerFixture {
+    let ledger: NotificationBadgeRoomLedger
+
+    private let suiteName: String
+    private let userDefaults: UserDefaults
+    private let directoryURL: URL
+
+    init() throws {
+        let identifier = UUID().uuidString
+        suiteName = "NotificationBadgeFinalizerFixture.\(identifier)"
+        userDefaults = try #require(UserDefaults(suiteName: suiteName))
+        directoryURL = FileManager.default.temporaryDirectory
+            .appending(component: "NotificationBadgeFinalizerFixture")
+            .appending(component: identifier)
+        ledger = NotificationBadgeRoomLedger(userDefaults: userDefaults,
+                                             lockFileURL: directoryURL.appending(component: "ledger.lock"))
+    }
+
+    deinit {
+        userDefaults.removePersistentDomain(forName: suiteName)
+        try? FileManager.default.removeItem(at: directoryURL)
+    }
+}
 
 private final class LockedBadgeRecorder: @unchecked Sendable {
     private let lock = NSLock()

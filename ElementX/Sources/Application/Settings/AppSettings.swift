@@ -18,6 +18,7 @@ protocol CommonSettingsProtocol: AnyObject {
     var lastNotificationBootTime: TimeInterval? { get set }
     var notificationSoundName: RemotePreference<UNNotificationSoundName> { get }
     var callRingtoneSoundName: String { get }
+    var notificationBadgeRoomLedger: NotificationBadgeRoomLedger { get }
 
     var logLevel: LogLevel { get }
     var traceLogPacks: Set<TraceLogPack> { get }
@@ -327,6 +328,10 @@ final class AppSettings {
     static var sharedUserDefaults: UserDefaults {
         store
     }
+
+    private(set) lazy var notificationBadgeRoomLedger = NotificationBadgeRoomLedger(userDefaults: Self.store,
+                                                                                    lockFileURL: URL.appGroupContainerDirectory
+                                                                                        .appending(component: ".junchat-notification-badge.lock"))
 
     init(serverEnvironment: JunchatServerEnvironment = .current) {
         self.serverEnvironment = serverEnvironment

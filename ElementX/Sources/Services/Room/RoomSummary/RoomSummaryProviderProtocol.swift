@@ -12,7 +12,7 @@ import MatrixRustSDK
 
 enum RoomSummaryProviderState {
     case notLoaded
-    case loaded(totalNumberOfRooms: UInt)
+    case loaded(totalNumberOfRooms: UInt?)
     
     var isLoaded: Bool {
         switch self {

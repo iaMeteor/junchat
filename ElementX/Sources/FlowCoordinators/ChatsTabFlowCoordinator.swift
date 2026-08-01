@@ -47,6 +47,7 @@ class ChatsTabFlowCoordinator: FlowCoordinatorProtocol {
     private var globalSearchScreenCoordinator: GlobalSearchScreenCoordinator?
     
     private var cancellables = Set<AnyCancellable>()
+    private var badgeReconciliationTask: Task<Void, Never>?
     
     private let sidebarNavigationStackCoordinator: NavigationStackCoordinator
 
@@ -341,13 +342,29 @@ class ChatsTabFlowCoordinator: FlowCoordinatorProtocol {
                 switch action {
                 case .receivedDecryptionError(let info):
                     processDecryptionError(info)
-                case .receivedSyncUpdate:
-                    Task {
-                        let roomSummaries = self.userSession.clientProxy.staticRoomSummaryProvider.roomListPublisher.value
-                        await self.flowParameters.notificationManager.removeDeliveredNotificationsForFullyReadRooms(roomSummaries)
-                    }
                 default:
                     break
+                }
+            }
+            .store(in: &cancellables)
+
+        let roomSummaryProvider = userSession.clientProxy.staticRoomSummaryProvider
+        let userID = userSession.clientProxy.userID
+        roomSummaryProvider.statePublisher
+            .combineLatest(roomSummaryProvider.roomListPublisher)
+            .filter { state, rooms in
+                guard let totalNumberOfRooms = state.totalNumberOfRooms else { return false }
+                return UInt(rooms.count) == totalNumberOfRooms
+            }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _, rooms in
+                guard let self else { return }
+                let previousTask = badgeReconciliationTask
+                previousTask?.cancel()
+                badgeReconciliationTask = Task {
+                    await previousTask?.value
+                    guard !Task.isCancelled else { return }
+                    await self.flowParameters.notificationManager.removeDeliveredNotificationsForFullyReadRooms(rooms, userID: userID)
                 }
             }
             .store(in: &cancellables)

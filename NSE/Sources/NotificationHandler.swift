@@ -15,6 +15,7 @@ class NotificationHandler {
     private let settings: CommonSettingsProtocol
     private let contentHandler: (UNNotificationContent) -> Void
     private var notificationContent: UNMutableNotificationContent
+    private let receiverID: String?
     private let tag: String
     
     private let notificationContentBuilder: NotificationContentBuilder
@@ -34,11 +35,13 @@ class NotificationHandler {
          settings: CommonSettingsProtocol,
          contentHandler: @escaping (UNNotificationContent) -> Void,
          notificationContent: UNMutableNotificationContent,
+         receiverID: String?,
          tag: String) {
         self.userSession = userSession
         self.settings = settings
         self.contentHandler = contentHandler
         self.notificationContent = notificationContent
+        self.receiverID = receiverID
         self.tag = tag
         
         let eventStringBuilder = RoomMessageEventStringBuilder(attributedStringBuilder: AttributedStringBuilder(mentionBuilder: PlainMentionBuilder()),
@@ -58,11 +61,23 @@ class NotificationHandler {
         
         guard let notificationItemProxy = await userSession.notificationItemProxy(roomID: roomID, eventID: eventID) else {
             MXLog.error("\(tag) Failed retrieving notification item")
+            reconcileBadge(userID: receiverID,
+                           roomID: roomID,
+                           contributesToBadge: nil)
             discardNotification()
             return
         }
         
-        switch await preprocessNotification(notificationItemProxy) {
+        let processingResult = await preprocessNotification(notificationItemProxy)
+        let contributesToBadge: Bool? = switch processingResult {
+        case .shouldDisplay(let contributesToBadge): contributesToBadge
+        case .processedShouldDiscard, .unsupportedShouldDiscard: nil
+        }
+        reconcileBadge(userID: notificationItemProxy.receiverID,
+                       roomID: roomID,
+                       contributesToBadge: contributesToBadge)
+
+        switch processingResult {
         case .processedShouldDiscard, .unsupportedShouldDiscard:
             discardNotification()
         case .shouldDisplay:
@@ -102,23 +117,39 @@ class NotificationHandler {
         
         contentHandler(content)
     }
+
+    private func reconcileBadge(userID: String?,
+                                roomID: String,
+                                contributesToBadge: Bool?) {
+        let correctedBadge = settings.notificationBadgeRoomLedger.applyNotification(userID: userID,
+                                                                                    roomID: roomID,
+                                                                                    contributesToBadge: contributesToBadge,
+                                                                                    fallback: notificationContent.badgeForDelivery)
+        notificationContent.overrideBadgeForDelivery(correctedBadge)
+        MXLog.info("\(tag) Reconciled badge value: \(correctedBadge?.stringValue ?? "nil")")
+    }
     
     private func preprocessNotification(_ itemProxy: NotificationItemProxyProtocol) async -> NotificationProcessingResult {
-        guard case let .timeline(event) = itemProxy.event else {
-            return .shouldDisplay
+        guard let notificationEvent = itemProxy.event else {
+            return .shouldDisplay(contributesToBadge: nil)
+        }
+
+        guard case let .timeline(event) = notificationEvent else {
+            return .shouldDisplay(contributesToBadge: true)
         }
         
         switch try? event.content() {
         case .messageLike(let messageContent):
             switch messageContent {
             case .poll,
-                 .roomEncrypted,
                  .sticker:
-                return .shouldDisplay
+                return .shouldDisplay(contributesToBadge: true)
+            case .roomEncrypted:
+                return .shouldDisplay(contributesToBadge: nil)
             case .roomMessage(let messageType, _):
                 switch messageType {
                 case .emote, .image, .audio, .video, .file, .notice, .text, .location, .gallery:
-                    return .shouldDisplay
+                    return .shouldDisplay(contributesToBadge: true)
                 case .other:
                     return .unsupportedShouldDiscard
                 }
@@ -186,7 +217,7 @@ class NotificationHandler {
         // N.B. this flow works properly only when background processing capabilities are enabled
         guard notificationType == .ring else {
             MXLog.info("Non-ringing call notification, handling as push notification")
-            return .shouldDisplay
+            return .shouldDisplay(contributesToBadge: false)
         }
         
         // Check to see if a call is still ongoing
@@ -209,7 +240,7 @@ class NotificationHandler {
                 
                 guard room.hasActiveRoomCall() else {
                     MXLog.info("The room no longer has an ongoing call, handling as push notification")
-                    return .shouldDisplay
+                    return .shouldDisplay(contributesToBadge: false)
                 }
             }
         } else { // Otherwise fallback to the old timeout mechanism
@@ -217,7 +248,7 @@ class NotificationHandler {
             
             guard abs(timestamp.timeIntervalSinceNow) < ElementCallServiceNotificationDiscardDelta else {
                 MXLog.info("Call notification is too old, handling as push notification")
-                return .shouldDisplay
+                return .shouldDisplay(contributesToBadge: false)
             }
         }
         
@@ -233,14 +264,14 @@ class NotificationHandler {
             MXLog.info("Call notification delegated to CallKit")
         } catch {
             MXLog.error("Failed reporting voip call with error: \(error). Handling as push notification")
-            return .shouldDisplay
+            return .shouldDisplay(contributesToBadge: false)
         }
         
         return .processedShouldDiscard
     }
     
     private enum NotificationProcessingResult {
-        case shouldDisplay
+        case shouldDisplay(contributesToBadge: Bool?)
         case processedShouldDiscard
         case unsupportedShouldDiscard
     }

@@ -14414,15 +14414,15 @@ class NotificationManagerMock: NotificationManagerProtocol, @unchecked Sendable 
     }
     //MARK: - removeDeliveredNotificationsForFullyReadRooms
 
-    var removeDeliveredNotificationsForFullyReadRoomsUnderlyingCallsCount = 0
-    var removeDeliveredNotificationsForFullyReadRoomsCallsCount: Int {
+    var removeDeliveredNotificationsForFullyReadRoomsUserIDUnderlyingCallsCount = 0
+    var removeDeliveredNotificationsForFullyReadRoomsUserIDCallsCount: Int {
         get {
             if Thread.isMainThread {
-                return removeDeliveredNotificationsForFullyReadRoomsUnderlyingCallsCount
+                return removeDeliveredNotificationsForFullyReadRoomsUserIDUnderlyingCallsCount
             } else {
                 var returnValue: Int? = nil
                 DispatchQueue.main.sync {
-                    returnValue = removeDeliveredNotificationsForFullyReadRoomsUnderlyingCallsCount
+                    returnValue = removeDeliveredNotificationsForFullyReadRoomsUserIDUnderlyingCallsCount
                 }
 
                 return returnValue!
@@ -14430,28 +14430,28 @@ class NotificationManagerMock: NotificationManagerProtocol, @unchecked Sendable 
         }
         set {
             if Thread.isMainThread {
-                removeDeliveredNotificationsForFullyReadRoomsUnderlyingCallsCount = newValue
+                removeDeliveredNotificationsForFullyReadRoomsUserIDUnderlyingCallsCount = newValue
             } else {
                 DispatchQueue.main.sync {
-                    removeDeliveredNotificationsForFullyReadRoomsUnderlyingCallsCount = newValue
+                    removeDeliveredNotificationsForFullyReadRoomsUserIDUnderlyingCallsCount = newValue
                 }
             }
         }
     }
-    var removeDeliveredNotificationsForFullyReadRoomsCalled: Bool {
-        return removeDeliveredNotificationsForFullyReadRoomsCallsCount > 0
+    var removeDeliveredNotificationsForFullyReadRoomsUserIDCalled: Bool {
+        return removeDeliveredNotificationsForFullyReadRoomsUserIDCallsCount > 0
     }
-    var removeDeliveredNotificationsForFullyReadRoomsReceivedRooms: [RoomSummary]?
-    var removeDeliveredNotificationsForFullyReadRoomsReceivedInvocations: [[RoomSummary]] = []
-    var removeDeliveredNotificationsForFullyReadRoomsClosure: (([RoomSummary]) async -> Void)?
+    var removeDeliveredNotificationsForFullyReadRoomsUserIDReceivedArguments: (rooms: [RoomSummary], userID: String)?
+    var removeDeliveredNotificationsForFullyReadRoomsUserIDReceivedInvocations: [(rooms: [RoomSummary], userID: String)] = []
+    var removeDeliveredNotificationsForFullyReadRoomsUserIDClosure: (([RoomSummary], String) async -> Void)?
 
-    func removeDeliveredNotificationsForFullyReadRooms(_ rooms: [RoomSummary]) async {
-        removeDeliveredNotificationsForFullyReadRoomsCallsCount += 1
-        removeDeliveredNotificationsForFullyReadRoomsReceivedRooms = rooms
+    func removeDeliveredNotificationsForFullyReadRooms(_ rooms: [RoomSummary], userID: String) async {
+        removeDeliveredNotificationsForFullyReadRoomsUserIDCallsCount += 1
+        removeDeliveredNotificationsForFullyReadRoomsUserIDReceivedArguments = (rooms: rooms, userID: userID)
         DispatchQueue.main.async {
-            self.removeDeliveredNotificationsForFullyReadRoomsReceivedInvocations.append(rooms)
+            self.removeDeliveredNotificationsForFullyReadRoomsUserIDReceivedInvocations.append((rooms: rooms, userID: userID))
         }
-        await removeDeliveredNotificationsForFullyReadRoomsClosure?(rooms)
+        await removeDeliveredNotificationsForFullyReadRoomsUserIDClosure?(rooms, userID)
     }
 }
 class NotificationSettingsProxyMock: NotificationSettingsProxyProtocol, @unchecked Sendable {

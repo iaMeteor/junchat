@@ -16,6 +16,7 @@ enum NotificationConstants {
         static let unreadCount = "unread_count"
         static let badgeContract = "badge_contract"
         static let badgeTotal = "badge_total"
+        static let badgeContribution = "junchat_badge_contribution"
         static let pusherNotificationClientIdentifier = "pusher_notification_client_identifier"
         static let receiverIdentifier = "receiver_id"
     }

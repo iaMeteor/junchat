@@ -444,7 +444,7 @@ extension RoomSummaryProviderState {
         case .notLoaded:
             self = .notLoaded
         case .loaded(let maximumNumberOfRooms):
-            self = .loaded(totalNumberOfRooms: UInt(maximumNumberOfRooms ?? 0))
+            self = .loaded(totalNumberOfRooms: maximumNumberOfRooms.map(UInt.init))
         }
     }
 }

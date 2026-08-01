@@ -89,7 +89,21 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
     }
 
     func setUserSession(_ userSession: UserSessionProtocol?) {
+        let previousUserID = self.userSession?.clientProxy.userID
         self.userSession = userSession
+        let userID = userSession?.clientProxy.userID
+
+        if let userID {
+            appSettings.notificationBadgeRoomLedger.prepare(for: userID)
+        } else {
+            appSettings.notificationBadgeRoomLedger.reset()
+        }
+
+        if previousUserID != nil, previousUserID != userID {
+            Task { [weak self] in
+                await self?.synchronizeBadgeCountWithActiveSession()
+            }
+        }
         
         // If notification permissions were given previously then attempt re-registering
         // for remote notifications on startup. Otherwise let the onboarding flow handle it
@@ -129,14 +143,30 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
     }
     
     func removeDeliveredMessageNotifications(for roomID: String) async {
+        guard let userID = userSession?.clientProxy.userID else { return }
+
         let notificationsIdentifiers = await notificationCenter
             .deliveredNotifications()
             .filter { $0.request.content.roomID == roomID }
             .map(\.request.identifier)
+        guard !Task.isCancelled,
+              userSession?.clientProxy.userID == userID else {
+            return
+        }
+
         notificationCenter.removeDeliveredNotifications(withIdentifiers: notificationsIdentifiers)
+
+        guard appSettings.notificationBadgeRoomLedger.markRoomRead(userID: userID,
+                                                                   roomID: roomID) != nil else {
+            return
+        }
+
+        await synchronizeBadgeCountWithActiveSession()
     }
     
-    func removeDeliveredNotificationsForFullyReadRooms(_ rooms: [RoomSummary]) async {
+    func removeDeliveredNotificationsForFullyReadRooms(_ rooms: [RoomSummary], userID: String) async {
+        guard userSession?.clientProxy.userID == userID else { return }
+
         let roomsToLastMessageDates = rooms
             .filter { $0.hasUnreadMessages == false && $0.joinRequestType?.isInvite != true }
             .reduce(into: [:]) { partialResult, roomSummary in
@@ -154,25 +184,49 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
                 return notification.date <= lastMessageDate
             }
             .map(\.request.identifier)
-        
-        notificationCenter.removeDeliveredNotifications(withIdentifiers: notificationsIdentifiers)
-        
-        guard !rooms.isEmpty,
-              rooms.allSatisfy({
-                  !$0.hasUnreadMessages &&
-                      !$0.hasUnreadNotifications &&
-                      !$0.isMarkedUnread &&
-                      $0.joinRequestType?.isInvite != true
-              }) else {
+        guard !Task.isCancelled,
+              userSession?.clientProxy.userID == userID else {
             return
         }
-        
-        do {
-            try await notificationCenter.setBadgeCount(0)
-            MXLog.info("Cleared app badge after all rooms were fully read")
-        } catch {
-            MXLog.error("Failed clearing app badge after all rooms were fully read: \(error)")
+
+        notificationCenter.removeDeliveredNotifications(withIdentifiers: notificationsIdentifiers)
+
+        let unreadRoomIDs = Set(rooms.lazy
+            .filter {
+                $0.hasUnreadNotifications ||
+                    $0.joinRequestType?.isInvite == true
+            }
+            .map(\.id))
+        guard appSettings.notificationBadgeRoomLedger.reconcile(userID: userID,
+                                                                unreadRoomIDs: unreadRoomIDs) != nil else {
+            return
         }
+
+        await synchronizeBadgeCountWithActiveSession()
+    }
+
+    private func synchronizeBadgeCountWithActiveSession() async {
+        for _ in 0..<8 {
+            let userID = userSession?.clientProxy.userID
+            let snapshot = userID.flatMap { appSettings.notificationBadgeRoomLedger.snapshot(for: $0) }
+            let badgeCount = snapshot?.count ?? 0
+
+            do {
+                try await notificationCenter.setBadgeCount(badgeCount)
+            } catch {
+                MXLog.error("Failed synchronizing app badge: \(error)")
+                return
+            }
+
+            let currentUserID = userSession?.clientProxy.userID
+            let currentSnapshot = currentUserID.flatMap { appSettings.notificationBadgeRoomLedger.snapshot(for: $0) }
+            if currentUserID == userID, currentSnapshot == snapshot {
+                MXLog.info("Synchronized app badge from visible unread rooms: \(badgeCount)")
+                return
+            }
+        }
+
+        MXLog.error("App badge state kept changing during synchronization")
     }
     
     private func removeReceivedWhileOfflineNotification() {
