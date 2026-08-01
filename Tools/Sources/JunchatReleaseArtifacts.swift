@@ -219,7 +219,8 @@ enum JunchatReleaseArtifacts {
                                               fileManager: FileManager) throws {
         let archiveInfo = try propertyList(at: locations.archiveInfoURL, fileManager: fileManager)
         guard archiveInfo["ArchiveVersion"] as? Int == 2,
-              archiveInfo["Name"] as? String == "Junchat",
+              archiveInfo["Name"] as? String == "ElementX",
+              archiveInfo["SchemeName"] as? String == "ElementX",
               let applicationProperties = archiveInfo["ApplicationProperties"] as? [String: Any],
               applicationProperties["ApplicationPath"] as? String == "Applications/Junchat.app",
               applicationProperties["CFBundleIdentifier"] as? String == expectedMetadata.bundleIdentifier,

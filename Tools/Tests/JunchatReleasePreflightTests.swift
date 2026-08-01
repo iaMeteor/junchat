@@ -72,6 +72,17 @@ final class JunchatReleasePreflightTests: XCTestCase {
         XCTAssertEqual(operationCount, 1)
     }
 
+    func testReleaseArtifactValidationRejectsUnexpectedArchiveSchemeIdentity() async throws {
+        for (name, schemeName) in [("Junchat", "ElementX"), ("ElementX", "Junchat")] {
+            let fixture = try ReleaseArchiveFixture()
+            defer { fixture.remove() }
+            try fixture.setArchiveIdentity(name: name, schemeName: schemeName)
+
+            await assertReleaseArtifactFailure(environment: fixture.environment,
+                                               commandRunner: validatingCommandRunner())
+        }
+    }
+
     func testReleaseArtifactValidationRejectsAdHocMissingTeamAndNonExecutableMachO() async throws {
         let invalidRunners = [
             validatingCommandRunner(signature: "Signature=adhoc"),
@@ -341,8 +352,8 @@ private final class ReleaseArchiveFixture {
                 "CFBundleVersion": String(releaseVersion.build)
             ],
             "ArchiveVersion": 2,
-            "Name": "Junchat",
-            "SchemeName": "Junchat"
+            "Name": "ElementX",
+            "SchemeName": "ElementX"
         ], to: archiveURL.appending(path: "Info.plist"))
         try writePropertyList([
             "CFBundleExecutable": "Junchat",
@@ -382,6 +393,17 @@ private final class ReleaseArchiveFixture {
                                      bundleIdentifier: bundleIdentifier)
     }
 
+    func setArchiveIdentity(name: String, schemeName: String) throws {
+        let projectYAML = try String(contentsOf: URL.projectDirectory.appending(path: "project.yml"),
+                                     encoding: .utf8)
+        let releaseVersion = try JunchatReleaseVersion.parse(projectYAML)
+        try writeArchivePropertyList(version: releaseVersion.name,
+                                     build: releaseVersion.build,
+                                     bundleIdentifier: "com.heyujk.junchat",
+                                     name: name,
+                                     schemeName: schemeName)
+    }
+
     func remove() {
         try? fileManager.removeItem(at: rootURL)
     }
@@ -393,7 +415,11 @@ private final class ReleaseArchiveFixture {
         try data.write(to: url)
     }
 
-    private func writeArchivePropertyList(version: String, build: Int, bundleIdentifier: String) throws {
+    private func writeArchivePropertyList(version: String,
+                                          build: Int,
+                                          bundleIdentifier: String,
+                                          name: String = "ElementX",
+                                          schemeName: String = "ElementX") throws {
         try writePropertyList([
             "ApplicationProperties": [
                 "ApplicationPath": "Applications/Junchat.app",
@@ -402,8 +428,8 @@ private final class ReleaseArchiveFixture {
                 "CFBundleVersion": String(build)
             ],
             "ArchiveVersion": 2,
-            "Name": "Junchat",
-            "SchemeName": "Junchat"
+            "Name": name,
+            "SchemeName": schemeName
         ], to: archiveURL.appending(path: "Info.plist"))
     }
 
