@@ -29,6 +29,7 @@
 		012D9DDCDE6278E4E0CDCC0F /* LinkNewDeviceFlowCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94EE2C5F0A06F146BBE3A1B1 /* LinkNewDeviceFlowCoordinator.swift */; };
 		01373C1AC4839604C4FDA404 /* test_apple_image.heic in Resources */ = {isa = PBXBuildFile; fileRef = BB576F4118C35E6B5124FA22 /* test_apple_image.heic */; };
 		01681E8B20AD6F0D237F2DC1 /* IdentityConfirmedScreenViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C6624240FFD32B7F0834229 /* IdentityConfirmedScreenViewModel.swift */; };
+		017EBBE2FADC9E5D05D7DFA9 /* NotificationDuplicateSuppressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6906484490EBDE3F75B77CC3 /* NotificationDuplicateSuppressionTests.swift */; };
 		0180C44B997EDA8D21F883AC /* RoomNotificationSettingsCustomSectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B746EFA112532A7B701FB914 /* RoomNotificationSettingsCustomSectionView.swift */; };
 		01B63F1A04A276B39AC17014 /* CallInviteRoomTimelineItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9A3D3CFA199FA7897364547 /* CallInviteRoomTimelineItem.swift */; };
 		020F7E70167FB2833266F2F0 /* AnalyticsSettingsScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = D39D7F513A36C9C1951DB44C /* AnalyticsSettingsScreen.swift */; };
@@ -2315,6 +2316,7 @@
 		6861FE915C7B5466E6962BBA /* StartChatScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartChatScreen.swift; sourceTree = "<group>"; };
 		686C00647EF2680FE0F0CC9B /* JunchatShareCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JunchatShareCard.swift; sourceTree = "<group>"; };
 		6885D1340AA9C76063E26868 /* LinkMetadataProviderProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkMetadataProviderProtocol.swift; sourceTree = "<group>"; };
+		6906484490EBDE3F75B77CC3 /* NotificationDuplicateSuppressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationDuplicateSuppressionTests.swift; sourceTree = "<group>"; };
 		693E16574C6F7F9FA1015A8C /* Search.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Search.swift; sourceTree = "<group>"; };
 		69A05E85E4872C3221C5C287 /* RemotePreference.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePreference.swift; sourceTree = "<group>"; };
 		69CB8242D69B7E4D0B32E18D /* AggregatedReactionMock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AggregatedReactionMock.swift; sourceTree = "<group>"; };
@@ -5237,6 +5239,7 @@
 				2B67DC84B42D86035FCFF6F8 /* NavigationTabCoordinatorTests.swift */,
 				D0C0E329FBF4A1BAB89BB717 /* NotificationBadgePolicyTests.swift */,
 				0F0AF1A13D358CA0BDA6065F /* NotificationContentBuilderTests.swift */,
+				6906484490EBDE3F75B77CC3 /* NotificationDuplicateSuppressionTests.swift */,
 				8544F7058D31DBEB8DBFF0F5 /* NotificationSettingsEditScreenViewModelTests.swift */,
 				514363244AE7D68080D44C6F /* NotificationSettingsScreenViewModelTests.swift */,
 				FA3EB5B1848CF4F64E63C6B7 /* PermalinkTests.swift */,
@@ -8336,6 +8339,7 @@
 				EE17B7154DCA50677D931A94 /* NavigationTabCoordinatorTests.swift in Sources */,
 				B9929F2AA6CD1A4862425A16 /* NotificationBadgePolicyTests.swift in Sources */,
 				41B84DF733BE6CB0180D1CC1 /* NotificationContentBuilderTests.swift in Sources */,
+				017EBBE2FADC9E5D05D7DFA9 /* NotificationDuplicateSuppressionTests.swift in Sources */,
 				1B2DADC008EE211AF1DA5292 /* NotificationManagerTests.swift in Sources */,
 				C11939FDC40716C4387275A4 /* NotificationSettingsEditScreenViewModelTests.swift in Sources */,
 				E3AC72E3E58F364EF15C1CC7 /* NotificationSettingsScreenViewModelTests.swift in Sources */,
@@ -9933,7 +9937,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 41;
+				CURRENT_PROJECT_VERSION = 42;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = W834S4TA7S;
 				ENABLE_BITCODE = NO;
@@ -10360,7 +10364,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 41;
+				CURRENT_PROJECT_VERSION = 42;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = W834S4TA7S;
 				ENABLE_BITCODE = NO;
@@ -10438,7 +10442,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 41;
+				CURRENT_PROJECT_VERSION = 42;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = W834S4TA7S;
 				ENABLE_BITCODE = NO;
