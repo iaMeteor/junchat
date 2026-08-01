@@ -339,6 +339,7 @@ final class AppSettings {
         backgroundAppRefreshTaskIdentifier = serverEnvironment.backgroundAppRefreshTaskIdentifier
         oidcRedirectURL = serverEnvironment.oidcRedirectURL
         pushGatewayBaseURL = serverEnvironment.pushGatewayBaseURL
+        pushGatewayNotifyEndpoint = serverEnvironment.pushGatewayNotifyURL
         diagnosticsEndpoint = serverEnvironment.diagnosticsEndpoint
         let rageshakeConfiguration: RageshakeConfiguration
         if serverEnvironment.rageshakeEnabled,
@@ -379,6 +380,7 @@ final class AppSettings {
         self.allowOtherAccountProviders = allowOtherAccountProviders
         self.hideBrandChrome = hideBrandChrome
         self.pushGatewayBaseURL = pushGatewayBaseURL
+        pushGatewayNotifyEndpoint = pushGatewayBaseURL.appending(path: "_matrix/push/v1/notify")
         self.oidcRedirectURL = oidcRedirectURL
         self.websiteURL = websiteURL
         self.logoURL = logoURL
@@ -520,9 +522,7 @@ final class AppSettings {
     }
 
     private(set) var pushGatewayBaseURL: URL
-    var pushGatewayNotifyEndpoint: URL {
-        pushGatewayBaseURL.appending(path: "_matrix/push/v1/notify")
-    }
+    private(set) var pushGatewayNotifyEndpoint: URL
 
     private(set) var diagnosticsEndpoint: URL
 

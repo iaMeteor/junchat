@@ -10,6 +10,7 @@ settings:
   JUNCHAT_MATRIX_ACCOUNT_PROVIDER: junchat.yyzs120.cn
   JUNCHAT_OIDC_REDIRECT_URL: https://junchat.yyzs120.cn/oidc/login
   JUNCHAT_PUSH_GATEWAY_BASE_URL: https://sygnal-junchat.yyzs120.cn/junchat-sygnal-v2
+  JUNCHAT_PUSH_GATEWAY_NOTIFY_URL: https://sygnal-junchat.yyzs120.cn/_matrix/push/v1/notify?junchat-sygnal=v2
   JUNCHAT_DIAGNOSTICS_ENDPOINT: https://junchat.yyzs120.cn/junchat-errors/api/v2/uploads
   JUNCHAT_RAGESHAKE_ENABLED: YES
   JUNCHAT_BACKGROUND_APP_REFRESH_TASK_IDENTIFIER: com.heyujk.junchat.background.refresh

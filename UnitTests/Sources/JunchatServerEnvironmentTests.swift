@@ -17,6 +17,7 @@ struct JunchatServerEnvironmentTests {
         #expect(environment.matrixAccountProvider == "junchat.yyzs120.cn")
         #expect(environment.oidcRedirectURL == URL(string: "https://junchat.yyzs120.cn/oidc/login"))
         #expect(environment.pushGatewayBaseURL == URL(string: "https://sygnal-junchat.yyzs120.cn/junchat-sygnal-v2"))
+        #expect(environment.pushGatewayNotifyURL == URL(string: "https://sygnal-junchat.yyzs120.cn/_matrix/push/v1/notify?junchat-sygnal=v2"))
         #expect(environment.diagnosticsEndpoint == URL(string: "https://junchat.yyzs120.cn/junchat-errors/api/v2/uploads"))
         #expect(environment.rageshakeEnabled)
         #expect(environment.backgroundAppRefreshTaskIdentifier == "com.heyujk.junchat.background.refresh")
@@ -28,6 +29,7 @@ struct JunchatServerEnvironmentTests {
             "JunchatMatrixAccountProvider": "canary.junchat.yyzs120.cn",
             "JunchatOIDCRedirectURL": "https://canary.junchat.yyzs120.cn/oidc/login",
             "JunchatPushGatewayBaseURL": "https://canary.junchat.yyzs120.cn/push",
+            "JunchatPushGatewayNotifyURL": "https://canary.junchat.yyzs120.cn/_matrix/push/v1/notify?junchat-sygnal=canary",
             "JunchatDiagnosticsEndpoint": "https://canary.junchat.yyzs120.cn/diagnostics/api/events",
             "JunchatRageshakeEnabled": "NO",
             "JunchatBackgroundAppRefreshTaskIdentifier": "com.heyujk.junchat.canary.background.refresh"
@@ -38,6 +40,7 @@ struct JunchatServerEnvironmentTests {
         #expect(environment.matrixAccountProvider == "canary.junchat.yyzs120.cn")
         #expect(environment.oidcRedirectURL == URL(string: "https://canary.junchat.yyzs120.cn/oidc/login"))
         #expect(environment.pushGatewayBaseURL == URL(string: "https://canary.junchat.yyzs120.cn/push"))
+        #expect(environment.pushGatewayNotifyURL == URL(string: "https://canary.junchat.yyzs120.cn/_matrix/push/v1/notify?junchat-sygnal=canary"))
         #expect(environment.diagnosticsEndpoint == URL(string: "https://canary.junchat.yyzs120.cn/diagnostics/api/events"))
         #expect(!environment.rageshakeEnabled)
         #expect(environment.backgroundAppRefreshTaskIdentifier == "com.heyujk.junchat.canary.background.refresh")
@@ -48,6 +51,21 @@ struct JunchatServerEnvironmentTests {
         let dictionary: [String: Any] = [
             "JunchatMatrixAccountProvider": "canary.junchat.yyzs120.cn",
             "JunchatRageshakeEnabled": false
+        ]
+
+        #expect(JunchatServerEnvironment(infoDictionary: dictionary) == nil)
+    }
+
+    @Test
+    func rejectsPushGatewayNotifyURLWithANonStandardPath() {
+        let dictionary: [String: Any] = [
+            "JunchatMatrixAccountProvider": "canary.junchat.yyzs120.cn",
+            "JunchatOIDCRedirectURL": "https://canary.junchat.yyzs120.cn/oidc/login",
+            "JunchatPushGatewayBaseURL": "https://canary.junchat.yyzs120.cn/push",
+            "JunchatPushGatewayNotifyURL": "https://canary.junchat.yyzs120.cn/push/_matrix/push/v1/notify",
+            "JunchatDiagnosticsEndpoint": "https://canary.junchat.yyzs120.cn/diagnostics/api/events",
+            "JunchatRageshakeEnabled": "NO",
+            "JunchatBackgroundAppRefreshTaskIdentifier": "com.heyujk.junchat.canary.background.refresh"
         ]
 
         #expect(JunchatServerEnvironment(infoDictionary: dictionary) == nil)

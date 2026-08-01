@@ -12,6 +12,7 @@ struct JunchatServerEnvironment: Equatable {
         case matrixAccountProvider = "JunchatMatrixAccountProvider"
         case oidcRedirectURL = "JunchatOIDCRedirectURL"
         case pushGatewayBaseURL = "JunchatPushGatewayBaseURL"
+        case pushGatewayNotifyURL = "JunchatPushGatewayNotifyURL"
         case diagnosticsEndpoint = "JunchatDiagnosticsEndpoint"
         case rageshakeEnabled = "JunchatRageshakeEnabled"
         case backgroundAppRefreshTaskIdentifier = "JunchatBackgroundAppRefreshTaskIdentifier"
@@ -20,6 +21,7 @@ struct JunchatServerEnvironment: Equatable {
     static let production = JunchatServerEnvironment(matrixAccountProvider: "junchat.yyzs120.cn",
                                                      oidcRedirectURL: URL(string: "https://junchat.yyzs120.cn/oidc/login")!,
                                                      pushGatewayBaseURL: URL(string: "https://sygnal-junchat.yyzs120.cn/junchat-sygnal-v2")!,
+                                                     pushGatewayNotifyURL: URL(string: "https://sygnal-junchat.yyzs120.cn/_matrix/push/v1/notify?junchat-sygnal=v2")!,
                                                      diagnosticsEndpoint: URL(string: "https://junchat.yyzs120.cn/junchat-errors/api/v2/uploads")!,
                                                      rageshakeEnabled: true,
                                                      backgroundAppRefreshTaskIdentifier: "com.heyujk.junchat.background.refresh")
@@ -38,6 +40,7 @@ struct JunchatServerEnvironment: Equatable {
     let matrixAccountProvider: String
     let oidcRedirectURL: URL
     let pushGatewayBaseURL: URL
+    let pushGatewayNotifyURL: URL
     let diagnosticsEndpoint: URL
     let rageshakeEnabled: Bool
     let backgroundAppRefreshTaskIdentifier: String
@@ -47,6 +50,7 @@ struct JunchatServerEnvironment: Equatable {
               !matrixAccountProvider.isEmpty,
               let oidcRedirectURL = Self.httpsURL(in: infoDictionary, for: .oidcRedirectURL),
               let pushGatewayBaseURL = Self.httpsURL(in: infoDictionary, for: .pushGatewayBaseURL),
+              let pushGatewayNotifyURL = Self.pushGatewayNotifyURL(in: infoDictionary),
               let diagnosticsEndpoint = Self.httpsURL(in: infoDictionary, for: .diagnosticsEndpoint),
               let rageshakeEnabled = Self.bool(in: infoDictionary, for: .rageshakeEnabled),
               let backgroundAppRefreshTaskIdentifier = infoDictionary[InfoKey.backgroundAppRefreshTaskIdentifier.rawValue] as? String,
@@ -57,6 +61,7 @@ struct JunchatServerEnvironment: Equatable {
         self.init(matrixAccountProvider: matrixAccountProvider,
                   oidcRedirectURL: oidcRedirectURL,
                   pushGatewayBaseURL: pushGatewayBaseURL,
+                  pushGatewayNotifyURL: pushGatewayNotifyURL,
                   diagnosticsEndpoint: diagnosticsEndpoint,
                   rageshakeEnabled: rageshakeEnabled,
                   backgroundAppRefreshTaskIdentifier: backgroundAppRefreshTaskIdentifier)
@@ -65,12 +70,14 @@ struct JunchatServerEnvironment: Equatable {
     private init(matrixAccountProvider: String,
                  oidcRedirectURL: URL,
                  pushGatewayBaseURL: URL,
+                 pushGatewayNotifyURL: URL,
                  diagnosticsEndpoint: URL,
                  rageshakeEnabled: Bool,
                  backgroundAppRefreshTaskIdentifier: String) {
         self.matrixAccountProvider = matrixAccountProvider
         self.oidcRedirectURL = oidcRedirectURL
         self.pushGatewayBaseURL = pushGatewayBaseURL
+        self.pushGatewayNotifyURL = pushGatewayNotifyURL
         self.diagnosticsEndpoint = diagnosticsEndpoint
         self.rageshakeEnabled = rageshakeEnabled
         self.backgroundAppRefreshTaskIdentifier = backgroundAppRefreshTaskIdentifier
@@ -81,6 +88,15 @@ struct JunchatServerEnvironment: Equatable {
               let url = URL(string: value),
               url.scheme == "https",
               url.host() != nil else {
+            return nil
+        }
+        return url
+    }
+
+    private static func pushGatewayNotifyURL(in infoDictionary: [String: Any]) -> URL? {
+        guard let url = httpsURL(in: infoDictionary, for: .pushGatewayNotifyURL),
+              url.path == "/_matrix/push/v1/notify",
+              url.fragment == nil else {
             return nil
         }
         return url

@@ -117,7 +117,7 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
             }
             
             let settings = await notificationCenter.notificationSettings()
-            MXLog.info("Notification sound enabled: \(settings.soundSetting == .enabled)")
+            MXLog.info("Notification settings: authorization=\(settings.authorizationStatus.rawValue), badges=\(settings.badgeSetting == .enabled), sounds=\(settings.soundSetting == .enabled)")
         }
     }
 

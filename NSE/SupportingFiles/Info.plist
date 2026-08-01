@@ -30,6 +30,8 @@
 	<string>$(JUNCHAT_OIDC_REDIRECT_URL)</string>
 	<key>JunchatPushGatewayBaseURL</key>
 	<string>$(JUNCHAT_PUSH_GATEWAY_BASE_URL)</string>
+	<key>JunchatPushGatewayNotifyURL</key>
+	<string>$(JUNCHAT_PUSH_GATEWAY_NOTIFY_URL)</string>
 	<key>JunchatRageshakeEnabled</key>
 	<string>$(JUNCHAT_RAGESHAKE_ENABLED)</string>
 	<key>NSExtension</key>

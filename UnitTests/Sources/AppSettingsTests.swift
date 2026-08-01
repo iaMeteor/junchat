@@ -131,6 +131,7 @@ struct AppSettingsTests {
             "JunchatMatrixAccountProvider": "canary.junchat.yyzs120.cn",
             "JunchatOIDCRedirectURL": "https://canary.junchat.yyzs120.cn/oidc/login",
             "JunchatPushGatewayBaseURL": "https://canary.junchat.yyzs120.cn/push",
+            "JunchatPushGatewayNotifyURL": "https://canary.junchat.yyzs120.cn/_matrix/push/v1/notify?junchat-sygnal=canary",
             "JunchatDiagnosticsEndpoint": "https://canary.junchat.yyzs120.cn/diagnostics/api/events",
             "JunchatRageshakeEnabled": "NO",
             "JunchatBackgroundAppRefreshTaskIdentifier": "com.heyujk.junchat.canary.background.refresh"
@@ -141,7 +142,7 @@ struct AppSettingsTests {
         #expect(settings.accountProviders == ["canary.junchat.yyzs120.cn"])
         #expect(settings.oidcRedirectURL == URL(string: "https://canary.junchat.yyzs120.cn/oidc/login"))
         #expect(settings.pushGatewayBaseURL == URL(string: "https://canary.junchat.yyzs120.cn/push"))
-        #expect(settings.pushGatewayNotifyEndpoint == URL(string: "https://canary.junchat.yyzs120.cn/push/_matrix/push/v1/notify"))
+        #expect(settings.pushGatewayNotifyEndpoint == URL(string: "https://canary.junchat.yyzs120.cn/_matrix/push/v1/notify?junchat-sygnal=canary"))
         #expect(settings.diagnosticsEndpoint == URL(string: "https://canary.junchat.yyzs120.cn/diagnostics/api/events"))
         #expect(settings.backgroundAppRefreshTaskIdentifier == "com.heyujk.junchat.canary.background.refresh")
         #expect(settings.bugReportRageshakeURL.publisher.value == RageshakeConfiguration.disabled)
@@ -151,7 +152,7 @@ struct AppSettingsTests {
     func productionPushNotifyEndpointUsesTheVersionedSygnalRoute() {
         let settings = AppSettings(serverEnvironment: .production)
 
-        #expect(settings.pushGatewayNotifyEndpoint == URL(string: "https://sygnal-junchat.yyzs120.cn/junchat-sygnal-v2/_matrix/push/v1/notify"))
+        #expect(settings.pushGatewayNotifyEndpoint == URL(string: "https://sygnal-junchat.yyzs120.cn/_matrix/push/v1/notify?junchat-sygnal=v2"))
     }
     
     @Test

@@ -119,6 +119,7 @@ targets:
         JunchatMatrixAccountProvider: $(JUNCHAT_MATRIX_ACCOUNT_PROVIDER)
         JunchatOIDCRedirectURL: $(JUNCHAT_OIDC_REDIRECT_URL)
         JunchatPushGatewayBaseURL: $(JUNCHAT_PUSH_GATEWAY_BASE_URL)
+        JunchatPushGatewayNotifyURL: $(JUNCHAT_PUSH_GATEWAY_NOTIFY_URL)
         JunchatDiagnosticsEndpoint: $(JUNCHAT_DIAGNOSTICS_ENDPOINT)
         JunchatRageshakeEnabled: $(JUNCHAT_RAGESHAKE_ENABLED)
         JunchatBackgroundAppRefreshTaskIdentifier: $(JUNCHAT_BACKGROUND_APP_REFRESH_TASK_IDENTIFIER)
