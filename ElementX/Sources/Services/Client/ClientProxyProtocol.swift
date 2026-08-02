@@ -29,6 +29,11 @@ enum ClientProxyLoadingState {
     case notLoading
 }
 
+enum ClientProxyRoomListDataState {
+    case cached
+    case synced
+}
+
 enum ClientProxyError: Error {
     case sdkError(Error)
     case forbiddenAccess
@@ -93,6 +98,8 @@ enum TimelineMediaVisibility: Decodable {
 // sourcery: AutoMockable
 protocol ClientProxyProtocol: AnyObject {
     var actionsPublisher: AnyPublisher<ClientProxyAction, Never> { get }
+
+    var roomListDataStatePublisher: CurrentValuePublisher<ClientProxyRoomListDataState, Never> { get }
     
     var loadingStatePublisher: CurrentValuePublisher<ClientProxyLoadingState, Never> { get }
     

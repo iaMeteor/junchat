@@ -18,6 +18,7 @@ struct ChatsTabFlowCoordinatorTests {
     var chatsTabFlowCoordinator: ChatsTabFlowCoordinator!
     var splitCoordinator: NavigationSplitCoordinator!
     var notificationManager: NotificationManagerMock!
+    var roomListDataStateSubject: CurrentValueSubject<ClientProxyRoomListDataState, Never>!
     let stateMachineFactory = PublishedStateMachineFactory()
     
     var cancellables = Set<AnyCancellable>()
@@ -32,6 +33,9 @@ struct ChatsTabFlowCoordinatorTests {
     
     init() async throws {
         clientProxy = ClientProxyMock(.init(userID: "hi@bob", roomSummaryProvider: RoomSummaryProviderMock(.init(state: .loaded(.mockRooms)))))
+        clientProxy.staticRoomSummaryProvider = RoomSummaryProviderMock(.init(state: .loaded([])))
+        roomListDataStateSubject = CurrentValueSubject(.cached)
+        clientProxy.roomListDataStatePublisher = roomListDataStateSubject.asCurrentValuePublisher()
         timelineControllerFactory = TimelineControllerFactoryMock(.init())
         
         splitCoordinator = NavigationSplitCoordinator(placeholderCoordinator: PlaceholderScreenCoordinator(hideBrandChrome: false))
@@ -58,6 +62,23 @@ struct ChatsTabFlowCoordinatorTests {
         let deferred = deferFulfillment(stateMachineFactory.chatsTabFlowStatePublisher) { $0 == .roomList(detailState: nil) }
         chatsTabFlowCoordinator.start()
         try await deferred.fulfill()
+    }
+
+    @Test
+    func cachedRoomListDoesNotReconcileNotificationBadgeBeforeSync() async throws {
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(notificationManager.removeDeliveredNotificationsForFullyReadRoomsUserIDCallsCount == 0)
+    }
+
+    @Test
+    func syncedRoomListReconcilesNotificationBadge() async throws {
+        roomListDataStateSubject.send(.synced)
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(notificationManager.removeDeliveredNotificationsForFullyReadRoomsUserIDCallsCount == 1)
+        #expect(notificationManager.removeDeliveredNotificationsForFullyReadRoomsUserIDReceivedArguments?.rooms.isEmpty == true)
+        #expect(notificationManager.removeDeliveredNotificationsForFullyReadRoomsUserIDReceivedArguments?.userID == "hi@bob")
     }
     
     @Test

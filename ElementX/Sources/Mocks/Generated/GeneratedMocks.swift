@@ -2462,20 +2462,85 @@ class CXProviderMock: CXProviderProtocol, @unchecked Sendable {
     }
     //MARK: - reportOutgoingCall
 
-    var reportOutgoingCallWithStartedConnectingAtCallsCount = 0
+    var reportOutgoingCallWithStartedConnectingAtUnderlyingCallsCount = 0
+    var reportOutgoingCallWithStartedConnectingAtCallsCount: Int {
+        get {
+            if Thread.isMainThread {
+                return reportOutgoingCallWithStartedConnectingAtUnderlyingCallsCount
+            } else {
+                var returnValue: Int? = nil
+                DispatchQueue.main.sync {
+                    returnValue = reportOutgoingCallWithStartedConnectingAtUnderlyingCallsCount
+                }
+
+                return returnValue!
+            }
+        }
+        set {
+            if Thread.isMainThread {
+                reportOutgoingCallWithStartedConnectingAtUnderlyingCallsCount = newValue
+            } else {
+                DispatchQueue.main.sync {
+                    reportOutgoingCallWithStartedConnectingAtUnderlyingCallsCount = newValue
+                }
+            }
+        }
+    }
+    var reportOutgoingCallWithStartedConnectingAtCalled: Bool {
+        return reportOutgoingCallWithStartedConnectingAtCallsCount > 0
+    }
+    var reportOutgoingCallWithStartedConnectingAtReceivedArguments: (uuid: UUID, dateStartedConnecting: Date?)?
     var reportOutgoingCallWithStartedConnectingAtReceivedInvocations: [(uuid: UUID, dateStartedConnecting: Date?)] = []
+    var reportOutgoingCallWithStartedConnectingAtClosure: ((UUID, Date?) -> Void)?
 
     func reportOutgoingCall(with uuid: UUID, startedConnectingAt dateStartedConnecting: Date?) {
         reportOutgoingCallWithStartedConnectingAtCallsCount += 1
-        reportOutgoingCallWithStartedConnectingAtReceivedInvocations.append((uuid: uuid, dateStartedConnecting: dateStartedConnecting))
+        reportOutgoingCallWithStartedConnectingAtReceivedArguments = (uuid: uuid, dateStartedConnecting: dateStartedConnecting)
+        DispatchQueue.main.async {
+            self.reportOutgoingCallWithStartedConnectingAtReceivedInvocations.append((uuid: uuid, dateStartedConnecting: dateStartedConnecting))
+        }
+        reportOutgoingCallWithStartedConnectingAtClosure?(uuid, dateStartedConnecting)
     }
+    //MARK: - reportOutgoingCall
 
-    var reportOutgoingCallWithConnectedAtCallsCount = 0
+    var reportOutgoingCallWithConnectedAtUnderlyingCallsCount = 0
+    var reportOutgoingCallWithConnectedAtCallsCount: Int {
+        get {
+            if Thread.isMainThread {
+                return reportOutgoingCallWithConnectedAtUnderlyingCallsCount
+            } else {
+                var returnValue: Int? = nil
+                DispatchQueue.main.sync {
+                    returnValue = reportOutgoingCallWithConnectedAtUnderlyingCallsCount
+                }
+
+                return returnValue!
+            }
+        }
+        set {
+            if Thread.isMainThread {
+                reportOutgoingCallWithConnectedAtUnderlyingCallsCount = newValue
+            } else {
+                DispatchQueue.main.sync {
+                    reportOutgoingCallWithConnectedAtUnderlyingCallsCount = newValue
+                }
+            }
+        }
+    }
+    var reportOutgoingCallWithConnectedAtCalled: Bool {
+        return reportOutgoingCallWithConnectedAtCallsCount > 0
+    }
+    var reportOutgoingCallWithConnectedAtReceivedArguments: (uuid: UUID, dateConnected: Date?)?
     var reportOutgoingCallWithConnectedAtReceivedInvocations: [(uuid: UUID, dateConnected: Date?)] = []
+    var reportOutgoingCallWithConnectedAtClosure: ((UUID, Date?) -> Void)?
 
     func reportOutgoingCall(with uuid: UUID, connectedAt dateConnected: Date?) {
         reportOutgoingCallWithConnectedAtCallsCount += 1
-        reportOutgoingCallWithConnectedAtReceivedInvocations.append((uuid: uuid, dateConnected: dateConnected))
+        reportOutgoingCallWithConnectedAtReceivedArguments = (uuid: uuid, dateConnected: dateConnected)
+        DispatchQueue.main.async {
+            self.reportOutgoingCallWithConnectedAtReceivedInvocations.append((uuid: uuid, dateConnected: dateConnected))
+        }
+        reportOutgoingCallWithConnectedAtClosure?(uuid, dateConnected)
     }
     //MARK: - reportCall
 
@@ -2744,6 +2809,11 @@ class ClientProxyMock: ClientProxyProtocol, @unchecked Sendable {
         set(value) { underlyingActionsPublisher = value }
     }
     var underlyingActionsPublisher: AnyPublisher<ClientProxyAction, Never>!
+    var roomListDataStatePublisher: CurrentValuePublisher<ClientProxyRoomListDataState, Never> {
+        get { return underlyingRoomListDataStatePublisher }
+        set(value) { underlyingRoomListDataStatePublisher = value }
+    }
+    var underlyingRoomListDataStatePublisher: CurrentValuePublisher<ClientProxyRoomListDataState, Never>!
     var loadingStatePublisher: CurrentValuePublisher<ClientProxyLoadingState, Never> {
         get { return underlyingLoadingStatePublisher }
         set(value) { underlyingLoadingStatePublisher = value }

@@ -351,13 +351,14 @@ class ChatsTabFlowCoordinator: FlowCoordinatorProtocol {
         let roomSummaryProvider = userSession.clientProxy.staticRoomSummaryProvider
         let userID = userSession.clientProxy.userID
         roomSummaryProvider.statePublisher
-            .combineLatest(roomSummaryProvider.roomListPublisher)
-            .filter { state, rooms in
+            .combineLatest(roomSummaryProvider.roomListPublisher, userSession.clientProxy.roomListDataStatePublisher)
+            .filter { state, rooms, roomListDataState in
+                guard roomListDataState == .synced else { return false }
                 guard let totalNumberOfRooms = state.totalNumberOfRooms else { return false }
                 return UInt(rooms.count) == totalNumberOfRooms
             }
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _, rooms in
+            .sink { [weak self] _, rooms, _ in
                 guard let self else { return }
                 let previousTask = badgeReconciliationTask
                 previousTask?.cancel()

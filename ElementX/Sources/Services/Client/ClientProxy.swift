@@ -162,6 +162,11 @@ class ClientProxy: ClientProxyProtocol {
     var actionsPublisher: AnyPublisher<ClientProxyAction, Never> {
         actionsSubject.eraseToAnyPublisher()
     }
+
+    private let roomListDataStateSubject = CurrentValueSubject<ClientProxyRoomListDataState, Never>(.cached)
+    var roomListDataStatePublisher: CurrentValuePublisher<ClientProxyRoomListDataState, Never> {
+        roomListDataStateSubject.asCurrentValuePublisher()
+    }
     
     private let loadingStateSubject = CurrentValueSubject<ClientProxyLoadingState, Never>(.notLoading)
     var loadingStatePublisher: CurrentValuePublisher<ClientProxyLoadingState, Never> {
@@ -430,6 +435,7 @@ class ClientProxy: ClientProxyProtocol {
     
     func stopSync(completion: (() -> Void)?) {
         MXLog.info("Stopping sync")
+        roomListDataStateSubject.send(.cached)
         
         if restartTask != nil {
             MXLog.warning("Removing the sync service restart task.")
@@ -1315,8 +1321,9 @@ class ClientProxy: ClientProxyProtocol {
             
             switch state {
             case .initial, .settingUp, .recovering:
-                break // Don't do anything until we're actually running.
+                roomListDataStateSubject.send(.cached)
             case .running:
+                roomListDataStateSubject.send(.synced)
                 // Hide the sync spinner as soon as we get any update back
                 actionsSubject.send(.receivedSyncUpdate)
                 
@@ -1324,7 +1331,7 @@ class ClientProxy: ClientProxyProtocol {
                     updateIgnoredUsers()
                 }
             case .error, .terminated:
-                break // The sync service is responsible for handling error and termination
+                roomListDataStateSubject.send(.cached)
             }
         })
     }

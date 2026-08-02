@@ -177,8 +177,10 @@ final class ElementCallServiceTests {
 
         let startAction = try #require(callController.requestedActions.compactMap { $0 as? CXStartCallAction }.first)
         #expect(!startAction.isVideo)
-        #expect(callProvider.reportOutgoingCallWithStartedConnectingAtReceivedInvocations.map(\.uuid) == [startAction.callUUID])
-        #expect(callProvider.reportOutgoingCallWithConnectedAtReceivedInvocations.map(\.uuid) == [startAction.callUUID])
+        #expect(callProvider.reportOutgoingCallWithStartedConnectingAtCallsCount == 1)
+        #expect(callProvider.reportOutgoingCallWithStartedConnectingAtReceivedArguments?.uuid == startAction.callUUID)
+        #expect(callProvider.reportOutgoingCallWithConnectedAtCallsCount == 1)
+        #expect(callProvider.reportOutgoingCallWithConnectedAtReceivedArguments?.uuid == startAction.callUUID)
 
         service.setAudioEnabled(false, roomID: "!outgoing:example.com")
         let muteAction = try #require(callController.requestedActions.compactMap { $0 as? CXSetMutedCallAction }.last)

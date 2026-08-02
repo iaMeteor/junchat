@@ -61,6 +61,7 @@ extension ClientProxyMock {
         roomDirectorySearchProxyReturnValue = configuration.roomDirectorySearchProxy
         
         actionsPublisher = PassthroughSubject<ClientProxyAction, Never>().eraseToAnyPublisher()
+        roomListDataStatePublisher = .init(.cached)
         loadingStatePublisher = .init(.notLoading)
         verificationStatePublisher = .init(.unknown)
         homeserverReachabilityPublisher = .init(.reachable)
