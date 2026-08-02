@@ -3,11 +3,16 @@
 "a11y_message_selection_selected" = "已选择";
 "action_select_messages" = "多选消息";
 "action_mark_all_as_read" = "全部标为已读";
+"action_show_link_as_card" = "显示为卡片";
+"action_show_link_as_text" = "显示为普通链接";
 "crypto_history_sharing_confirm_invite_dialog_content" = "你当前还没有与这些联系人聊天。继续前请确认是否邀请他们加入此房间。";
 "crypto_history_sharing_confirm_invite_dialog_title" = "邀请新联系人加入此房间？";
 "crypto_history_sharing_confirm_start_chat_dialog_content" = "你当前还没有与此人聊天。继续前请确认是否邀请对方。";
 "crypto_history_sharing_confirm_start_chat_dialog_title" = "开始与这个新联系人聊天？";
 "identity_confirmation_dont_show_again" = "不再提醒";
+"link_presentation_card" = "卡片";
+"link_presentation_picker_title" = "链接显示方式";
+"link_presentation_text" = "纯文本";
 "screen_message_forwarding_added_to_send_queue" = "已加入发送队列";
 "screen_message_forwarding_adding" = "加入中";
 "screen_message_forwarding_adding_to_send_queue" = "正在加入发送队列";

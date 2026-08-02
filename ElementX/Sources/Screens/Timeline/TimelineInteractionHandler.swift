@@ -27,6 +27,7 @@ enum TimelineInteractionHandlerAction {
     case viewInRoomTimeline(eventID: String)
     case displayThread(itemID: TimelineItemIdentifier)
     case showTranslation(text: String)
+    case setLinkPresentation(itemID: TimelineItemIdentifier, presentation: JunchatLinkPresentation)
 }
 
 /// The interaction handler groups logic for dealing with various actions the user can take on a timeline's
@@ -96,7 +97,7 @@ class TimelineInteractionHandler {
         actionsSubject.send(.showActionMenu(.init(item: eventTimelineItem)))
     }
 
-    // swiftlint:disable:next cyclomatic_complexity
+    // swiftlint:disable:next cyclomatic_complexity function_body_length
     func handleTimelineItemMenuAction(_ action: TimelineItemMenuAction, itemID: TimelineItemIdentifier) {
         guard let timelineItem = timelineController.timelineItems.firstUsingStableID(itemID),
               let eventTimelineItem = timelineItem as? EventBasedTimelineItemProtocol else {
@@ -107,6 +108,8 @@ class TimelineInteractionHandler {
         case .copy:
             guard let messageTimelineItem = timelineItem as? EventBasedMessageTimelineItemProtocol else { return }
             UIPasteboard.general.string = messageTimelineItem.body
+        case .copyLink(let url):
+            UIPasteboard.general.url = url
         case .copyCaption:
             guard let messageTimelineItem = timelineItem as? EventBasedMessageTimelineItemProtocol,
                   let caption = messageTimelineItem.mediaCaption else {
@@ -146,6 +149,8 @@ class TimelineInteractionHandler {
                 
                 UIPasteboard.general.url = permalinkURL
             }
+        case .setLinkPresentation(let presentation):
+            actionsSubject.send(.setLinkPresentation(itemID: itemID, presentation: presentation))
         case .selectMessages:
             break
         case .redact:

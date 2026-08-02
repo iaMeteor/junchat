@@ -273,6 +273,7 @@ final class ComposerToolbarViewModel: ComposerToolbarViewModelType, ComposerTool
         case .removeFocus:
             state.bindings.composerFocused = false
         case .clear:
+            state.bindings.linkPresentation = .card
             if let draft = draftService.loadVolatileDraft() {
                 handleLoadDraft(draft)
                 draftService.clearVolatileDraft()
@@ -465,8 +466,12 @@ final class ComposerToolbarViewModel: ComposerToolbarViewModelType, ComposerTool
             return
         }
         
+        let linkPresentation = JunchatShareCard.parse(body: plain) == nil ? .card : state.bindings.linkPresentation
+        let formattedBody = JunchatLinkPresentation.formattedBody(plain: plain,
+                                                                  html: html,
+                                                                  presentation: linkPresentation)
         actionsSubject.send(.sendMessage(plain: plain,
-                                         html: html,
+                                         html: formattedBody,
                                          mode: mode,
                                          intentionalMentions: intentionalMentions))
     }

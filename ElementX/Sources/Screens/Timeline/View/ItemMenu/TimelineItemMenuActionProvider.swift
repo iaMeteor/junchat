@@ -21,8 +21,9 @@ struct TimelineItemMenuActionProvider {
     let areThreadsEnabled: Bool
     let timelineKind: TimelineKind
     let emojiProvider: EmojiProviderProtocol
+    var linkPresentationOverride: JunchatLinkPresentation?
 
-    // swiftlint:disable:next cyclomatic_complexity
+    // swiftlint:disable:next cyclomatic_complexity function_body_length
     func makeActions() -> TimelineItemMenuActions? {
         guard let item = timelineItem as? EventBasedTimelineItemProtocol else {
             // Don't show a context menu for non-event based items.
@@ -99,6 +100,14 @@ struct TimelineItemMenuActionProvider {
             }
         } else if item.hasMediaCaption {
             actions.append(.copyCaption)
+        }
+
+        if let textItem = item as? TextRoomTimelineItem,
+           let shareCard = JunchatShareCard.parse(body: textItem.body, links: textItem.links) {
+            let currentPresentation = linkPresentationOverride
+                ?? JunchatLinkPresentation.encodedPresentation(in: textItem.content.formattedBodyHTMLString)
+            actions.append(.copyLink(shareCard.url))
+            actions.append(.setLinkPresentation(currentPresentation == .card ? .text : .card))
         }
 
         if item.isEditable, item.hasMediaCaption {

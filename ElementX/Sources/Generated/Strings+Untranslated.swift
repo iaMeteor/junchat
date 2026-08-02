@@ -20,6 +20,10 @@ internal enum UntranslatedL10n {
   internal static var actionMarkAllAsRead: String { return UntranslatedL10n.tr("Untranslated", "action_mark_all_as_read") }
   /// Select messages
   internal static var actionSelectMessages: String { return UntranslatedL10n.tr("Untranslated", "action_select_messages") }
+  /// Show as card
+  internal static var actionShowLinkAsCard: String { return UntranslatedL10n.tr("Untranslated", "action_show_link_as_card") }
+  /// Show as normal link
+  internal static var actionShowLinkAsText: String { return UntranslatedL10n.tr("Untranslated", "action_show_link_as_text") }
   /// You currently don’t have any chats with these contacts. Confirm inviting them to this room before continuing.
   internal static var cryptoHistorySharingConfirmInviteDialogContent: String { return UntranslatedL10n.tr("Untranslated", "crypto_history_sharing_confirm_invite_dialog_content") }
   /// Invite new contacts to this room?
@@ -30,6 +34,12 @@ internal enum UntranslatedL10n {
   internal static var cryptoHistorySharingConfirmStartChatDialogTitle: String { return UntranslatedL10n.tr("Untranslated", "crypto_history_sharing_confirm_start_chat_dialog_title") }
   /// Don’t show again
   internal static var identityConfirmationDontShowAgain: String { return UntranslatedL10n.tr("Untranslated", "identity_confirmation_dont_show_again") }
+  /// Card
+  internal static var linkPresentationCard: String { return UntranslatedL10n.tr("Untranslated", "link_presentation_card") }
+  /// Link display
+  internal static var linkPresentationPickerTitle: String { return UntranslatedL10n.tr("Untranslated", "link_presentation_picker_title") }
+  /// Plain text
+  internal static var linkPresentationText: String { return UntranslatedL10n.tr("Untranslated", "link_presentation_text") }
   /// Added to send queue
   internal static var screenMessageForwardingAddedToSendQueue: String { return UntranslatedL10n.tr("Untranslated", "screen_message_forwarding_added_to_send_queue") }
   /// Adding

@@ -3,11 +3,16 @@
 "a11y_message_selection_selected" = "已選取";
 "action_select_messages" = "多選訊息";
 "action_mark_all_as_read" = "全部標為已讀";
+"action_show_link_as_card" = "顯示為卡片";
+"action_show_link_as_text" = "顯示為一般連結";
 "crypto_history_sharing_confirm_invite_dialog_content" = "你目前還沒有與這些聯絡人聊天。繼續前請確認是否邀請他們加入此聊天室。";
 "crypto_history_sharing_confirm_invite_dialog_title" = "邀請新聯絡人加入此聊天室？";
 "crypto_history_sharing_confirm_start_chat_dialog_content" = "你目前還沒有與此人聊天。繼續前請確認是否邀請對方。";
 "crypto_history_sharing_confirm_start_chat_dialog_title" = "開始與這個新聯絡人聊天？";
 "identity_confirmation_dont_show_again" = "不再提醒";
+"link_presentation_card" = "卡片";
+"link_presentation_picker_title" = "連結顯示方式";
+"link_presentation_text" = "純文字";
 "screen_message_forwarding_added_to_send_queue" = "已加入傳送佇列";
 "screen_message_forwarding_adding" = "加入中";
 "screen_message_forwarding_adding_to_send_queue" = "正在加入傳送佇列";

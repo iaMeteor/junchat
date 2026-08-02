@@ -103,8 +103,13 @@ struct ComposerToolbar: View {
                         .scaledFrame(size: Compound.supportsGlass ? 44 : 36, relativeTo: .compound.headingLG)
                         .scaledPadding(.vertical, trailingButtonVerticalPadding, relativeTo: .compound.headingLG)
                 } else if context.viewState.showSendButton {
-                    sendButton
-                        .scaledPadding(.vertical, trailingButtonVerticalPadding, relativeTo: .compound.headingLG)
+                    HStack(spacing: 4) {
+                        if context.viewState.showsLinkPresentationControl {
+                            linkPresentationMenu
+                        }
+                        sendButton
+                    }
+                    .scaledPadding(.vertical, trailingButtonVerticalPadding, relativeTo: .compound.headingLG)
                 } else {
                     voiceMessageRecordingButton(mode: context.viewState.isVoiceMessageModeActivated ? .recording : .idle)
                         .scaledPadding(.vertical, trailingButtonVerticalPadding, relativeTo: .compound.headingLG)
@@ -123,6 +128,9 @@ struct ComposerToolbar: View {
             }
             .padding(.horizontal, 5)
             
+            if context.viewState.showsLinkPresentationControl {
+                linkPresentationMenu
+            }
             sendButton
         }
     }
@@ -170,6 +178,24 @@ struct ComposerToolbar: View {
             .animation(.linear(duration: 0.1).disabledDuringTests(), value: context.viewState.sendButtonDisabled)
             .keyboardShortcut(.return, modifiers: [.command])
             .accessibilityIdentifier(A11yIdentifiers.roomScreen.sendButton)
+    }
+
+    private var linkPresentationMenu: some View {
+        Menu {
+            Picker(UntranslatedL10n.linkPresentationPickerTitle, selection: $context.linkPresentation) {
+                Label(UntranslatedL10n.linkPresentationCard, icon: \.link)
+                    .tag(JunchatLinkPresentation.card)
+                Label(UntranslatedL10n.linkPresentationText, icon: \.textFormatting)
+                    .tag(JunchatLinkPresentation.text)
+            }
+        } label: {
+            CompoundIcon(context.linkPresentation == .card ? \.link : \.textFormatting,
+                         size: .small,
+                         relativeTo: .compound.headingLG)
+        }
+        .buttonStyle(ComposerToolbarButtonStyle())
+        .accessibilityLabel(UntranslatedL10n.linkPresentationPickerTitle)
+        .help(UntranslatedL10n.linkPresentationPickerTitle)
     }
     
     private var messageComposer: some View {

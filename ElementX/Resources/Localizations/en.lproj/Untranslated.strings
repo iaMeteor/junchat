@@ -3,11 +3,16 @@
 "a11y_message_selection_selected" = "Selected";
 "action_select_messages" = "Select messages";
 "action_mark_all_as_read" = "Mark all as read";
+"action_show_link_as_card" = "Show as card";
+"action_show_link_as_text" = "Show as normal link";
 "crypto_history_sharing_confirm_invite_dialog_content" = "You currently don’t have any chats with these contacts. Confirm inviting them to this room before continuing.";
 "crypto_history_sharing_confirm_invite_dialog_title" = "Invite new contacts to this room?";
 "crypto_history_sharing_confirm_start_chat_dialog_content" = "You currently don’t have any chats with this person. Confirm inviting them before continuing.";
 "crypto_history_sharing_confirm_start_chat_dialog_title" = "Start a chat with this new contact?";
 "identity_confirmation_dont_show_again" = "Don’t show again";
+"link_presentation_card" = "Card";
+"link_presentation_picker_title" = "Link display";
+"link_presentation_text" = "Plain text";
 "screen_message_forwarding_added_to_send_queue" = "Added to send queue";
 "screen_message_forwarding_adding" = "Adding";
 "screen_message_forwarding_adding_to_send_queue" = "Adding to send queue";

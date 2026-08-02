@@ -143,6 +143,15 @@ struct ComposerToolbarViewState: BindableState {
             return false
         }
     }
+
+    var showsLinkPresentationControl: Bool {
+        guard composerMode.isComposingNewMessage else {
+            return false
+        }
+
+        let text = bindings.composerFormattingEnabled ? wysiwygViewModel.content.markdown : bindings.plainComposerText.string
+        return JunchatShareCard.parse(body: text) != nil
+    }
 }
 
 struct ComposerToolbarViewStateBindings {
@@ -153,6 +162,7 @@ struct ComposerToolbarViewStateBindings {
     var formatItems: [FormatItem] = .init()
     var alertInfo: AlertInfo<UUID>?
     var selectedRange = NSRange(location: 0, length: 0)
+    var linkPresentation: JunchatLinkPresentation = .card
     
     var presendCallback: (() -> Void)?
 }

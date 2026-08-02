@@ -224,7 +224,8 @@ struct TimelineItemBubbledStylerView<Content: View>: View {
                                                                   isViewSourceEnabled: context.viewState.isViewSourceEnabled,
                                                                   areThreadsEnabled: context.viewState.areThreadsEnabled,
                                                                   timelineKind: context.viewState.timelineKind,
-                                                                  emojiProvider: context.viewState.emojiProvider)
+                                                                  emojiProvider: context.viewState.emojiProvider,
+                                                                  linkPresentationOverride: context.viewState.linkPresentationOverrides[timelineItem.id])
                     TimelineItemMacContextMenu(item: timelineItem, actionProvider: provider) { action in
                         context.send(viewAction: .handleTimelineItemMenuAction(itemID: timelineItem.id, action: action))
                     }

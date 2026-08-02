@@ -1290,6 +1290,7 @@
 		CC1C948F67A5510A340FD7F0 /* SessionDirectoriesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0825EAFD47332DD459DE893F /* SessionDirectoriesTests.swift */; };
 		CC961529F9F1854BEC3272C9 /* LayoutMocks.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC8AA23D4F37CC26564F63C5 /* LayoutMocks.swift */; };
 		CCBEC2100CAF2EEBE9DB4156 /* TemplateScreenModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA40B98B098B6F0371B750B3 /* TemplateScreenModels.swift */; };
+		CCDE84AAA48BAE9E25633C21 /* JunchatShareCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 686C00647EF2680FE0F0CC9B /* JunchatShareCard.swift */; };
 		CD0088B763CD970CF1CBF8CB /* DateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B5E97E9615A158C76B2AB77 /* DateTests.swift */; };
 		CD077E14FAADC444C5A80068 /* LiveLocationManagerProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33752AE856E93CE62412B7A1 /* LiveLocationManagerProtocol.swift */; };
 		CD3093D154173894C1DF8C3C /* EventTimelineItemProxyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F13778488CBCEF6946172C78 /* EventTimelineItemProxyTests.swift */; };
@@ -2317,6 +2318,7 @@
 		68010886142843705E342645 /* ProgressMaskModifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressMaskModifier.swift; sourceTree = "<group>"; };
 		682BC7BAF0EFEF512A8C5140 /* AuthenticationStartScreenBackgroundImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthenticationStartScreenBackgroundImage.swift; sourceTree = "<group>"; };
 		6861FE915C7B5466E6962BBA /* StartChatScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartChatScreen.swift; sourceTree = "<group>"; };
+		686C00647EF2680FE0F0CC9B /* JunchatShareCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JunchatShareCard.swift; sourceTree = "<group>"; };
 		6885D1340AA9C76063E26868 /* LinkMetadataProviderProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkMetadataProviderProtocol.swift; sourceTree = "<group>"; };
 		6906484490EBDE3F75B77CC3 /* NotificationDuplicateSuppressionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationDuplicateSuppressionTests.swift; sourceTree = "<group>"; };
 		693E16574C6F7F9FA1015A8C /* Search.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Search.swift; sourceTree = "<group>"; };
@@ -6764,6 +6766,7 @@
 				C258C9C815272911A5B132C3 /* FormattedBodyText.swift */,
 				59B7CC77B82C6C67DE3AD869 /* HighlightedTimelineItemModifier.swift */,
 				C5599255A6C98EBDA77B76E6 /* ImageRoomTimelineView.swift */,
+				686C00647EF2680FE0F0CC9B /* JunchatShareCard.swift */,
 				52947F8F356F0BA5B1F50912 /* LiveLocationRoomTimelineView.swift */,
 				ED49073BB1C1FC649DAC2CCD /* LocationRoomTimelineView.swift */,
 				3F54FA7C5CB7B342EF9B9B2F /* NoticeRoomTimelineView.swift */,
@@ -8892,6 +8895,7 @@
 				A3FE793EDF5ABA839898F258 /* JunchatMapProvider.swift in Sources */,
 				BB814FB8ACF92803794D20F7 /* JunchatPasswordChangeRequest.swift in Sources */,
 				6D849A57C62BEAF595AFDC14 /* JunchatServerEnvironment.swift in Sources */,
+				CCDE84AAA48BAE9E25633C21 /* JunchatShareCard.swift in Sources */,
 				3345668A80500D2032D1184A /* JunchatSupportScreen.swift in Sources */,
 				7B32B32D8853A0E49FDE9D51 /* JunchatSupportScreenCoordinator.swift in Sources */,
 				2182951D4AEF5943DC03B876 /* JunchatTetrisGame.swift in Sources */,

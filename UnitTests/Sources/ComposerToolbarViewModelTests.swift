@@ -76,6 +76,62 @@ final class ComposerToolbarViewModelTests {
         viewModel.process(viewAction: .sendMessage)
         #expect(viewModel.state.bindings.composerFormattingEnabled)
     }
+
+    @Test
+    func URLMessageCanBeSentAsPlainTextAndResetsToCard() async throws {
+        let url = "https://example.com/news"
+        viewModel.state.composerMode = .default
+        viewModel.state.bindings.composerFormattingEnabled = false
+        viewModel.state.bindings.plainComposerText = .init(string: url)
+        viewModel.state.bindings.linkPresentation = .text
+
+        #expect(viewModel.state.showsLinkPresentationControl)
+        let deferred = deferFulfillment(viewModel.actions) { action in
+            guard case let .sendMessage(plain, html, _, _) = action else {
+                return false
+            }
+            return plain == url && JunchatLinkPresentation.encodedPresentation(in: html) == .text
+        }
+
+        viewModel.process(viewAction: .sendMessage)
+        try await deferred.fulfill()
+        viewModel.process(timelineAction: .clear)
+
+        #expect(viewModel.state.bindings.linkPresentation == .card)
+    }
+
+    @Test
+    func ordinaryMessageDoesNotEncodeAStaleLinkPresentationChoice() async throws {
+        let message = "ordinary message"
+        viewModel.state.composerMode = .default
+        viewModel.state.bindings.composerFormattingEnabled = false
+        viewModel.state.bindings.plainComposerText = .init(string: message)
+        viewModel.state.bindings.linkPresentation = .text
+
+        let deferred = deferFulfillment(viewModel.actions) { action in
+            guard case let .sendMessage(plain, html, _, _) = action else {
+                return false
+            }
+            return plain == message && html == nil
+        }
+
+        viewModel.process(viewAction: .sendMessage)
+        try await deferred.fulfill()
+    }
+
+    @Test
+    func linkPresentationControlOnlyAppearsForNewURLMessages() {
+        viewModel.state.composerMode = .default
+        viewModel.state.bindings.composerFormattingEnabled = false
+        viewModel.state.bindings.plainComposerText = .init(string: "ordinary message")
+        #expect(!viewModel.state.showsLinkPresentationControl)
+
+        viewModel.state.bindings.plainComposerText = .init(string: "junchat.yyzs120.cn")
+        #expect(viewModel.state.showsLinkPresentationControl)
+
+        viewModel.process(timelineAction: .setMode(mode: .edit(originalEventOrTransactionID: .eventID("event"), type: .default)))
+        #expect(!viewModel.state.showsLinkPresentationControl)
+    }
     
     @Test
     func alertIsShownAfterLinkAction() {

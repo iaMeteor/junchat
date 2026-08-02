@@ -57,6 +57,7 @@ struct TimelineItemMenuReaction: Hashable {
 
 enum TimelineItemMenuAction: Identifiable, Hashable {
     case copy
+    case copyLink(URL)
     case translate
     case copyCaption
     case edit
@@ -65,6 +66,7 @@ enum TimelineItemMenuAction: Identifiable, Hashable {
     case removeCaption
     case editPoll
     case copyPermalink
+    case setLinkPresentation(JunchatLinkPresentation)
     case selectMessages
     case redact
     case reply(isThread: Bool)
@@ -98,7 +100,7 @@ enum TimelineItemMenuAction: Identifiable, Hashable {
     /// Whether the action should be shown for an item that failed to send.
     var canAppearInFailedEcho: Bool {
         switch self {
-        case .copy, .edit, .selectMessages, .redact, .viewSource, .editPoll:
+        case .copy, .copyLink, .setLinkPresentation, .edit, .selectMessages, .redact, .viewSource, .editPoll:
             true
         default:
             false
@@ -149,6 +151,8 @@ enum TimelineItemMenuAction: Identifiable, Hashable {
         switch self {
         case .copy:
             Label(L10n.actionCopyText, icon: \.copy)
+        case .copyLink:
+            Label(L10n.actionCopyLink, icon: \.link)
         case .translate:
             Label(L10n.actionTranslate, icon: \.translate)
         case .copyCaption:
@@ -165,6 +169,9 @@ enum TimelineItemMenuAction: Identifiable, Hashable {
             Label(L10n.actionEditPoll, icon: \.edit)
         case .copyPermalink:
             Label(L10n.actionCopyLinkToMessage, icon: \.link)
+        case .setLinkPresentation(let presentation):
+            Label(presentation == .card ? UntranslatedL10n.actionShowLinkAsCard : UntranslatedL10n.actionShowLinkAsText,
+                  icon: presentation == .card ? \.link : \.textFormatting)
         case .selectMessages:
             Label(UntranslatedL10n.actionSelectMessages, icon: \.checkCircleSolid)
         case .reply(let isThread):

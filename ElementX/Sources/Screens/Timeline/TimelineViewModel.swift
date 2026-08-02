@@ -611,6 +611,8 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
                 case .showTranslation(let text):
                     self.state.bindings.textToBeTranslated = text
                     self.state.bindings.showTranslation = true
+                case .setLinkPresentation(let itemID, let presentation):
+                    self.state.linkPresentationOverrides[itemID] = presentation
                 }
             }
             .store(in: &cancellables)

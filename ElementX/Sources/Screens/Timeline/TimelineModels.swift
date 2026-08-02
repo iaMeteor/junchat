@@ -125,6 +125,7 @@ struct TimelineViewState: BindableState {
     var isViewSourceEnabled: Bool
     var areThreadsEnabled: Bool
     var linkPreviewsEnabled: Bool
+    var linkPresentationOverrides: [TimelineItemIdentifier: JunchatLinkPresentation] = [:]
 
     let hasPredecessor: Bool
 

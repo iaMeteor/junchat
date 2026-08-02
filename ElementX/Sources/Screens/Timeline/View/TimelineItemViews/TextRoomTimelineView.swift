@@ -9,6 +9,7 @@
 import Foundation
 import OrderedCollections
 import SwiftUI
+import UIKit
 
 struct TextRoomTimelineView: View, TextBasedRoomTimelineViewProtocol {
     static let maxLinkPreviewsToRender = 2
@@ -31,39 +32,85 @@ struct TextRoomTimelineView: View, TextBasedRoomTimelineViewProtocol {
         return Array(links.prefix(maxLinkPreviewsToRender))
     }
 
+    static func metadataURLs(links: [URL],
+                             enabled: Bool,
+                             presentation: JunchatLinkPresentation,
+                             shareCardURL: URL?) -> [URL] {
+        guard presentation == .card, enabled else {
+            return []
+        }
+
+        if let shareCardURL {
+            return [shareCardURL]
+        }
+
+        return linkPreviewURLs(links: links, enabled: true)
+    }
+
     var body: some View {
+        let shareCard = JunchatShareCard.parse(body: timelineItem.body, links: timelineItem.links)
+        let presentation = context?.viewState.linkPresentationOverrides[timelineItem.id]
+            ?? JunchatLinkPresentation.encodedPresentation(in: timelineItem.content.formattedBodyHTMLString)
+        let shareCardMetadata = shareCard.flatMap {
+            linkMetadata[$0.url]?.metadata ?? context?.viewState.linkMetadataProvider?.metadataItems[$0.url]?.metadata
+        }
+
         TimelineStyler(timelineItem: timelineItem) {
             VStack(alignment: .leading, spacing: 8) {
-                if let attributedString = timelineItem.content.formattedBody {
-                    FormattedBodyText(attributedString: attributedString,
-                                      additionalWhitespacesCount: timelineItem.additionalWhitespaces(),
-                                      boostFontSize: timelineItem.shouldBoost)
-                } else {
-                    FormattedBodyText(text: timelineItem.body,
-                                      additionalWhitespacesCount: timelineItem.additionalWhitespaces(),
-                                      boostFontSize: timelineItem.shouldBoost)
-                }
-
-                if context?.viewState.linkPreviewsEnabled ?? false, !linkMetadata.keys.isEmpty {
-                    VStack(spacing: 8) {
-                        ForEach(linkMetadata.keys, id: \.absoluteString) { url in
-                            let metadata = linkMetadata[url]?.metadata ?? context?.viewState.linkMetadataProvider?.metadataItems[url]?.metadata
-                            LinkPreviewView(url: url, metadata: metadata)
-                        }
+                if let shareCard, presentation == .card, shareCard.shouldReplaceBody {
+                    JunchatShareCardView(card: shareCard, metadata: shareCardMetadata) {
+                        UIApplication.shared.open(shareCard.url)
                     }
-                    .padding(.bottom, 16)
+                } else {
+                    messageBody
+
+                    if let shareCard, presentation == .card {
+                        JunchatShareCardView(card: shareCard, metadata: shareCardMetadata) {
+                            UIApplication.shared.open(shareCard.url)
+                        }
+                    } else if presentation == .card,
+                              context?.viewState.linkPreviewsEnabled ?? false,
+                              !linkMetadata.keys.isEmpty {
+                        VStack(spacing: 8) {
+                            ForEach(linkMetadata.keys, id: \.absoluteString) { url in
+                                let metadata = linkMetadata[url]?.metadata ?? context?.viewState.linkMetadataProvider?.metadataItems[url]?.metadata
+                                LinkPreviewView(url: url, metadata: metadata)
+                            }
+                        }
+                        .padding(.bottom, 16)
+                    }
                 }
             }
         }
-        .task { await fetchLinkPreviews() }
+        .task(id: presentation) { await fetchLinkPreviews() }
+    }
+
+    @ViewBuilder
+    private var messageBody: some View {
+        if let attributedString = timelineItem.content.formattedBody {
+            FormattedBodyText(attributedString: attributedString,
+                              additionalWhitespacesCount: timelineItem.additionalWhitespaces(),
+                              boostFontSize: timelineItem.shouldBoost)
+        } else {
+            FormattedBodyText(text: timelineItem.body,
+                              additionalWhitespacesCount: timelineItem.additionalWhitespaces(),
+                              boostFontSize: timelineItem.shouldBoost)
+        }
     }
 
     private func fetchLinkPreviews() async {
-        let urls = Self.linkPreviewURLs(links: timelineItem.links,
-                                        enabled: context?.viewState.linkPreviewsEnabled ?? false)
         guard let metadataProvider = context?.viewState.linkMetadataProvider else {
             return
         }
+
+        let shareCard = JunchatShareCard.parse(body: timelineItem.body, links: timelineItem.links)
+        let presentation = context?.viewState.linkPresentationOverrides[timelineItem.id]
+            ?? JunchatLinkPresentation.encodedPresentation(in: timelineItem.content.formattedBodyHTMLString)
+        let linkPreviewsEnabled = context?.viewState.linkPreviewsEnabled ?? false
+        let urls = Self.metadataURLs(links: timelineItem.links,
+                                     enabled: linkPreviewsEnabled,
+                                     presentation: presentation,
+                                     shareCardURL: shareCard?.url)
 
         for url in urls {
             if case let .success(metadata) = await metadataProvider.fetchMetadataFor(url: url) {
