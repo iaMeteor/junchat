@@ -63,6 +63,17 @@ enum CallScreenJavaScriptMessageName: String, CaseIterable {
     case onBackButtonPressed
     /// Forward logs to the native side for debugging purposes.
     case forwardLogs
+
+    static var widgetMessageSourceTrustFunctionScript: String {
+        """
+        (event, currentWindow) => {
+            const isLocalCall = currentWindow.location.protocol === "file:";
+            const expectedOrigin = isLocalCall ? "null" : currentWindow.location.origin;
+            const sourceIsTrusted = event.source === currentWindow || (isLocalCall && event.source === null);
+            return sourceIsTrusted && event.origin === expectedOrigin;
+        }
+        """
+    }
     
     private var postMessageScript: String {
         switch self {
@@ -71,8 +82,8 @@ enum CallScreenJavaScriptMessageName: String, CaseIterable {
             window.addEventListener(
                 "message",
                 (event) => {
-                    const expectedOrigin = window.location.protocol === "file:" ? "null" : window.location.origin;
-                    if (event.source !== window || event.origin !== expectedOrigin) {
+                    const sourceIsTrusted = (\(Self.widgetMessageSourceTrustFunctionScript))(event, window);
+                    if (!sourceIsTrusted) {
                         console.warn("-- skipped event handling from an untrusted window.");
                         return;
                     }

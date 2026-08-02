@@ -8,10 +8,8 @@
 
 @testable import ElementX
 import Foundation
-import LinkPresentation
 import SwiftUI
 import Testing
-import UIKit
 
 struct TextBasedRoomTimelineTests {
     @Test
@@ -81,55 +79,44 @@ struct TextBasedRoomTimelineTests {
         #expect(DynamicTypeSize.accessibility5.junchatUsesSeparateTimelineSendInfo)
     }
 
-    @Test
-    func junchatShareCardParsesTitleSummaryAndURL() throws {
-        let card = try #require(JunchatShareCard.parse(body: """
-        直播日照：张一鸣，再当中国首富
-        据彭博社报道，字节跳动估值上涨
-        https://www.toutiao.com/article/123
-        """))
+    @Test @MainActor
+    func outgoingURLMessageCanBeRedacted() throws {
+        let url = try #require(URL(string: "https://example.com/path"))
+        var formattedBody = AttributedString(url.absoluteString)
+        formattedBody.link = url
+        let timelineItem = TextRoomTimelineItem(id: .randomEvent,
+                                                timestamp: .mock,
+                                                isOutgoing: true,
+                                                isEditable: true,
+                                                canBeRepliedTo: true,
+                                                sender: .init(id: "@alice:example.com"),
+                                                content: .init(body: url.absoluteString, formattedBody: formattedBody))
+        let actions = try #require(TimelineItemMenuActionProvider(timelineItem: timelineItem,
+                                                                  canCurrentUserSendMessage: true,
+                                                                  canCurrentUserRedactSelf: true,
+                                                                  canCurrentUserRedactOthers: false,
+                                                                  canCurrentUserPin: false,
+                                                                  pinnedEventIDs: [],
+                                                                  isDM: true,
+                                                                  isViewSourceEnabled: false,
+                                                                  areThreadsEnabled: false,
+                                                                  timelineKind: .live,
+                                                                  emojiProvider: EmojiProvider(appSettings: AppSettings()))
+                .makeActions())
 
-        #expect(card.title == "直播日照：张一鸣，再当中国首富")
-        #expect(card.summary == "据彭博社报道，字节跳动估值上涨")
-        #expect(card.host == "toutiao.com")
-        #expect(card.shouldReplaceBody)
+        #expect(timelineItem.links == [url])
+        #expect(actions.secondaryActions.contains(.redact))
     }
 
     @Test
-    func junchatShareCardParsesSingleLineShare() throws {
-        let card = try #require(JunchatShareCard.parse(body: "可以看看这个 https://example.com/news?id=1"))
+    func URLPreviewsRequireTheExplicitPreferenceAndRemainBounded() throws {
+        let links = try [
+            #require(URL(string: "https://example.com/one")),
+            #require(URL(string: "https://example.com/two")),
+            #require(URL(string: "https://example.com/three"))
+        ]
 
-        #expect(card.title == "可以看看这个")
-        #expect(card.host == "example.com")
-        #expect(card.shouldReplaceBody)
-    }
-
-    @Test
-    func junchatShareCardIgnoresPlainText() {
-        #expect(JunchatShareCard.parse(body: "没有链接的普通消息") == nil)
-    }
-
-    @Test
-    func junchatShareCardFallsBackToHostForURLOnly() throws {
-        let card = try #require(JunchatShareCard.parse(body: "https://www.example.com/path"))
-
-        #expect(card.title == "example.com")
-        #expect(card.summary == nil)
-        #expect(card.shouldReplaceBody)
-    }
-
-    @Test
-    func junchatSharePreviewImageLoadsMetadataImageProvider() async {
-        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 2, height: 2))
-        let image = renderer.image { context in
-            UIColor.systemGreen.setFill()
-            context.fill(CGRect(origin: .zero, size: CGSize(width: 2, height: 2)))
-        }
-        let metadata = LPLinkMetadata()
-        metadata.imageProvider = NSItemProvider(object: image)
-
-        let previewImage = await JunchatSharePreviewImage.load(from: metadata)
-
-        #expect(previewImage != nil)
+        #expect(TextRoomTimelineView.linkPreviewURLs(links: links, enabled: false).isEmpty)
+        #expect(TextRoomTimelineView.linkPreviewURLs(links: links, enabled: true) == Array(links.prefix(2)))
     }
 }

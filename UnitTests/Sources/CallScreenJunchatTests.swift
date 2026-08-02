@@ -11,6 +11,7 @@ import Combine
 import CryptoKit
 @testable import ElementX
 import Foundation
+import JavaScriptCore
 import Testing
 import UIKit
 
@@ -77,13 +78,71 @@ struct CallScreenJunchatTests {
     }
 
     @Test
-    func widgetBridgeAcceptsOnlyMessagesPostedByTheTrustedMainWindow() {
-        let script = CallScreenJavaScriptMessageName.allCasesInjectionScript
+    func widgetBridgeAcceptsOnlyTrustedMainWindowAndWKWebViewFileMessages() throws {
+        let context = try #require(JSContext())
+        let results = try #require(context.evaluateScript("""
+        const trustPolicy = (\(CallScreenJavaScriptMessageName.widgetMessageSourceTrustFunctionScript));
+        const evaluateTrust = (protocol, locationOrigin, eventOrigin, sourceKind) => {
+            const currentWindow = { location: { protocol, origin: locationOrigin } };
+            const source = sourceKind === "window" ? currentWindow : sourceKind === "null" ? null : {};
+            return trustPolicy({ source, origin: eventOrigin }, currentWindow);
+        };
+        [
+            evaluateTrust("file:", "null", "null", "null"),
+            evaluateTrust("file:", "null", "null", "window"),
+            evaluateTrust("file:", "null", "null", "foreign"),
+            evaluateTrust("file:", "null", "https://evil.example", "null"),
+            evaluateTrust("https:", "https://call.example", "https://call.example", "window"),
+            evaluateTrust("https:", "https://call.example", "https://call.example", "null"),
+            evaluateTrust("https:", "https://call.example", "https://call.example", "foreign"),
+            evaluateTrust("https:", "https://call.example", "https://evil.example", "window"),
+        ];
+        """).toArray() as? [Bool])
 
-        #expect(script.contains("event.source !== window"))
-        #expect(script.contains("event.origin !== expectedOrigin"))
-        #expect(script.contains("window.location.origin"))
-        #expect(script.contains("window.location.protocol === \"file:\" ? \"null\""))
+        #expect(context.exception == nil)
+        #expect(results == [true, true, false, false, true, false, false, false])
+    }
+
+    @Test
+    func widgetBridgeInjectionExecutesAndForwardsBundledFileMessages() throws {
+        let context = try #require(JSContext())
+        let forwardedCount = context.evaluateScript("""
+        let widgetMessageHandler;
+        const forwardedWidgetMessages = [];
+        const console = {
+            log() {},
+            debug() {},
+            info() {},
+            warn() {},
+            error() {},
+        };
+        const window = {
+            location: { protocol: "file:", origin: "null" },
+            controls: {},
+            addEventListener: (name, handler) => {
+                if (name === "message") widgetMessageHandler = handler;
+            },
+            webkit: {
+                messageHandlers: {
+                    widgetAction: { postMessage: value => forwardedWidgetMessages.push(value) },
+                    showNativeOutputDevicePicker: { postMessage() {} },
+                    onOutputDeviceSelect: { postMessage() {} },
+                    onBackButtonPressed: { postMessage() {} },
+                    forwardLogs: { postMessage() {} },
+                },
+            },
+        };
+        \(CallScreenJavaScriptMessageName.allCasesInjectionScript)
+        widgetMessageHandler({
+            source: null,
+            origin: "null",
+            data: { api: "fromWidget", action: "content_loaded" },
+        });
+        forwardedWidgetMessages.length;
+        """).toInt32()
+
+        #expect(context.exception == nil)
+        #expect(forwardedCount == 1)
     }
 
     @Test
