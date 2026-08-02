@@ -99,7 +99,7 @@ struct JunchatShareCard: Equatable {
         let title = textCandidates.first ?? host
         let summary = textCandidates.dropFirst().first { $0 != title }
         let bodyWithoutURLs = strippedShareText(from: body, urlStrings: urlStrings)
-        let shouldReplaceBody = bodyWithoutURLs.isEmpty
+        let shouldReplaceBody = detectedURLs.count == 1 && bodyWithoutURLs.isEmpty
 
         return JunchatShareCard(url: url,
                                 title: title.junchatShareCardLimited(to: 96),

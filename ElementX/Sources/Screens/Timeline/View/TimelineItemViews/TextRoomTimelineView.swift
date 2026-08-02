@@ -12,6 +12,12 @@ import SwiftUI
 import UIKit
 
 struct TextRoomTimelineView: View, TextBasedRoomTimelineViewProtocol {
+    private struct MetadataTaskID: Hashable {
+        let presentation: JunchatLinkPresentation
+        let shareCardURL: URL?
+        let links: [URL]
+    }
+
     static let maxLinkPreviewsToRender = 2
 
     @Environment(\.timelineContext) private var context
@@ -51,9 +57,17 @@ struct TextRoomTimelineView: View, TextBasedRoomTimelineViewProtocol {
         let shareCard = JunchatShareCard.parse(body: timelineItem.body, links: timelineItem.links)
         let presentation = context?.viewState.linkPresentationOverrides[timelineItem.id]
             ?? JunchatLinkPresentation.encodedPresentation(in: timelineItem.content.formattedBodyHTMLString)
+        let previewURLs = Self.metadataURLs(links: timelineItem.links,
+                                            enabled: context?.viewState.linkPreviewsEnabled ?? false,
+                                            presentation: presentation,
+                                            shareCardURL: shareCard?.url)
+        let renderedPreviewURLs = previewURLs.filter { linkMetadata[$0] != nil }
         let shareCardMetadata = shareCard.flatMap {
             linkMetadata[$0.url]?.metadata ?? context?.viewState.linkMetadataProvider?.metadataItems[$0.url]?.metadata
         }
+        let metadataTaskID = MetadataTaskID(presentation: presentation,
+                                            shareCardURL: shareCard?.url,
+                                            links: timelineItem.links)
 
         TimelineStyler(timelineItem: timelineItem) {
             VStack(alignment: .leading, spacing: 8) {
@@ -68,11 +82,9 @@ struct TextRoomTimelineView: View, TextBasedRoomTimelineViewProtocol {
                         JunchatShareCardView(card: shareCard, metadata: shareCardMetadata) {
                             UIApplication.shared.open(shareCard.url)
                         }
-                    } else if presentation == .card,
-                              context?.viewState.linkPreviewsEnabled ?? false,
-                              !linkMetadata.keys.isEmpty {
+                    } else if !renderedPreviewURLs.isEmpty {
                         VStack(spacing: 8) {
-                            ForEach(linkMetadata.keys, id: \.absoluteString) { url in
+                            ForEach(renderedPreviewURLs, id: \.absoluteString) { url in
                                 let metadata = linkMetadata[url]?.metadata ?? context?.viewState.linkMetadataProvider?.metadataItems[url]?.metadata
                                 LinkPreviewView(url: url, metadata: metadata)
                             }
@@ -82,7 +94,7 @@ struct TextRoomTimelineView: View, TextBasedRoomTimelineViewProtocol {
                 }
             }
         }
-        .task(id: presentation) { await fetchLinkPreviews() }
+        .task(id: metadataTaskID) { await fetchLinkPreviews() }
     }
 
     @ViewBuilder

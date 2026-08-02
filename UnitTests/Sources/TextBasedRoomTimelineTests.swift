@@ -169,6 +169,14 @@ struct TextBasedRoomTimelineTests {
     }
 
     @Test
+    func multipleURLMessageKeepsEveryLinkVisible() throws {
+        let body = "https://example.com/one\nhttps://example.com/two"
+        let card = try #require(JunchatShareCard.parse(body: body))
+
+        #expect(!card.shouldReplaceBody)
+    }
+
+    @Test
     func URLPreviewsRequireTheExplicitPreferenceAndRemainBounded() throws {
         let links = try [
             #require(URL(string: "https://example.com/one")),
