@@ -27,7 +27,7 @@ final class NotificationManagerTests {
         ServiceLocator.shared.settings
     }
 
-    init() {
+    init() async {
         AppSettings.resetAllSettings()
         notificationCenter = UserNotificationCenterMock()
         notificationCenter.requestAuthorizationOptionsReturnValue = true
@@ -37,7 +37,17 @@ final class NotificationManagerTests {
         
         notificationManager = NotificationManager(notificationCenter: notificationCenter, appSettings: appSettings)
         notificationManager.start()
-        notificationManager.setUserSession(mockUserSession)
+        await waitForConfirmation("initial session tasks should finish", expectedCount: 2, timeout: .seconds(10)) { confirm in
+            notificationCenter.setBadgeCountClosure = { _ in confirm() }
+            notificationCenter.notificationSettingsClosure = {
+                confirm()
+                return await UNUserNotificationCenter.current().notificationSettings()
+            }
+            notificationManager.setUserSession(mockUserSession)
+        }
+        notificationCenter.setBadgeCountClosure = nil
+        notificationCenter.notificationSettingsClosure = { await UNUserNotificationCenter.current().notificationSettings() }
+        notificationCenter.setBadgeCountCallsCount = 0
     }
     
     deinit {
@@ -154,6 +164,101 @@ final class NotificationManagerTests {
     }
 
     @Test
+    func whenSynchronizingBadgeCount_badgeMatchesTheReconciledLedger() async {
+        await notificationManager.removeDeliveredNotificationsForFullyReadRooms([
+            roomSummary(id: "1", hasUnreadMessages: true),
+            roomSummary(id: "2", hasUnreadMessages: true)
+        ], userID: clientProxy.userID)
+        notificationCenter.setBadgeCountCallsCount = 0
+
+        await notificationManager.synchronizeBadgeCount()
+
+        #expect(notificationCenter.setBadgeCountCallsCount == 1)
+        #expect(notificationCenter.setBadgeCountReceivedCount == 2)
+    }
+
+    @Test
+    func whenSynchronizingWithoutAnActiveSession_badgeIsNotCleared() async {
+        let startupNotificationCenter = UserNotificationCenterMock()
+        let startupNotificationManager = NotificationManager(notificationCenter: startupNotificationCenter, appSettings: appSettings)
+        startupNotificationManager.start()
+
+        await startupNotificationManager.synchronizeBadgeCount()
+
+        #expect(startupNotificationCenter.setBadgeCountCallsCount == 0)
+    }
+
+    @Test
+    func whenTheActiveSessionLedgerIsUnavailable_badgeIsNotCleared() async {
+        appSettings.notificationBadgeRoomLedger.prepare(for: "@other:user.net")
+        notificationCenter.setBadgeCountCallsCount = 0
+
+        await notificationManager.synchronizeBadgeCount()
+
+        #expect(notificationCenter.setBadgeCountCallsCount == 0)
+    }
+
+    @Test
+    func whenRestoringTheInitialSession_badgeIsRestoredFromThePersistedLedger() async {
+        await notificationManager.removeDeliveredNotificationsForFullyReadRooms([
+            roomSummary(id: "1", hasUnreadMessages: true)
+        ], userID: clientProxy.userID)
+        let startupNotificationCenter = UserNotificationCenterMock()
+        startupNotificationCenter.authorizationStatusReturnValue = .denied
+        startupNotificationCenter.notificationSettingsClosure = { await UNUserNotificationCenter.current().notificationSettings() }
+        let startupNotificationManager = NotificationManager(notificationCenter: startupNotificationCenter, appSettings: appSettings)
+        startupNotificationManager.start()
+
+        await waitForConfirmation("badge should be restored", timeout: .seconds(10)) { confirm in
+            startupNotificationCenter.setBadgeCountClosure = { count in
+                guard count == 1 else { return }
+                confirm()
+            }
+            startupNotificationManager.setUserSession(mockUserSession)
+        }
+
+        #expect(startupNotificationCenter.setBadgeCountReceivedCount == 1)
+    }
+
+    @Test
+    func whenEnteringBackground_badgeIsResynchronized() async {
+        await notificationManager.removeDeliveredNotificationsForFullyReadRooms([
+            roomSummary(id: "1", hasUnreadMessages: true)
+        ], userID: clientProxy.userID)
+        notificationCenter.setBadgeCountCallsCount = 0
+
+        await waitForConfirmation("badge should be synchronized", timeout: .seconds(10)) { confirm in
+            notificationCenter.setBadgeCountClosure = { count in
+                guard count == 1 else { return }
+                confirm()
+            }
+            NotificationCenter.default.post(name: UIApplication.didEnterBackgroundNotification, object: nil)
+        }
+
+        #expect(notificationCenter.setBadgeCountReceivedCount == 1)
+        #expect(notificationCenter.setBadgeCountCallsCount == 1)
+    }
+
+    @Test
+    func whenBecomingActive_badgeIsResynchronized() async {
+        await notificationManager.removeDeliveredNotificationsForFullyReadRooms([
+            roomSummary(id: "1", hasUnreadMessages: true)
+        ], userID: clientProxy.userID)
+        notificationCenter.setBadgeCountCallsCount = 0
+
+        await waitForConfirmation("badge should be synchronized", timeout: .seconds(10)) { confirm in
+            notificationCenter.setBadgeCountClosure = { count in
+                guard count == 1 else { return }
+                confirm()
+            }
+            NotificationCenter.default.post(name: UIApplication.didBecomeActiveNotification, object: nil)
+        }
+
+        #expect(notificationCenter.setBadgeCountReceivedCount == 1)
+        #expect(notificationCenter.setBadgeCountCallsCount == 1)
+    }
+
+    @Test
     func whenOpeningAReconciledUnreadRoom_badgeRemovesTheRoom() async {
         await notificationManager.removeDeliveredNotificationsForFullyReadRooms([
             roomSummary(id: "1", hasUnreadMessages: true),
@@ -197,6 +302,36 @@ final class NotificationManagerTests {
         let newClientProxy = ClientProxyMock(.init(userID: "@other:user.net"))
         let newUserSession = UserSessionMock(.init(clientProxy: newClientProxy))
         notificationManager.setUserSession(newUserSession)
+        releaseWrite?.resume()
+        await oldAccountWrite.value
+        await Task.yield()
+
+        let lastBadge = try #require(notificationCenter.setBadgeCountReceivedInvocations.last)
+        #expect(lastBadge == 0)
+    }
+
+    @Test
+    func sessionRemovalCorrectsAnInFlightOldAccountBadgeWrite() async throws {
+        let (writeStarted, writeStartedContinuation) = AsyncStream.makeStream(of: Void.self)
+        var releaseWrite: CheckedContinuation<Void, Never>?
+        var shouldSuspend = true
+        notificationCenter.setBadgeCountClosure = { count in
+            guard count == 1, shouldSuspend else { return }
+            shouldSuspend = false
+            writeStartedContinuation.yield()
+            await withCheckedContinuation { releaseWrite = $0 }
+        }
+
+        let oldAccountWrite = Task {
+            await notificationManager.removeDeliveredNotificationsForFullyReadRooms([
+                roomSummary(id: "1", hasUnreadMessages: true)
+            ], userID: clientProxy.userID)
+        }
+        for await _ in writeStarted {
+            break
+        }
+
+        notificationManager.setUserSession(nil)
         releaseWrite?.resume()
         await oldAccountWrite.value
         await Task.yield()
@@ -287,6 +422,36 @@ final class NotificationManagerTests {
         }
         
         #expect(authorizationStatusWasGranted)
+    }
+
+    @Test
+    func authorizationCompletingAfterSessionRemovalDoesNotRegisterForRemoteNotifications() async {
+        notificationCenter.authorizationStatusReturnValue = .authorized
+        notificationManager.delegate = self
+        var releaseAuthorization: CheckedContinuation<UNAuthorizationStatus, Never>?
+
+        await waitForConfirmation("authorization check should start", timeout: .seconds(10)) { confirm in
+            notificationCenter.authorizationStatusClosure = {
+                confirm()
+                return await withCheckedContinuation { releaseAuthorization = $0 }
+            }
+            notificationManager.setUserSession(mockUserSession)
+        }
+
+        await waitForConfirmation("session tasks should finish", expectedCount: 2, timeout: .seconds(10)) { confirm in
+            notificationCenter.notificationSettingsClosure = {
+                confirm()
+                return await UNUserNotificationCenter.current().notificationSettings()
+            }
+            notificationManager.setUserSession(nil)
+            guard let releaseAuthorization else {
+                Issue.record("Authorization continuation should exist")
+                return
+            }
+            releaseAuthorization.resume(returning: .authorized)
+        }
+
+        #expect(!authorizationStatusWasGranted)
     }
 
     @Test

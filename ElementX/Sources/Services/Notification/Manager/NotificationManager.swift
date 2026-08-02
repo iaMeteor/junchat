@@ -59,7 +59,15 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
         
         NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
             .sink { [weak self] _ in
-                self?.removeReceivedWhileOfflineNotification()
+                guard let self else { return }
+                removeReceivedWhileOfflineNotification()
+                synchronizeBadgeCountAfterLifecycleChange()
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: UIApplication.didEnterBackgroundNotification)
+            .sink { [weak self] _ in
+                self?.synchronizeBadgeCountAfterLifecycleChange()
             }
             .store(in: &cancellables)
     }
@@ -99,7 +107,7 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
             appSettings.notificationBadgeRoomLedger.reset()
         }
 
-        if previousUserID != nil, previousUserID != userID {
+        if previousUserID != userID {
             Task { [weak self] in
                 await self?.synchronizeBadgeCountWithActiveSession()
             }
@@ -107,12 +115,19 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
         
         // If notification permissions were given previously then attempt re-registering
         // for remote notifications on startup. Otherwise let the onboarding flow handle it
+        let expectedUserID = userID
         Task { [weak self] in
             guard let self else { return }
-            
-            if await notificationCenter.authorizationStatus() == .authorized, appSettings.enableNotifications {
-                await MainActor.run { [weak self] in
-                    self?.delegate?.registerForRemoteNotifications()
+
+            if let expectedUserID {
+                let authorizationStatus = await notificationCenter.authorizationStatus()
+                if userSession?.clientProxy.userID == expectedUserID,
+                   authorizationStatus == .authorized,
+                   appSettings.enableNotifications {
+                    await MainActor.run { [weak self] in
+                        guard self?.userSession?.clientProxy.userID == expectedUserID else { return }
+                        self?.delegate?.registerForRemoteNotifications()
+                    }
                 }
             }
             
@@ -205,11 +220,31 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
         await synchronizeBadgeCountWithActiveSession()
     }
 
+    func synchronizeBadgeCount() async {
+        await synchronizeBadgeCountWithActiveSession()
+    }
+
     private func synchronizeBadgeCountWithActiveSession() async {
+        guard userSession?.clientProxy.userID != nil else {
+            MXLog.info("Skipped app badge synchronization without an active user session")
+            return
+        }
+
         for _ in 0..<8 {
             let userID = userSession?.clientProxy.userID
-            let snapshot = userID.flatMap { appSettings.notificationBadgeRoomLedger.snapshot(for: $0) }
-            let badgeCount = snapshot?.count ?? 0
+            let snapshot: NotificationBadgeSnapshot?
+            let badgeCount: Int
+            if let userID {
+                guard let resolvedSnapshot = appSettings.notificationBadgeRoomLedger.snapshot(for: userID) else {
+                    MXLog.error("Skipped app badge synchronization because the ledger snapshot is unavailable")
+                    return
+                }
+                snapshot = resolvedSnapshot
+                badgeCount = resolvedSnapshot.count
+            } else {
+                snapshot = nil
+                badgeCount = 0
+            }
 
             do {
                 try await notificationCenter.setBadgeCount(badgeCount)
@@ -227,6 +262,12 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
         }
 
         MXLog.error("App badge state kept changing during synchronization")
+    }
+
+    private func synchronizeBadgeCountAfterLifecycleChange() {
+        Task { [weak self] in
+            await self?.synchronizeBadgeCountWithActiveSession()
+        }
     }
     
     private func removeReceivedWhileOfflineNotification() {
