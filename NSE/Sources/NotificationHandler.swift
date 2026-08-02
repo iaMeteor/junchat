@@ -124,6 +124,7 @@ class NotificationHandler {
         let correctedBadge = settings.notificationBadgeRoomLedger.applyNotification(userID: userID,
                                                                                     roomID: roomID,
                                                                                     contributesToBadge: contributesToBadge,
+                                                                                    isAuthoritative: notificationContent.hasAuthoritativeBadgeForDelivery,
                                                                                     fallback: notificationContent.badgeForDelivery)
         notificationContent.overrideBadgeForDelivery(correctedBadge)
         MXLog.info("\(tag) Reconciled badge value: \(correctedBadge?.stringValue ?? "nil")")

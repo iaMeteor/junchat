@@ -7,20 +7,25 @@
 //
 
 import Combine
+import Dispatch
 import MatrixRustSDK
 import UserNotifications
 
 final class NotificationContentCompletion: @unchecked Sendable {
-    typealias ContentFinalizer = (UNNotificationContent, @escaping (UNNotificationContent) -> Void) -> Void
+    typealias ContentFinalizer = (UNNotificationContent,
+                                  @escaping (UNNotificationContent) -> Void,
+                                  @escaping (UNNotificationContent) -> Void) -> Void
 
-    private let lock = NSLock()
+    private let lock = NSCondition()
     private var bestAttemptContent: UNNotificationContent?
     private var contentHandler: ((UNNotificationContent) -> Void)?
     private var completionHook: (() -> Void)?
     private var contentFinalizer: ContentFinalizer?
+    private var isFinalizing = false
+    private var isDelivering = false
 
     init(bestAttemptContent: UNNotificationContent,
-         contentFinalizer: @escaping ContentFinalizer = { content, contentHandler in contentHandler(content) },
+         contentFinalizer: @escaping ContentFinalizer = { content, _, contentHandler in contentHandler(content) },
          completionHook: (() -> Void)? = nil,
          contentHandler: @escaping (UNNotificationContent) -> Void) {
         self.bestAttemptContent = bestAttemptContent
@@ -31,43 +36,271 @@ final class NotificationContentCompletion: @unchecked Sendable {
 
     func complete(with content: UNNotificationContent? = nil) {
         lock.lock()
-        guard let contentHandler,
+        guard !isFinalizing,
+              contentHandler != nil,
               let contentFinalizer,
               let content = content ?? bestAttemptContent else {
             lock.unlock()
             return
         }
 
+        bestAttemptContent = content
+        isFinalizing = true
+        lock.unlock()
+
+        contentFinalizer(content,
+                         { [weak self] updatedContent in
+                             self?.updateBestAttemptContent(updatedContent)
+                         },
+                         { [weak self] finalizedContent in
+                             self?.deliver(finalizedContent)
+                         })
+    }
+
+    @discardableResult
+    func prepare(bestAttemptContent: UNNotificationContent,
+                 contentFinalizer: @escaping ContentFinalizer) -> Bool {
+        lock.withLock {
+            guard self.contentHandler != nil, !isFinalizing else {
+                return false
+            }
+
+            self.bestAttemptContent = bestAttemptContent
+            self.contentFinalizer = contentFinalizer
+            return true
+        }
+    }
+
+    func expire() {
+        lock.lock()
+        while isDelivering {
+            lock.wait()
+        }
+        guard let content = bestAttemptContent else {
+            lock.unlock()
+            return
+        }
+        lock.unlock()
+
+        deliver(content)
+    }
+
+    private func updateBestAttemptContent(_ content: UNNotificationContent) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard contentHandler != nil else { return }
+        bestAttemptContent = content.copy() as? UNNotificationContent ?? content
+    }
+
+    private func deliver(_ content: UNNotificationContent) {
+        lock.lock()
+        guard let contentHandler else {
+            lock.unlock()
+            return
+        }
+
         let completionHook = completionHook
+        isDelivering = true
         bestAttemptContent = nil
         self.contentHandler = nil
-        self.contentFinalizer = nil
+        contentFinalizer = nil
         self.completionHook = nil
         lock.unlock()
 
+        contentHandler(content)
+
+        lock.lock()
+        isDelivering = false
+        lock.broadcast()
+        lock.unlock()
+
         completionHook?()
-        contentFinalizer(content, contentHandler)
     }
 }
 
 enum NSEBadgeContentFinalizer {
+    typealias BadgeSetter = (Int, @escaping (Error?) -> Void) -> Void
+    private static let maximumReassertionCount = 4
+
     static func finalize(_ content: UNNotificationContent,
                          userID: String?,
                          ledger: NotificationBadgeRoomLedger,
-                         delivery: (UNNotificationContent) -> Void) {
-        ledger.withCurrentBadge(userID: userID, fallback: content.badgeForDelivery) { badge in
+                         authoritativeBadgeClaim: NSEAuthoritativeBadgeSequencer.Claim? = nil,
+                         authoritativeBadgeSequencer: NSEAuthoritativeBadgeSequencer? = nil,
+                         badgeSetter: @escaping BadgeSetter = { count, completion in
+                             UNUserNotificationCenter.current().setBadgeCount(count, withCompletionHandler: completion)
+                         },
+                         contentUpdate: @escaping (UNNotificationContent) -> Void = { _ in },
+                         delivery: @escaping (UNNotificationContent) -> Void) {
+        let submitAndDeliver: (NSNumber?, Bool) -> Void = { badge, shouldReassertLedger in
             guard let content = content.mutableCopy() as? UNMutableNotificationContent else {
                 delivery(content)
                 return
             }
             content.overrideBadgeForDelivery(badge)
-            delivery(content)
+            contentUpdate(content)
+
+            guard let badge else {
+                delivery(content)
+                return
+            }
+
+            func submit(_ badge: NSNumber, remainingReassertions: Int) {
+                badgeSetter(badge.intValue) { error in
+                    if let error {
+                        MXLog.error("Failed submitting the final notification badge: \(error)")
+                        delivery(content)
+                        return
+                    }
+
+                    guard shouldReassertLedger else {
+                        MXLog.info("Submitted the final authoritative notification badge: \(badge)")
+                        delivery(content)
+                        return
+                    }
+
+                    ledger.withCurrentBadge(userID: userID, fallback: nil) { latestBadge in
+                        guard let latestBadge, latestBadge != badge else {
+                            MXLog.info("Submitted the final notification badge: \(badge)")
+                            delivery(content)
+                            return
+                        }
+
+                        content.overrideBadgeForDelivery(latestBadge)
+                        contentUpdate(content)
+                        guard remainingReassertions > 0 else {
+                            MXLog.error("Notification badge kept changing while the extension was finishing")
+                            delivery(content)
+                            return
+                        }
+
+                        submit(latestBadge, remainingReassertions: remainingReassertions - 1)
+                    }
+                }
+            }
+
+            submit(badge, remainingReassertions: Self.maximumReassertionCount)
+        }
+
+        if userID == nil,
+           content.hasAuthoritativeBadgeForDelivery,
+           let authoritativeBadgeClaim,
+           let authoritativeBadgeSequencer {
+            guard let content = content.mutableCopy() as? UNMutableNotificationContent else {
+                delivery(content)
+                return
+            }
+
+            func deliverLatestContent() {
+                authoritativeBadgeSequencer.deliverLatest(replacing: authoritativeBadgeClaim) { claim in
+                    content.overrideBadgeForDelivery(NSNumber(value: claim.badge))
+                    contentUpdate(content)
+                    delivery(content)
+                }
+            }
+
+            func submit(_ proposedClaim: NSEAuthoritativeBadgeSequencer.Claim, remainingReassertions: Int) {
+                let claim = authoritativeBadgeSequencer.latestClaim(replacing: proposedClaim)
+                content.overrideBadgeForDelivery(NSNumber(value: claim.badge))
+                contentUpdate(content)
+
+                badgeSetter(claim.badge) { error in
+                    if let error {
+                        MXLog.error("Failed submitting the final authoritative notification badge: \(error)")
+                        deliverLatestContent()
+                        return
+                    }
+
+                    let latestClaim = authoritativeBadgeSequencer.latestClaim(replacing: claim)
+                    guard latestClaim != claim else {
+                        if authoritativeBadgeSequencer.deliverIfCurrent(latestClaim, delivery: { delivery(content) }) {
+                            MXLog.info("Submitted the final authoritative notification badge: \(claim.badge)")
+                            return
+                        }
+
+                        guard remainingReassertions > 0 else {
+                            MXLog.error("Authoritative notification badge kept changing while the extension was finishing")
+                            deliverLatestContent()
+                            return
+                        }
+
+                        submit(authoritativeBadgeSequencer.latestClaim(replacing: latestClaim),
+                               remainingReassertions: remainingReassertions - 1)
+                        return
+                    }
+
+                    guard remainingReassertions > 0 else {
+                        MXLog.error("Authoritative notification badge kept changing while the extension was finishing")
+                        deliverLatestContent()
+                        return
+                    }
+
+                    submit(latestClaim, remainingReassertions: remainingReassertions - 1)
+                }
+            }
+
+            submit(authoritativeBadgeClaim, remainingReassertions: Self.maximumReassertionCount)
+        } else if userID == nil, content.hasAuthoritativeBadgeForDelivery {
+            submitAndDeliver(content.badgeForDelivery, false)
+        } else {
+            ledger.withCurrentBadge(userID: userID, fallback: content.badgeForDelivery) { badge in
+                submitAndDeliver(badge, true)
+            }
+        }
+    }
+}
+
+final class NSEAuthoritativeBadgeSequencer: @unchecked Sendable {
+    struct Claim: Equatable {
+        fileprivate let scope: String
+        fileprivate let generation: UInt64
+        let badge: Int
+    }
+
+    private let lock = NSLock()
+    private var generation: UInt64 = 0
+    private var latestClaims = [String: Claim]()
+
+    func claim(for content: UNNotificationContent, resolvedReceiverID: String?) -> Claim? {
+        guard resolvedReceiverID == nil,
+              content.hasAuthoritativeBadgeForDelivery,
+              let badge = content.badgeForDelivery?.intValue else {
+            return nil
+        }
+
+        let scope = content.pusherNotificationClientIdentifier ?? "unscoped"
+        return lock.withLock {
+            generation &+= 1
+            let claim = Claim(scope: scope, generation: generation, badge: badge)
+            latestClaims[scope] = claim
+            return claim
+        }
+    }
+
+    func latestClaim(replacing claim: Claim) -> Claim {
+        lock.withLock { latestClaims[claim.scope] ?? claim }
+    }
+
+    func deliverIfCurrent(_ claim: Claim, delivery: () -> Void) -> Bool {
+        lock.withLock {
+            guard latestClaims[claim.scope] == claim else {
+                return false
+            }
+
+            delivery()
+            return true
+        }
+    }
+
+    func deliverLatest(replacing claim: Claim, delivery: (Claim) -> Void) {
+        lock.withLock {
+            delivery(latestClaims[claim.scope] ?? claim)
         }
     }
 }
 
 final class NotificationContentCompletionRegistry: @unchecked Sendable {
-    private let lock = NSLock()
+    private let lock = NSCondition()
     private var completions = [UUID: NotificationContentCompletion]()
     private var hasExpired = false
 
@@ -77,7 +310,7 @@ final class NotificationContentCompletionRegistry: @unchecked Sendable {
 
     @discardableResult
     func register(bestAttemptContent: UNNotificationContent,
-                  contentFinalizer: @escaping NotificationContentCompletion.ContentFinalizer = { content, contentHandler in contentHandler(content) },
+                  contentFinalizer: @escaping NotificationContentCompletion.ContentFinalizer = { content, _, contentHandler in contentHandler(content) },
                   contentHandler: @escaping (UNNotificationContent) -> Void) -> NotificationContentCompletion {
         let identifier = UUID()
         let completion = NotificationContentCompletion(bestAttemptContent: bestAttemptContent,
@@ -86,34 +319,63 @@ final class NotificationContentCompletionRegistry: @unchecked Sendable {
                                                            self?.remove(identifier)
                                                        },
                                                        contentHandler: contentHandler)
-        let shouldComplete = lock.withLock {
-            guard !hasExpired else {
-                return true
-            }
-
+        let shouldExpire = lock.withLock {
             completions[identifier] = completion
-            return false
+            return hasExpired
         }
-        if shouldComplete {
-            completion.complete()
+        if shouldExpire {
+            completion.expire()
         }
         return completion
     }
 
     func completeAll() {
-        let snapshot = lock.withLock {
-            hasExpired = true
-            let snapshot = Array(completions.values)
-            completions.removeAll()
-            return snapshot
+        lock.lock()
+        hasExpired = true
+        let snapshot = Array(completions.values)
+        lock.unlock()
+
+        snapshot.forEach { completion in
+            DispatchQueue.global().async {
+                completion.expire()
+            }
         }
-        snapshot.forEach { $0.complete() }
+
+        lock.lock()
+        while !completions.isEmpty {
+            lock.wait()
+        }
+        lock.unlock()
     }
 
     private func remove(_ identifier: UUID) {
-        lock.withLock {
-            completions[identifier] = nil
+        lock.lock()
+        if completions.removeValue(forKey: identifier) != nil {
+            lock.broadcast()
         }
+        lock.unlock()
+    }
+}
+
+enum NSEBadgeDeliveryNormalizer {
+    static func normalizedContent(_ content: UNNotificationContent,
+                                  userID: String?,
+                                  ledger: NotificationBadgeRoomLedger) -> UNMutableNotificationContent? {
+        guard let mutableContent = content.normalizedMutableContentForBadgeDelivery() else {
+            return nil
+        }
+
+        guard userID != nil || !content.hasAuthoritativeBadgeForDelivery else {
+            return mutableContent
+        }
+
+        let reconciledBadge = ledger.applyNotification(userID: userID,
+                                                       roomID: content.roomID,
+                                                       contributesToBadge: content.badgeContribution,
+                                                       isAuthoritative: content.hasAuthoritativeBadgeForDelivery,
+                                                       fallback: mutableContent.badgeForDelivery)
+        mutableContent.overrideBadgeForDelivery(reconciledBadge)
+        return mutableContent
     }
 }
 
@@ -204,6 +466,7 @@ class NotificationServiceExtension: UNNotificationServiceExtension {
 
     private static let firstNotificationThreshold: TimeInterval = 15 * 60
     private static let notificationContentCompletions = NotificationContentCompletionRegistry()
+    private static let authoritativeBadgeSequencer = NSEAuthoritativeBadgeSequencer()
     private static let firstNotificationTracker = NSEFirstNotificationTracker()
 
     private let settings: CommonSettingsProtocol = AppSettings()
@@ -281,38 +544,43 @@ class NotificationServiceExtension: UNNotificationServiceExtension {
     }
 
     override func didReceive(_ request: UNNotificationRequest, withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void) {
+        let completion = Self.notificationContentCompletions.register(bestAttemptContent: request.content.badgeReplacementContentForDelivery,
+                                                                      contentHandler: contentHandler)
         removeDuplicateDeliveredNotifications(for: request.content)
 
-        let mutableContent = request.content.normalizedMutableContentForBadgeDelivery()
-        if let mutableContent {
-            let reconciledBadge = settings.notificationBadgeRoomLedger.applyNotification(userID: request.content.receiverID,
-                                                                                         roomID: request.content.roomID,
-                                                                                         contributesToBadge: request.content.badgeContribution,
-                                                                                         fallback: mutableContent.badgeForDelivery)
-            mutableContent.overrideBadgeForDelivery(reconciledBadge)
-        }
+        let receiverID = resolvedReceiverID(for: request.content)
+        let authoritativeBadgeClaim = Self.authoritativeBadgeSequencer.claim(for: request.content,
+                                                                             resolvedReceiverID: receiverID)
+        let mutableContent = NSEBadgeDeliveryNormalizer.normalizedContent(request.content,
+                                                                          userID: receiverID,
+                                                                          ledger: settings.notificationBadgeRoomLedger)
         let normalizedContent = mutableContent ?? request.content.badgeReplacementContentForDelivery
         let bestAttemptContent = normalizedContent.copy() as? UNNotificationContent
             ?? request.content.badgeReplacementContentForDelivery
-        let completion = Self.notificationContentCompletions.register(bestAttemptContent: bestAttemptContent,
-                                                                      contentFinalizer: { [settings, receiverID = request.content.receiverID] content, contentHandler in
-                                                                          NSEBadgeContentFinalizer.finalize(content,
-                                                                                                            userID: receiverID,
-                                                                                                            ledger: settings.notificationBadgeRoomLedger,
-                                                                                                            delivery: contentHandler)
-                                                                      },
-                                                                      contentHandler: contentHandler)
+        guard completion.prepare(bestAttemptContent: bestAttemptContent,
+                                 contentFinalizer: { [settings, receiverID] content, contentUpdate, contentHandler in
+                                     NSEBadgeContentFinalizer.finalize(content,
+                                                                       userID: receiverID,
+                                                                       ledger: settings.notificationBadgeRoomLedger,
+                                                                       authoritativeBadgeClaim: authoritativeBadgeClaim,
+                                                                       authoritativeBadgeSequencer: Self.authoritativeBadgeSequencer,
+                                                                       contentUpdate: contentUpdate,
+                                                                       delivery: contentHandler)
+                                 }) else {
+            return
+        }
 
         guard let mutableContent else {
             completion.complete()
             return
         }
 
-        Task { await handle(request, notificationContent: mutableContent, completion: completion) }
+        Task { await handle(request, notificationContent: mutableContent, receiverID: receiverID, completion: completion) }
     }
 
     private func handle(_ request: UNNotificationRequest,
                         notificationContent: UNMutableNotificationContent,
+                        receiverID: String?,
                         completion: NotificationContentCompletion) async {
         let roomID: String
         let eventID: String
@@ -389,7 +657,7 @@ class NotificationServiceExtension: UNNotificationServiceExtension {
                                                           settings: settings,
                                                           contentHandler: completion.complete(with:),
                                                           notificationContent: notificationContent,
-                                                          receiverID: request.content.receiverID,
+                                                          receiverID: receiverID,
                                                           tag: tag)
 
             ExtensionLogger.logMemory(with: tag)
@@ -400,6 +668,17 @@ class NotificationServiceExtension: UNNotificationServiceExtension {
             MXLog.error("Failed creating user session with error: \(error)")
             completion.complete()
         }
+    }
+
+    private func resolvedReceiverID(for content: UNNotificationContent) -> String? {
+        guard Self.targetConfiguration != nil,
+              let clientID = content.pusherNotificationClientIdentifier else {
+            return content.receiverID
+        }
+
+        return keychainController.restorationTokens()
+            .first { $0.restorationToken.pusherNotificationClientIdentifier == clientID }?
+            .userID ?? content.receiverID
     }
 
     override func serviceExtensionTimeWillExpire() {

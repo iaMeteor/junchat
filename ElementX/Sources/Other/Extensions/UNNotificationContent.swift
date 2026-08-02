@@ -36,7 +36,7 @@ extension UNNotificationContent {
     }
 
     var badgeForDelivery: NSNumber? {
-        if userInfo[NotificationConstants.UserInfoKey.badgeContract] as? String == NotificationConstants.BadgeContract.identifier,
+        if hasAuthoritativeBadgeForDelivery,
            let badgeTotal = Self.validBadgeNumber(userInfo[NotificationConstants.UserInfoKey.badgeTotal],
                                                   maximum: NotificationConstants.BadgeContract.maximumSafeInteger) {
             return badgeTotal
@@ -47,6 +47,12 @@ extension UNNotificationContent {
         }
 
         return unreadCount as NSNumber?
+    }
+
+    var hasAuthoritativeBadgeForDelivery: Bool {
+        userInfo[NotificationConstants.UserInfoKey.badgeContract] as? String == NotificationConstants.BadgeContract.identifier
+            && Self.validBadgeNumber(userInfo[NotificationConstants.UserInfoKey.badgeTotal],
+                                     maximum: NotificationConstants.BadgeContract.maximumSafeInteger) != nil
     }
 
     var badgeContribution: Bool? {

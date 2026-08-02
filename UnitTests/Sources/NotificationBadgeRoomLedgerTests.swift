@@ -24,6 +24,300 @@ struct NotificationBadgeRoomLedgerTests {
     }
 
     @Test
+    func authoritativeBadgeIsRememberedBeforeFirstReconciliation() throws {
+        let fixture = try makeLedger()
+        let ledger = fixture.ledger
+        ledger.prepare(for: "@alice:example.org")
+        let initialRevision = try #require(ledger.snapshot(for: "@alice:example.org")?.revision)
+
+        let badge = ledger.applyNotification(userID: "@alice:example.org",
+                                             roomID: "!one:example.org",
+                                             contributesToBadge: true,
+                                             isAuthoritative: true,
+                                             fallback: 1)
+        let snapshot = try #require(ledger.snapshot(for: "@alice:example.org"))
+
+        #expect(badge == 1)
+        #expect(!snapshot.isReconciled)
+        #expect(snapshot.count == 1)
+        #expect(snapshot.recentAuthoritativeCount == 1)
+        #expect(snapshot.revision > initialRevision)
+
+        var currentBadge: NSNumber?
+        ledger.withCurrentBadge(userID: "@alice:example.org", fallback: 0) { currentBadge = $0 }
+        #expect(currentBadge == 1)
+
+        let staleReconciliation = try #require(ledger.reconcile(userID: "@alice:example.org", unreadRoomIDs: []))
+        #expect(staleReconciliation.recentAuthoritativeCount == 1)
+        #expect(staleReconciliation.count == 1)
+
+        let caughtUpReconciliation = try #require(ledger.reconcile(userID: "@alice:example.org",
+                                                                   unreadRoomIDs: ["!one:example.org"]))
+        #expect(caughtUpReconciliation.recentAuthoritativeCount == nil)
+        #expect(caughtUpReconciliation.count == 1)
+    }
+
+    @Test
+    func authoritativeZeroSurvivesAStaleUnreadFirstReconciliation() throws {
+        let fixture = try makeLedger()
+        let ledger = fixture.ledger
+        ledger.prepare(for: "@alice:example.org")
+
+        _ = ledger.applyNotification(userID: "@alice:example.org",
+                                     roomID: "!one:example.org",
+                                     contributesToBadge: false,
+                                     isAuthoritative: true,
+                                     fallback: 0)
+        let staleReconciliation = try #require(ledger.reconcile(userID: "@alice:example.org",
+                                                                unreadRoomIDs: ["!stale:example.org"]))
+        #expect(staleReconciliation.recentAuthoritativeCount == 0)
+        #expect(staleReconciliation.count == 0)
+
+        let caughtUpReconciliation = try #require(ledger.reconcile(userID: "@alice:example.org", unreadRoomIDs: []))
+        #expect(caughtUpReconciliation.recentAuthoritativeCount == nil)
+        #expect(caughtUpReconciliation.count == 0)
+    }
+
+    @Test
+    func readingOneRoomDecrementsAStillAheadAuthoritativeCountOnce() throws {
+        let fixture = try makeLedger()
+        let ledger = fixture.ledger
+        ledger.prepare(for: "@alice:example.org")
+
+        _ = ledger.applyNotification(userID: "@alice:example.org",
+                                     roomID: "!one:example.org",
+                                     contributesToBadge: true,
+                                     isAuthoritative: true,
+                                     fallback: 3)
+        _ = ledger.reconcile(userID: "@alice:example.org", unreadRoomIDs: [])
+
+        let firstRead = try #require(ledger.markRoomRead(userID: "@alice:example.org",
+                                                         roomID: "!one:example.org"))
+        let repeatedRead = try #require(ledger.markRoomRead(userID: "@alice:example.org",
+                                                            roomID: "!one:example.org"))
+
+        #expect(firstRead.recentAuthoritativeCount == 2)
+        #expect(firstRead.count == 2)
+        #expect(repeatedRead.recentAuthoritativeCount == 2)
+        #expect(repeatedRead.count == 2)
+    }
+
+    @Test
+    func readingAnUnrelatedRoomDoesNotDecrementAnAuthoritativeCount() throws {
+        let fixture = try makeLedger()
+        let ledger = fixture.ledger
+        ledger.prepare(for: "@alice:example.org")
+
+        _ = ledger.applyNotification(userID: "@alice:example.org",
+                                     roomID: "!contributing:example.org",
+                                     contributesToBadge: true,
+                                     isAuthoritative: true,
+                                     fallback: 3)
+        _ = ledger.reconcile(userID: "@alice:example.org", unreadRoomIDs: [])
+
+        let unrelatedRead = try #require(ledger.markRoomRead(userID: "@alice:example.org",
+                                                             roomID: "!unrelated:example.org"))
+
+        #expect(unrelatedRead.recentAuthoritativeCount == 3)
+        #expect(unrelatedRead.count == 3)
+    }
+
+    @Test
+    func noncontributingSnapshotDoesNotReuseEarlierRoomEvidence() throws {
+        let fixture = try makeLedger()
+        let ledger = fixture.ledger
+        ledger.prepare(for: "@alice:example.org")
+
+        _ = ledger.applyNotification(userID: "@alice:example.org",
+                                     roomID: "!one:example.org",
+                                     contributesToBadge: true,
+                                     isAuthoritative: true,
+                                     fallback: 1)
+        _ = ledger.applyNotification(userID: "@alice:example.org",
+                                     roomID: "!one:example.org",
+                                     contributesToBadge: false,
+                                     isAuthoritative: true,
+                                     fallback: 1)
+        _ = ledger.reconcile(userID: "@alice:example.org", unreadRoomIDs: [])
+
+        let read = try #require(ledger.markRoomRead(userID: "@alice:example.org",
+                                                    roomID: "!one:example.org"))
+
+        #expect(read.recentAuthoritativeCount == 1)
+        #expect(read.count == 1)
+    }
+
+    @Test
+    func decreasedAuthoritativeTotalDoesNotKeepAmbiguousRoomEvidence() throws {
+        let fixture = try makeLedger()
+        let ledger = fixture.ledger
+        ledger.prepare(for: "@alice:example.org")
+
+        _ = ledger.applyNotification(userID: "@alice:example.org",
+                                     roomID: "!one:example.org",
+                                     contributesToBadge: true,
+                                     isAuthoritative: true,
+                                     fallback: 2)
+        _ = ledger.applyNotification(userID: "@alice:example.org",
+                                     roomID: "!other:example.org",
+                                     contributesToBadge: false,
+                                     isAuthoritative: true,
+                                     fallback: 1)
+        _ = ledger.reconcile(userID: "@alice:example.org", unreadRoomIDs: [])
+
+        let read = try #require(ledger.markRoomRead(userID: "@alice:example.org",
+                                                    roomID: "!one:example.org"))
+
+        #expect(read.recentAuthoritativeCount == 1)
+        #expect(read.count == 1)
+    }
+
+    @Test
+    func sameTotalFromANewRoomReplacesAmbiguousRoomEvidence() throws {
+        let fixture = try makeLedger()
+        let ledger = fixture.ledger
+        ledger.prepare(for: "@alice:example.org")
+
+        _ = ledger.applyNotification(userID: "@alice:example.org",
+                                     roomID: "!one:example.org",
+                                     contributesToBadge: true,
+                                     isAuthoritative: true,
+                                     fallback: 1)
+        _ = ledger.applyNotification(userID: "@alice:example.org",
+                                     roomID: "!two:example.org",
+                                     contributesToBadge: true,
+                                     isAuthoritative: true,
+                                     fallback: 1)
+        _ = ledger.reconcile(userID: "@alice:example.org", unreadRoomIDs: [])
+
+        let staleRoomRead = try #require(ledger.markRoomRead(userID: "@alice:example.org",
+                                                             roomID: "!one:example.org"))
+        let contributingRoomRead = try #require(ledger.markRoomRead(userID: "@alice:example.org",
+                                                                    roomID: "!two:example.org"))
+
+        #expect(staleRoomRead.recentAuthoritativeCount == 1)
+        #expect(staleRoomRead.count == 1)
+        #expect(contributingRoomRead.recentAuthoritativeCount == nil)
+        #expect(contributingRoomRead.count == 0)
+    }
+
+    @Test
+    func equalCountFromDifferentRoomsDoesNotClearAuthoritativeEvidence() throws {
+        let fixture = try makeLedger()
+        let ledger = fixture.ledger
+        ledger.prepare(for: "@alice:example.org")
+
+        _ = ledger.applyNotification(userID: "@alice:example.org",
+                                     roomID: "!real:example.org",
+                                     contributesToBadge: true,
+                                     isAuthoritative: true,
+                                     fallback: 1)
+        let staleReconciliation = try #require(ledger.reconcile(userID: "@alice:example.org",
+                                                                unreadRoomIDs: ["!stale:example.org"]))
+        let staleRoomRead = try #require(ledger.markRoomRead(userID: "@alice:example.org",
+                                                             roomID: "!stale:example.org"))
+        let caughtUpReconciliation = try #require(ledger.reconcile(userID: "@alice:example.org",
+                                                                   unreadRoomIDs: ["!real:example.org"]))
+
+        #expect(staleReconciliation.recentAuthoritativeCount == 1)
+        #expect(staleRoomRead.recentAuthoritativeCount == 1)
+        #expect(staleRoomRead.count == 1)
+        #expect(caughtUpReconciliation.recentAuthoritativeCount == nil)
+        #expect(caughtUpReconciliation.count == 1)
+    }
+
+    @Test
+    func positiveAuthoritativeCountWithoutRoomEvidenceSurvivesEqualStaleCount() throws {
+        let fixture = try makeLedger()
+        let ledger = fixture.ledger
+        ledger.prepare(for: "@alice:example.org")
+
+        _ = ledger.applyNotification(userID: "@alice:example.org",
+                                     roomID: "!unknown:example.org",
+                                     contributesToBadge: nil,
+                                     isAuthoritative: true,
+                                     fallback: 1)
+        let staleReconciliation = try #require(ledger.reconcile(userID: "@alice:example.org",
+                                                                unreadRoomIDs: ["!stale:example.org"]))
+        let staleRoomRead = try #require(ledger.markRoomRead(userID: "@alice:example.org",
+                                                             roomID: "!stale:example.org"))
+
+        #expect(staleReconciliation.recentAuthoritativeCount == 1)
+        #expect(staleRoomRead.recentAuthoritativeCount == 1)
+        #expect(staleRoomRead.count == 1)
+    }
+
+    @Test
+    func partialRoomEvidenceDoesNotClearAnEqualAuthoritativeCount() throws {
+        let fixture = try makeLedger()
+        let ledger = fixture.ledger
+        ledger.prepare(for: "@alice:example.org")
+
+        _ = ledger.applyNotification(userID: "@alice:example.org",
+                                     roomID: "!real:example.org",
+                                     contributesToBadge: true,
+                                     isAuthoritative: true,
+                                     fallback: 2)
+        let staleReconciliation = try #require(ledger.reconcile(userID: "@alice:example.org",
+                                                                unreadRoomIDs: ["!real:example.org", "!stale:example.org"]))
+        let staleRoomRead = try #require(ledger.markRoomRead(userID: "@alice:example.org",
+                                                             roomID: "!stale:example.org"))
+
+        #expect(staleReconciliation.recentAuthoritativeCount == 2)
+        #expect(staleRoomRead.recentAuthoritativeCount == 2)
+        #expect(staleRoomRead.count == 2)
+    }
+
+    @Test
+    func increasedAuthoritativeSnapshotDoesNotReuseAnEarlierRoomIdentity() throws {
+        let fixture = try makeLedger()
+        let ledger = fixture.ledger
+        ledger.prepare(for: "@alice:example.org")
+
+        _ = ledger.applyNotification(userID: "@alice:example.org",
+                                     roomID: "!old:example.org",
+                                     contributesToBadge: true,
+                                     isAuthoritative: true,
+                                     fallback: 1)
+        _ = ledger.applyNotification(userID: "@alice:example.org",
+                                     roomID: "!new:example.org",
+                                     contributesToBadge: true,
+                                     isAuthoritative: true,
+                                     fallback: 2)
+        let staleReconciliation = try #require(ledger.reconcile(userID: "@alice:example.org",
+                                                                unreadRoomIDs: ["!old:example.org", "!new:example.org"]))
+        let staleRoomRead = try #require(ledger.markRoomRead(userID: "@alice:example.org",
+                                                             roomID: "!old:example.org"))
+
+        #expect(staleReconciliation.recentAuthoritativeCount == 2)
+        #expect(staleRoomRead.recentAuthoritativeCount == 2)
+        #expect(staleRoomRead.count == 2)
+    }
+
+    @Test
+    func unrelatedReadsCannotConvergeARelevantCountWithoutRoomEvidence() throws {
+        let fixture = try makeLedger()
+        let ledger = fixture.ledger
+        ledger.prepare(for: "@alice:example.org")
+
+        _ = ledger.applyNotification(userID: "@alice:example.org",
+                                     roomID: "!unknown:example.org",
+                                     contributesToBadge: nil,
+                                     isAuthoritative: true,
+                                     fallback: 1)
+        _ = ledger.reconcile(userID: "@alice:example.org", unreadRoomIDs: ["!stale:example.org"])
+        let unrelatedRead = try #require(ledger.markRoomRead(userID: "@alice:example.org",
+                                                             roomID: "!unrelated:example.org"))
+        let staleRoomRead = try #require(ledger.markRoomRead(userID: "@alice:example.org",
+                                                             roomID: "!stale:example.org"))
+
+        #expect(unrelatedRead.recentAuthoritativeCount == 1)
+        #expect(unrelatedRead.count == 1)
+        #expect(staleRoomRead.recentAuthoritativeCount == 1)
+        #expect(staleRoomRead.count == 1)
+    }
+
+    @Test
     func visibleNotificationsAreCountedOncePerRoom() throws {
         let fixture = try makeLedger()
         let ledger = fixture.ledger

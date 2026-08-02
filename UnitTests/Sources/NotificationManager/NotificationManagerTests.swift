@@ -37,8 +37,7 @@ final class NotificationManagerTests {
         
         notificationManager = NotificationManager(notificationCenter: notificationCenter, appSettings: appSettings)
         notificationManager.start()
-        await waitForConfirmation("initial session tasks should finish", expectedCount: 2, timeout: .seconds(10)) { confirm in
-            notificationCenter.setBadgeCountClosure = { _ in confirm() }
+        await waitForConfirmation("initial session tasks should finish", timeout: .seconds(10)) { confirm in
             notificationCenter.notificationSettingsClosure = {
                 confirm()
                 return await UNUserNotificationCenter.current().notificationSettings()
@@ -199,6 +198,15 @@ final class NotificationManagerTests {
     }
 
     @Test
+    func whenTheActiveSessionLedgerIsNotReconciled_badgeIsNotCleared() async {
+        notificationCenter.setBadgeCountCallsCount = 0
+
+        await notificationManager.synchronizeBadgeCount()
+
+        #expect(notificationCenter.setBadgeCountCallsCount == 0)
+    }
+
+    @Test
     func whenRestoringTheInitialSession_badgeIsRestoredFromThePersistedLedger() async {
         await notificationManager.removeDeliveredNotificationsForFullyReadRooms([
             roomSummary(id: "1", hasUnreadMessages: true)
@@ -308,6 +316,44 @@ final class NotificationManagerTests {
 
         let lastBadge = try #require(notificationCenter.setBadgeCountReceivedInvocations.last)
         #expect(lastBadge == 0)
+    }
+
+    @Test
+    func authoritativePushCorrectsAnInFlightAccountSwitchClear() async throws {
+        let (clearStarted, clearStartedContinuation) = AsyncStream.makeStream(of: Void.self)
+        var releaseClear: CheckedContinuation<Void, Never>?
+        var shouldSuspend = true
+        notificationCenter.setBadgeCountClosure = { count in
+            guard count == 0, shouldSuspend else { return }
+            shouldSuspend = false
+            clearStartedContinuation.yield()
+            await withCheckedContinuation { releaseClear = $0 }
+        }
+
+        let newClientProxy = ClientProxyMock(.init(userID: "@other:user.net"))
+        let newUserSession = UserSessionMock(.init(clientProxy: newClientProxy))
+        notificationManager.setUserSession(newUserSession)
+        for await _ in clearStarted {
+            break
+        }
+
+        _ = appSettings.notificationBadgeRoomLedger.applyNotification(userID: newClientProxy.userID,
+                                                                      roomID: "!new:example.org",
+                                                                      contributesToBadge: true,
+                                                                      isAuthoritative: true,
+                                                                      fallback: 1)
+        try await notificationCenter.setBadgeCount(1)
+
+        await waitForConfirmation("new account badge should replace the stale clear", timeout: .seconds(10)) { confirm in
+            notificationCenter.setBadgeCountClosure = { count in
+                guard count == 1 else { return }
+                confirm()
+            }
+            releaseClear?.resume()
+        }
+
+        let lastBadge = try #require(notificationCenter.setBadgeCountReceivedInvocations.last)
+        #expect(lastBadge == 1)
     }
 
     @Test

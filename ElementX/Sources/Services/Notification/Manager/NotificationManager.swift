@@ -108,8 +108,9 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
         }
 
         if previousUserID != userID {
+            let shouldClearUnreconciledBadge = previousUserID != nil
             Task { [weak self] in
-                await self?.synchronizeBadgeCountWithActiveSession()
+                await self?.synchronizeBadgeCountWithActiveSession(shouldClearUnreconciledBadge: shouldClearUnreconciledBadge)
             }
         }
         
@@ -224,12 +225,23 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
         await synchronizeBadgeCountWithActiveSession()
     }
 
-    private func synchronizeBadgeCountWithActiveSession() async {
+    private func synchronizeBadgeCountWithActiveSession(shouldClearUnreconciledBadge: Bool = false) async {
         guard userSession?.clientProxy.userID != nil else {
+            if shouldClearUnreconciledBadge {
+                do {
+                    try await notificationCenter.setBadgeCount(0)
+                    MXLog.info("Cleared app badge after removing the active user session")
+                } catch {
+                    MXLog.error("Failed clearing app badge after removing the active user session: \(error)")
+                }
+                return
+            }
+
             MXLog.info("Skipped app badge synchronization without an active user session")
             return
         }
 
+        var shouldClearStaleBadge = shouldClearUnreconciledBadge
         for _ in 0..<8 {
             let userID = userSession?.clientProxy.userID
             let snapshot: NotificationBadgeSnapshot?
@@ -239,8 +251,13 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
                     MXLog.error("Skipped app badge synchronization because the ledger snapshot is unavailable")
                     return
                 }
+                guard let resolvedBadgeCount = resolvedBadgeCount(for: resolvedSnapshot,
+                                                                  shouldClearUnreconciledBadge: shouldClearStaleBadge) else {
+                    MXLog.info("Skipped app badge synchronization until the room list has reconciled")
+                    return
+                }
+                badgeCount = resolvedBadgeCount
                 snapshot = resolvedSnapshot
-                badgeCount = resolvedSnapshot.count
             } else {
                 snapshot = nil
                 badgeCount = 0
@@ -259,9 +276,21 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
                 MXLog.info("Synchronized app badge from visible unread rooms: \(badgeCount)")
                 return
             }
+            shouldClearStaleBadge = true
         }
 
         MXLog.error("App badge state kept changing during synchronization")
+    }
+
+    private func resolvedBadgeCount(for snapshot: NotificationBadgeSnapshot,
+                                    shouldClearUnreconciledBadge: Bool) -> Int? {
+        if let authoritativeCount = snapshot.recentAuthoritativeCount {
+            return authoritativeCount
+        }
+        if snapshot.isReconciled {
+            return snapshot.count
+        }
+        return shouldClearUnreconciledBadge ? 0 : nil
     }
 
     private func synchronizeBadgeCountAfterLifecycleChange() {

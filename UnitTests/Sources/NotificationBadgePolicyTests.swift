@@ -265,9 +265,12 @@ struct NotificationBadgePolicyTests {
             .normalizedMutableContentForBadgeDelivery())
         let latestBadge = NSNumber(value: 2)
         var deliveredBadges = [NSNumber?]()
-        let finalizer: NotificationContentCompletion.ContentFinalizer = { content, contentHandler in
+        let finalizer: NotificationContentCompletion.ContentFinalizer = { content, contentUpdate, contentHandler in
             let content = content.mutableCopy() as? UNMutableNotificationContent
             content?.overrideBadgeForDelivery(latestBadge)
+            if let content {
+                contentUpdate(content)
+            }
             contentHandler(content ?? UNMutableNotificationContent())
         }
         let firstCompletion = NotificationContentCompletion(bestAttemptContent: firstContent,
@@ -295,11 +298,261 @@ struct NotificationBadgePolicyTests {
 
         NSEBadgeContentFinalizer.finalize(content,
                                           userID: "@alice:example.org",
-                                          ledger: fixture.ledger) { content in
-            offlineContent = NSERequestPolicy.offlineCompletionContent(for: content)
-        }
+                                          ledger: fixture.ledger,
+                                          badgeSetter: { _, completion in completion(nil) },
+                                          delivery: { content in
+                                              offlineContent = NSERequestPolicy.offlineCompletionContent(for: content)
+                                          })
 
         #expect(offlineContent?.badge == 1)
+    }
+
+    @Test
+    func finalizerSubmitsTheResolvedBadgeBeforeDelivery() throws {
+        let fixture = try NotificationBadgeFinalizerFixture()
+        fixture.ledger.prepare(for: "@alice:example.org")
+        _ = fixture.ledger.reconcile(userID: "@alice:example.org", unreadRoomIDs: ["!real:example.org"])
+        let content = makeContent(badge: 0)
+        var operations = [String]()
+
+        NSEBadgeContentFinalizer.finalize(content,
+                                          userID: nil,
+                                          ledger: fixture.ledger,
+                                          badgeSetter: { count, completion in
+                                              operations.append("set:\(count)")
+                                              completion(nil)
+                                          },
+                                          delivery: { content in
+                                              operations.append("deliver:\(content.badge?.intValue ?? -1)")
+                                          })
+
+        #expect(operations == ["set:1", "deliver:1"])
+    }
+
+    @Test
+    func finalizerPreservesAnAuthoritativeBadgeWithoutAResolvedUser() throws {
+        let fixture = try NotificationBadgeFinalizerFixture()
+        fixture.ledger.prepare(for: "@alice:example.org")
+        _ = fixture.ledger.reconcile(userID: "@alice:example.org", unreadRoomIDs: [])
+        let content = makeContent(contract: expectedBadgeContract, total: 1)
+        var submittedBadge: Int?
+        var deliveredBadge: Int?
+
+        NSEBadgeContentFinalizer.finalize(content,
+                                          userID: nil,
+                                          ledger: fixture.ledger,
+                                          badgeSetter: { count, completion in
+                                              submittedBadge = count
+                                              completion(nil)
+                                          },
+                                          delivery: { content in
+                                              deliveredBadge = content.badge?.intValue
+                                          })
+
+        #expect(submittedBadge == 1)
+        #expect(deliveredBadge == 1)
+    }
+
+    @Test
+    func reverseAuthoritativeCompletionsCannotRestoreAnOlderBadge() throws {
+        let fixture = try NotificationBadgeFinalizerFixture()
+        let sequencer = NSEAuthoritativeBadgeSequencer()
+        let olderContent = makeContent(contract: expectedBadgeContract, total: 2)
+        olderContent.userInfo["pusher_notification_client_identifier"] = "client"
+        let olderClaim = try #require(sequencer.claim(for: olderContent, resolvedReceiverID: nil))
+        var submissions = [(count: Int, completion: (Error?) -> Void)]()
+        var deliveredBadges = [Int]()
+
+        NSEBadgeContentFinalizer.finalize(olderContent,
+                                          userID: nil,
+                                          ledger: fixture.ledger,
+                                          authoritativeBadgeClaim: olderClaim,
+                                          authoritativeBadgeSequencer: sequencer,
+                                          badgeSetter: { count, completion in
+                                              submissions.append((count, completion))
+                                          },
+                                          delivery: { content in
+                                              deliveredBadges.append(content.badge?.intValue ?? -1)
+                                          })
+        #expect(submissions.map(\.count) == [2])
+
+        let newerContent = makeContent(contract: expectedBadgeContract, total: 1)
+        newerContent.userInfo["pusher_notification_client_identifier"] = "client"
+        let newerClaim = try #require(sequencer.claim(for: newerContent, resolvedReceiverID: nil))
+        NSEBadgeContentFinalizer.finalize(newerContent,
+                                          userID: nil,
+                                          ledger: fixture.ledger,
+                                          authoritativeBadgeClaim: newerClaim,
+                                          authoritativeBadgeSequencer: sequencer,
+                                          badgeSetter: { count, completion in
+                                              submissions.append((count, completion))
+                                          },
+                                          delivery: { content in
+                                              deliveredBadges.append(content.badge?.intValue ?? -1)
+                                          })
+        #expect(submissions.map(\.count) == [2, 1])
+
+        submissions[1].completion(nil)
+        #expect(deliveredBadges == [1])
+
+        submissions[0].completion(nil)
+        #expect(submissions.map(\.count) == [2, 1, 1])
+        #expect(deliveredBadges == [1])
+
+        submissions[2].completion(nil)
+        #expect(deliveredBadges == [1, 1])
+    }
+
+    @Test
+    func resolvedAndDifferentPusherBadgesDoNotSupersedeAnUnresolvedClaim() throws {
+        let sequencer = NSEAuthoritativeBadgeSequencer()
+        let unresolvedContent = makeContent(contract: expectedBadgeContract, total: 2)
+        unresolvedContent.userInfo["pusher_notification_client_identifier"] = "first-client"
+        let unresolvedClaim = try #require(sequencer.claim(for: unresolvedContent, resolvedReceiverID: nil))
+
+        let resolvedContent = makeContent(contract: expectedBadgeContract, total: 9)
+        resolvedContent.userInfo["pusher_notification_client_identifier"] = "first-client"
+        #expect(sequencer.claim(for: resolvedContent, resolvedReceiverID: "@alice:example.org") == nil)
+
+        let otherContent = makeContent(contract: expectedBadgeContract, total: 7)
+        otherContent.userInfo["pusher_notification_client_identifier"] = "second-client"
+        #expect(sequencer.claim(for: otherContent, resolvedReceiverID: nil) != nil)
+        #expect(sequencer.latestClaim(replacing: unresolvedClaim) == unresolvedClaim)
+    }
+
+    @Test
+    func deliveryNormalizerPreservesAnAuthoritativeBadgeWithoutAResolvedUser() throws {
+        let fixture = try NotificationBadgeFinalizerFixture()
+        fixture.ledger.prepare(for: "@alice:example.org")
+        _ = fixture.ledger.reconcile(userID: "@alice:example.org", unreadRoomIDs: [])
+        let content = makeContent(contract: expectedBadgeContract, total: 1)
+
+        let normalizedContent = try #require(NSEBadgeDeliveryNormalizer.normalizedContent(content,
+                                                                                          userID: nil,
+                                                                                          ledger: fixture.ledger))
+
+        #expect(normalizedContent.badge == 1)
+        #expect(normalizedContent.userInfo["badge_total"] as? NSNumber == 1)
+    }
+
+    @Test
+    func finalizerReassertsANewerLedgerBadgeAfterSubmissionCompletes() throws {
+        let fixture = try NotificationBadgeFinalizerFixture()
+        fixture.ledger.prepare(for: "@alice:example.org")
+        _ = fixture.ledger.reconcile(userID: "@alice:example.org", unreadRoomIDs: ["!real:example.org"])
+        let content = makeContent(badge: 0)
+        var submissions = [(count: Int, completion: (Error?) -> Void)]()
+        var deliveredBadges = [Int]()
+
+        NSEBadgeContentFinalizer.finalize(content,
+                                          userID: "@alice:example.org",
+                                          ledger: fixture.ledger,
+                                          badgeSetter: { count, completion in
+                                              submissions.append((count, completion))
+                                          },
+                                          delivery: { content in
+                                              deliveredBadges.append(content.badge?.intValue ?? -1)
+                                          })
+        #expect(submissions.map(\.count) == [1])
+
+        _ = fixture.ledger.markRoomRead(userID: "@alice:example.org", roomID: "!real:example.org")
+        let initialCompletion = submissions[0].completion
+        initialCompletion(nil)
+
+        #expect(submissions.map(\.count) == [1, 0])
+        #expect(deliveredBadges.isEmpty)
+
+        let reassertionCompletion = submissions[1].completion
+        reassertionCompletion(nil)
+
+        #expect(deliveredBadges == [0])
+    }
+
+    @Test
+    func legacyFinalizerReassertsTheLedgerWithoutAResolvedUser() throws {
+        let fixture = try NotificationBadgeFinalizerFixture()
+        fixture.ledger.prepare(for: "@alice:example.org")
+        _ = fixture.ledger.reconcile(userID: "@alice:example.org", unreadRoomIDs: ["!real:example.org"])
+        let content = makeContent(badge: 0)
+        var submissions = [(count: Int, completion: (Error?) -> Void)]()
+        var deliveredBadges = [Int]()
+
+        NSEBadgeContentFinalizer.finalize(content,
+                                          userID: nil,
+                                          ledger: fixture.ledger,
+                                          badgeSetter: { count, completion in
+                                              submissions.append((count, completion))
+                                          },
+                                          delivery: { content in
+                                              deliveredBadges.append(content.badge?.intValue ?? -1)
+                                          })
+        #expect(submissions.map(\.count) == [1])
+
+        _ = fixture.ledger.markRoomRead(userID: "@alice:example.org", roomID: "!real:example.org")
+        submissions[0].completion(nil)
+
+        #expect(submissions.map(\.count) == [1, 0])
+        #expect(deliveredBadges.isEmpty)
+
+        submissions[1].completion(nil)
+
+        #expect(deliveredBadges == [0])
+    }
+
+    @Test
+    func finalizerConvergesAcrossMultipleLedgerChanges() throws {
+        let fixture = try NotificationBadgeFinalizerFixture()
+        fixture.ledger.prepare(for: "@alice:example.org")
+        _ = fixture.ledger.reconcile(userID: "@alice:example.org", unreadRoomIDs: ["!one:example.org"])
+        let content = makeContent(badge: 0)
+        var submissions = [(count: Int, completion: (Error?) -> Void)]()
+        var deliveredBadges = [Int]()
+
+        NSEBadgeContentFinalizer.finalize(content,
+                                          userID: "@alice:example.org",
+                                          ledger: fixture.ledger,
+                                          badgeSetter: { count, completion in
+                                              submissions.append((count, completion))
+                                          },
+                                          delivery: { content in
+                                              deliveredBadges.append(content.badge?.intValue ?? -1)
+                                          })
+        #expect(submissions.map(\.count) == [1])
+
+        _ = fixture.ledger.reconcile(userID: "@alice:example.org", unreadRoomIDs: ["!one:example.org", "!two:example.org"])
+        submissions[0].completion(nil)
+        #expect(submissions.map(\.count) == [1, 2])
+
+        _ = fixture.ledger.reconcile(userID: "@alice:example.org",
+                                     unreadRoomIDs: ["!one:example.org", "!two:example.org", "!three:example.org"])
+        submissions[1].completion(nil)
+        #expect(submissions.map(\.count) == [1, 2, 3])
+        #expect(deliveredBadges.isEmpty)
+
+        submissions[2].completion(nil)
+
+        #expect(deliveredBadges == [3])
+    }
+
+    @Test
+    func finalizerLeavesTheSystemBadgeUnchangedWithoutAResolvedValue() throws {
+        let fixture = try NotificationBadgeFinalizerFixture()
+        var submittedBadge: Int?
+        var deliveredContent: UNNotificationContent?
+
+        NSEBadgeContentFinalizer.finalize(UNMutableNotificationContent(),
+                                          userID: nil,
+                                          ledger: fixture.ledger,
+                                          badgeSetter: { count, completion in
+                                              submittedBadge = count
+                                              completion(nil)
+                                          },
+                                          delivery: { content in
+                                              deliveredContent = content
+                                          })
+
+        #expect(submittedBadge == nil)
+        #expect(deliveredContent?.badge == nil)
     }
 
     @Test
@@ -416,6 +669,30 @@ struct NotificationBadgePolicyTests {
     }
 
     @Test
+    func immediatelyRegisteredFallbackSurvivesStalledPreparation() throws {
+        let content = try #require(makeContent(contract: expectedBadgeContract, total: 9)
+            .normalizedMutableContentForBadgeDelivery())
+        let delivered = DispatchSemaphore(value: 0)
+        let expirationFinished = DispatchSemaphore(value: 0)
+        let registry = NotificationContentCompletionRegistry()
+        let completion = registry.register(bestAttemptContent: content) { _ in
+            delivered.signal()
+        }
+
+        DispatchQueue.global().async {
+            registry.completeAll()
+            expirationFinished.signal()
+        }
+
+        try #require(delivered.wait(timeout: .now() + 2) == .success)
+        try #require(expirationFinished.wait(timeout: .now() + 2) == .success)
+        #expect(!completion.prepare(bestAttemptContent: makeContent(badge: 10)) { content, _, delivery in
+            delivery(content)
+        })
+        #expect(registry.inFlightCount == 0)
+    }
+
+    @Test
     func registryRemovesCompletedRequests() throws {
         let content = try #require(makeContent(contract: expectedBadgeContract, total: 6)
             .normalizedMutableContentForBadgeDelivery())
@@ -428,6 +705,209 @@ struct NotificationBadgePolicyTests {
 
         #expect(registry.inFlightCount == 0)
         registry.completeAll()
+    }
+
+    @Test
+    func registryTracksFinalizationAndExpirationForcesOneDelivery() throws {
+        let content = try #require(makeContent(contract: expectedBadgeContract, total: 7)
+            .normalizedMutableContentForBadgeDelivery())
+        var finishFinalization: ((UNNotificationContent) -> Void)?
+        let recorder = LockedBadgeRecorder()
+        let registry = NotificationContentCompletionRegistry()
+        let completion = registry.register(bestAttemptContent: content,
+                                           contentFinalizer: { _, _, delivery in
+                                               finishFinalization = delivery
+                                           },
+                                           contentHandler: { content in
+                                               recorder.append(content.badge)
+                                           })
+
+        completion.complete()
+
+        #expect(registry.inFlightCount == 1)
+        #expect(recorder.badges.isEmpty)
+
+        registry.completeAll()
+
+        #expect(registry.inFlightCount == 0)
+        #expect(recorder.badges == [7])
+
+        let lateContent = makeContent(contract: expectedBadgeContract, total: 99)
+        finishFinalization?(lateContent)
+
+        #expect(recorder.badges == [7])
+    }
+
+    @Test
+    func expirationUsesTheBadgePreparedByTheFinalizer() throws {
+        let fixture = try NotificationBadgeFinalizerFixture()
+        fixture.ledger.prepare(for: "@alice:example.org")
+        _ = fixture.ledger.reconcile(userID: "@alice:example.org", unreadRoomIDs: ["!one:example.org", "!two:example.org"])
+        let content = makeContent(badge: 1)
+        var submittedBadges = [Int]()
+        let recorder = LockedBadgeRecorder()
+        let registry = NotificationContentCompletionRegistry()
+        let completion = registry.register(bestAttemptContent: content,
+                                           contentFinalizer: { content, contentUpdate, delivery in
+                                               NSEBadgeContentFinalizer.finalize(content,
+                                                                                 userID: "@alice:example.org",
+                                                                                 ledger: fixture.ledger,
+                                                                                 badgeSetter: { count, _ in
+                                                                                     submittedBadges.append(count)
+                                                                                 },
+                                                                                 contentUpdate: contentUpdate,
+                                                                                 delivery: delivery)
+                                           },
+                                           contentHandler: { content in
+                                               recorder.append(content.badge)
+                                           })
+
+        completion.complete()
+
+        #expect(submittedBadges == [2])
+        #expect(recorder.badges.isEmpty)
+
+        registry.completeAll()
+
+        #expect(recorder.badges == [2])
+    }
+
+    @Test
+    func registryRemainsTrackedUntilTheContentHandlerReturns() throws {
+        let content = try #require(makeContent(contract: expectedBadgeContract, total: 8)
+            .normalizedMutableContentForBadgeDelivery())
+        let handlerStarted = DispatchSemaphore(value: 0)
+        let releaseHandler = DispatchSemaphore(value: 0)
+        let completionFinished = DispatchSemaphore(value: 0)
+        let expirationFinished = DispatchSemaphore(value: 0)
+        let recorder = LockedBadgeRecorder()
+        let registry = NotificationContentCompletionRegistry()
+        let completion = registry.register(bestAttemptContent: content) { content in
+            recorder.append(content.badge)
+            handlerStarted.signal()
+            releaseHandler.wait()
+        }
+        defer { releaseHandler.signal() }
+
+        DispatchQueue.global().async {
+            completion.complete()
+            completionFinished.signal()
+        }
+        try #require(handlerStarted.wait(timeout: .now() + 2) == .success)
+
+        #expect(registry.inFlightCount == 1)
+        DispatchQueue.global().async {
+            registry.completeAll()
+            expirationFinished.signal()
+        }
+        #expect(expirationFinished.wait(timeout: .now() + 0.1) == .timedOut)
+
+        releaseHandler.signal()
+        try #require(completionFinished.wait(timeout: .now() + 2) == .success)
+        try #require(expirationFinished.wait(timeout: .now() + 2) == .success)
+
+        #expect(registry.inFlightCount == 0)
+        #expect(recorder.badges == [8])
+    }
+
+    @Test
+    func aBlockedHandlerDoesNotDelayAnotherExpirationFallback() throws {
+        let firstContent = try #require(makeContent(contract: expectedBadgeContract, total: 9)
+            .normalizedMutableContentForBadgeDelivery())
+        let secondContent = try #require(makeContent(contract: expectedBadgeContract, total: 10)
+            .normalizedMutableContentForBadgeDelivery())
+        let firstHandlerStarted = DispatchSemaphore(value: 0)
+        let releaseFirstHandler = DispatchSemaphore(value: 0)
+        let secondDelivered = DispatchSemaphore(value: 0)
+        let expirationFinished = DispatchSemaphore(value: 0)
+        let recorder = LockedBadgeRecorder()
+        let registry = NotificationContentCompletionRegistry()
+        let firstCompletion = registry.register(bestAttemptContent: firstContent) { content in
+            recorder.append(content.badge)
+            firstHandlerStarted.signal()
+            releaseFirstHandler.wait()
+        }
+        registry.register(bestAttemptContent: secondContent) { content in
+            recorder.append(content.badge)
+            secondDelivered.signal()
+        }
+        defer { releaseFirstHandler.signal() }
+
+        DispatchQueue.global().async {
+            firstCompletion.complete()
+        }
+        try #require(firstHandlerStarted.wait(timeout: .now() + 2) == .success)
+
+        DispatchQueue.global().async {
+            registry.completeAll()
+            expirationFinished.signal()
+        }
+
+        try #require(secondDelivered.wait(timeout: .now() + 2) == .success)
+        #expect(expirationFinished.wait(timeout: .now() + 0.1) == .timedOut)
+
+        releaseFirstHandler.signal()
+        try #require(expirationFinished.wait(timeout: .now() + 2) == .success)
+
+        #expect(Set(recorder.badges) == Set([9, 10]))
+    }
+
+    @Test
+    func registrationDuringExpirationJoinsTheOutstandingBarrier() throws {
+        let firstContent = try #require(makeContent(contract: expectedBadgeContract, total: 11)
+            .normalizedMutableContentForBadgeDelivery())
+        let expirationProbeContent = try #require(makeContent(contract: expectedBadgeContract, total: 12)
+            .normalizedMutableContentForBadgeDelivery())
+        let lateContent = try #require(makeContent(contract: expectedBadgeContract, total: 13)
+            .normalizedMutableContentForBadgeDelivery())
+        let firstHandlerStarted = DispatchSemaphore(value: 0)
+        let releaseFirstHandler = DispatchSemaphore(value: 0)
+        let expirationStarted = DispatchSemaphore(value: 0)
+        let lateHandlerStarted = DispatchSemaphore(value: 0)
+        let releaseLateHandler = DispatchSemaphore(value: 0)
+        let lateRegistrationFinished = DispatchSemaphore(value: 0)
+        let expirationFinished = DispatchSemaphore(value: 0)
+        let registry = NotificationContentCompletionRegistry()
+        let firstCompletion = registry.register(bestAttemptContent: firstContent) { _ in
+            firstHandlerStarted.signal()
+            releaseFirstHandler.wait()
+        }
+        registry.register(bestAttemptContent: expirationProbeContent) { _ in
+            expirationStarted.signal()
+        }
+        defer {
+            releaseFirstHandler.signal()
+            releaseLateHandler.signal()
+        }
+
+        DispatchQueue.global().async {
+            firstCompletion.complete()
+        }
+        try #require(firstHandlerStarted.wait(timeout: .now() + 2) == .success)
+
+        DispatchQueue.global().async {
+            registry.completeAll()
+            expirationFinished.signal()
+        }
+        try #require(expirationStarted.wait(timeout: .now() + 2) == .success)
+
+        DispatchQueue.global().async {
+            registry.register(bestAttemptContent: lateContent) { _ in
+                lateHandlerStarted.signal()
+                releaseLateHandler.wait()
+            }
+            lateRegistrationFinished.signal()
+        }
+        try #require(lateHandlerStarted.wait(timeout: .now() + 2) == .success)
+
+        releaseFirstHandler.signal()
+        #expect(expirationFinished.wait(timeout: .now() + 0.1) == .timedOut)
+
+        releaseLateHandler.signal()
+        try #require(lateRegistrationFinished.wait(timeout: .now() + 2) == .success)
+        try #require(expirationFinished.wait(timeout: .now() + 2) == .success)
+
+        #expect(registry.inFlightCount == 0)
     }
 
     @Test

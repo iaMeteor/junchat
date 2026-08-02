@@ -11,6 +11,8 @@ import Foundation
 struct NotificationBadgeSnapshot: Equatable {
     let userID: String
     let count: Int
+    let isReconciled: Bool
+    let recentAuthoritativeCount: Int?
     let revision: UInt64
 }
 
@@ -20,6 +22,9 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
         var isReconciled: Bool
         var revision: UInt64
         var unreadRoomIDs: Set<String>
+        var recentAuthoritativeCount: Int?
+        var recentAuthoritativeDate: Date?
+        var recentAuthoritativeRoomIDs: Set<String>?
         var recentNotificationDates: [String: Date]
         var provisionalNotificationDates: [String: Date]
         var recentReadDates: [String: Date]
@@ -35,8 +40,25 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
             badgeRoomIDs.count
         }
 
+        var authoritativeCountIsReconciled: Bool {
+            guard let recentAuthoritativeCount,
+                  recentAuthoritativeCount == badgeCount else {
+                return false
+            }
+            guard recentAuthoritativeCount > 0 else {
+                return true
+            }
+            let authoritativeRoomIDs = recentAuthoritativeRoomIDs ?? []
+            return authoritativeRoomIDs.count == recentAuthoritativeCount
+                && authoritativeRoomIDs == badgeRoomIDs
+        }
+
         var snapshot: NotificationBadgeSnapshot {
-            .init(userID: userID, count: badgeCount, revision: revision)
+            .init(userID: userID,
+                  count: recentAuthoritativeCount ?? badgeCount,
+                  isReconciled: isReconciled,
+                  recentAuthoritativeCount: recentAuthoritativeCount,
+                  revision: revision)
         }
     }
 
@@ -64,6 +86,9 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
                             isReconciled: false,
                             revision: (currentState?.revision ?? 0) &+ 1,
                             unreadRoomIDs: [],
+                            recentAuthoritativeCount: nil,
+                            recentAuthoritativeDate: nil,
+                            recentAuthoritativeRoomIDs: nil,
                             recentNotificationDates: [:],
                             provisionalNotificationDates: [:],
                             recentReadDates: [:]))
@@ -83,13 +108,23 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
             let recentReadDates = currentState.recentReadDates.filter { roomID, date in
                 unreadRoomIDs.contains(roomID) && date >= cutoffDate
             }
-            let state = persistIfChanged(.init(userID: userID,
-                                               isReconciled: true,
-                                               revision: currentState.revision,
-                                               unreadRoomIDs: unreadRoomIDs,
-                                               recentNotificationDates: recentNotificationDates,
-                                               provisionalNotificationDates: provisionalNotificationDates,
-                                               recentReadDates: recentReadDates),
+            let shouldRetainAuthoritativeCount = currentState.recentAuthoritativeDate.map { $0 >= cutoffDate } ?? false
+            var reconciledState = State(userID: userID,
+                                        isReconciled: true,
+                                        revision: currentState.revision,
+                                        unreadRoomIDs: unreadRoomIDs,
+                                        recentAuthoritativeCount: shouldRetainAuthoritativeCount ? currentState.recentAuthoritativeCount : nil,
+                                        recentAuthoritativeDate: shouldRetainAuthoritativeCount ? currentState.recentAuthoritativeDate : nil,
+                                        recentAuthoritativeRoomIDs: shouldRetainAuthoritativeCount ? currentState.recentAuthoritativeRoomIDs : nil,
+                                        recentNotificationDates: recentNotificationDates,
+                                        provisionalNotificationDates: provisionalNotificationDates,
+                                        recentReadDates: recentReadDates)
+            if reconciledState.authoritativeCountIsReconciled {
+                reconciledState.recentAuthoritativeCount = nil
+                reconciledState.recentAuthoritativeDate = nil
+                reconciledState.recentAuthoritativeRoomIDs = nil
+            }
+            let state = persistIfChanged(reconciledState,
                                          currentState: currentState)
             return state.snapshot
         }
@@ -98,6 +133,7 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
     func applyNotification(userID: String?,
                            roomID: String?,
                            contributesToBadge: Bool?,
+                           isAuthoritative: Bool = false,
                            fallback: NSNumber?) -> NSNumber? {
         withExclusiveLock(fallback: fallback) {
             guard var state = loadStatePruningExpiredProvisionalEntries() else { return fallback }
@@ -107,12 +143,25 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
             }
 
             guard state.userID == userID else {
-                return state.isReconciled ? NSNumber(value: state.badgeCount) : NSNumber(value: 0)
+                return state.isReconciled ? NSNumber(value: state.snapshot.count) : NSNumber(value: 0)
             }
 
-            guard state.isReconciled else { return fallback }
-
             let previousState = state
+            if isAuthoritative, let fallback {
+                state.recentAuthoritativeCount = fallback.intValue
+                state.recentAuthoritativeDate = now()
+                var authoritativeRoomIDs = Set<String>()
+                if fallback.intValue > 0, contributesToBadge == true, let roomID {
+                    authoritativeRoomIDs.insert(roomID)
+                }
+                state.recentAuthoritativeRoomIDs = authoritativeRoomIDs
+            }
+
+            guard state.isReconciled else {
+                state = persistIfChanged(state, currentState: previousState)
+                return state.recentAuthoritativeCount.map(NSNumber.init(value:)) ?? fallback
+            }
+
             if let roomID {
                 switch contributesToBadge {
                 case true:
@@ -134,7 +183,7 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
             }
 
             state = persistIfChanged(state, currentState: previousState)
-            return NSNumber(value: state.badgeCount)
+            return NSNumber(value: state.snapshot.count)
         }
     }
 
@@ -151,6 +200,18 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
             state.recentNotificationDates[roomID] = nil
             state.provisionalNotificationDates[roomID] = nil
             state.recentReadDates[roomID] = now()
+            var authoritativeRoomIDs = state.recentAuthoritativeRoomIDs ?? []
+            let contributedToAuthoritativeCount = authoritativeRoomIDs.remove(roomID) != nil
+            state.recentAuthoritativeRoomIDs = authoritativeRoomIDs
+            if let authoritativeCount = state.recentAuthoritativeCount, contributedToAuthoritativeCount {
+                state.recentAuthoritativeCount = max(0, authoritativeCount - 1)
+                state.recentAuthoritativeDate = now()
+            }
+            if state.authoritativeCountIsReconciled {
+                state.recentAuthoritativeCount = nil
+                state.recentAuthoritativeDate = nil
+                state.recentAuthoritativeRoomIDs = nil
+            }
             return persistIfChanged(state, currentState: previousState).snapshot
         }
     }
@@ -165,13 +226,15 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
     func withCurrentBadge(userID: String?,
                           fallback: NSNumber?,
                           delivery: (NSNumber?) -> Void) {
-        let didDeliver = withExclusiveLock(fallback: false) {
-            delivery(resolvedBadge(userID: userID,
-                                   fallback: fallback,
-                                   state: loadStatePruningExpiredProvisionalEntries()))
-            return true
+        let resolution = withExclusiveLock(fallback: (didResolve: false, badge: nil as NSNumber?)) {
+            (didResolve: true,
+             badge: resolvedBadge(userID: userID,
+                                  fallback: fallback,
+                                  state: loadStatePruningExpiredProvisionalEntries()))
         }
-        if !didDeliver {
+        if resolution.didResolve {
+            delivery(resolution.badge)
+        } else {
             // Omitting a badge is safer than replaying a frozen value after a
             // newer notification when the app-group lock is unavailable.
             delivery(nil)
@@ -185,6 +248,9 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
                             isReconciled: true,
                             revision: revision,
                             unreadRoomIDs: [],
+                            recentAuthoritativeCount: nil,
+                            recentAuthoritativeDate: nil,
+                            recentAuthoritativeRoomIDs: nil,
                             recentNotificationDates: [:],
                             provisionalNotificationDates: [:],
                             recentReadDates: [:]))
@@ -218,18 +284,29 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
         state.provisionalNotificationDates = state.provisionalNotificationDates.filter { _, date in
             date >= cutoffDate
         }
+        if let authoritativeDate = state.recentAuthoritativeDate, authoritativeDate < cutoffDate {
+            state.recentAuthoritativeCount = nil
+            state.recentAuthoritativeDate = nil
+            state.recentAuthoritativeRoomIDs = nil
+        }
         return persistIfChanged(state, currentState: currentState)
     }
 
     private func resolvedBadge(userID: String?, fallback: NSNumber?, state: State?) -> NSNumber? {
         guard let state else { return fallback }
         guard let userID else {
-            return state.isReconciled ? NSNumber(value: state.badgeCount) : fallback
+            return state.isReconciled ? NSNumber(value: state.snapshot.count) : fallback
         }
         guard state.userID == userID else {
-            return state.isReconciled ? NSNumber(value: state.badgeCount) : NSNumber(value: 0)
+            return state.isReconciled ? NSNumber(value: state.snapshot.count) : NSNumber(value: 0)
         }
-        return state.isReconciled ? NSNumber(value: state.badgeCount) : fallback
+        if let recentAuthoritativeCount = state.recentAuthoritativeCount {
+            return NSNumber(value: recentAuthoritativeCount)
+        }
+        if state.isReconciled {
+            return NSNumber(value: state.badgeCount)
+        }
+        return fallback
     }
 
     private func withExclusiveLock<T>(fallback: T, operation: () -> T) -> T {
