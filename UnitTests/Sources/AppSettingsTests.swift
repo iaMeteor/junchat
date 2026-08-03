@@ -152,7 +152,7 @@ struct AppSettingsTests {
     func productionPushNotifyEndpointUsesTheVersionedSygnalRoute() {
         let settings = AppSettings(serverEnvironment: .production)
 
-        #expect(settings.pushGatewayNotifyEndpoint == URL(string: "https://sygnal-junchat.yyzs120.cn/_matrix/push/v1/notify?junchat-sygnal=v2"))
+        #expect(settings.pushGatewayNotifyEndpoint == URL(string: "https://sygnal-junchat.yyzs120.cn/_matrix/push/v1/notify?junchat-sygnal=v2&junchat-badge=messages-v1"))
     }
     
     @Test

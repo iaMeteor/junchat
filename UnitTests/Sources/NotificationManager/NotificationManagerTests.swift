@@ -143,6 +143,15 @@ final class NotificationManagerTests {
     }
 
     @Test
+    func whenOneRoomHasFourUnreadNotifications_badgeIsFour() async {
+        await notificationManager.removeDeliveredNotificationsForFullyReadRooms([
+            roomSummary(id: "1", hasUnreadMessages: true, unreadNotificationsCount: 4)
+        ], userID: clientProxy.userID)
+
+        #expect(notificationCenter.setBadgeCountReceivedCount == 4)
+    }
+
+    @Test
     func whenRemovingNotificationsForFullyReadRoomsAndAnInviteIsPending_badgeIncludesTheInvite() async {
         await notificationManager.removeDeliveredNotificationsForFullyReadRooms([
             roomSummary(id: "1", hasUnreadMessages: false),
@@ -573,6 +582,7 @@ extension NotificationManagerTests: @MainActor NotificationManagerDelegate {
 private func roomSummary(id: String,
                          hasUnreadMessages: Bool,
                          hasUnreadNotifications: Bool? = nil,
+                         unreadNotificationsCount: UInt? = nil,
                          isMarkedUnread: Bool? = nil,
                          joinRequestType: RoomSummary.JoinRequestType? = nil) -> RoomSummary {
     RoomSummary(room: .init(noHandle: .init()),
@@ -589,7 +599,7 @@ private func roomSummary(id: String,
                 lastMessageState: nil,
                 unreadMessagesCount: hasUnreadMessages ? 1 : 0,
                 unreadMentionsCount: 0,
-                unreadNotificationsCount: (hasUnreadNotifications ?? hasUnreadMessages) ? 1 : 0,
+                unreadNotificationsCount: unreadNotificationsCount ?? ((hasUnreadNotifications ?? hasUnreadMessages) ? 1 : 0),
                 notificationMode: .allMessages,
                 canonicalAlias: nil,
                 alternativeAliases: [],

@@ -318,7 +318,7 @@ struct NotificationBadgeRoomLedgerTests {
     }
 
     @Test
-    func visibleNotificationsAreCountedOncePerRoom() throws {
+    func distinctEventsInOneRoomAreCountedAsMessagesAndDuplicatesAreIdempotent() throws {
         let fixture = try makeLedger()
         let ledger = fixture.ledger
         ledger.prepare(for: "@alice:example.org")
@@ -326,16 +326,53 @@ struct NotificationBadgeRoomLedgerTests {
 
         #expect(ledger.applyNotification(userID: "@alice:example.org",
                                          roomID: "!one:example.org",
+                                         eventID: "$one",
                                          contributesToBadge: true,
-                                         fallback: 3) == 1)
+                                         fallback: 1) == 1)
         #expect(ledger.applyNotification(userID: "@alice:example.org",
                                          roomID: "!one:example.org",
+                                         eventID: "$two",
                                          contributesToBadge: true,
-                                         fallback: 3) == 1)
+                                         fallback: 1) == 2)
         #expect(ledger.applyNotification(userID: "@alice:example.org",
-                                         roomID: "!two:example.org",
+                                         roomID: "!one:example.org",
+                                         eventID: "$two",
                                          contributesToBadge: true,
-                                         fallback: 3) == 2)
+                                         fallback: 1) == 2)
+        #expect(ledger.applyNotification(userID: "@alice:example.org",
+                                         roomID: "!one:example.org",
+                                         eventID: "$three",
+                                         contributesToBadge: true,
+                                         fallback: 1) == 3)
+        #expect(ledger.applyNotification(userID: "@alice:example.org",
+                                         roomID: "!one:example.org",
+                                         eventID: "$four",
+                                         contributesToBadge: true,
+                                         fallback: 1) == 4)
+
+        #expect(ledger.markRoomRead(userID: "@alice:example.org", roomID: "!one:example.org")?.count == 0)
+        #expect(ledger.applyNotification(userID: "@alice:example.org",
+                                         roomID: "!one:example.org",
+                                         eventID: "$four",
+                                         contributesToBadge: true,
+                                         fallback: 1) == 0)
+        #expect(ledger.applyNotification(userID: "@alice:example.org",
+                                         roomID: "!one:example.org",
+                                         eventID: "$five",
+                                         contributesToBadge: true,
+                                         fallback: 1) == 1)
+    }
+
+    @Test
+    func reconciliationUsesUnreadMessageCountsInsteadOfUnreadRoomCount() throws {
+        let fixture = try makeLedger()
+        let ledger = fixture.ledger
+        ledger.prepare(for: "@alice:example.org")
+
+        let snapshot = try #require(ledger.reconcile(userID: "@alice:example.org",
+                                                     unreadCountsByRoom: ["!one:example.org": 4]))
+
+        #expect(snapshot.count == 4)
     }
 
     @Test
@@ -592,6 +629,31 @@ struct NotificationBadgeRoomLedgerTests {
         #expect(laterUnreadBadge?.count == 1)
     }
 
+    @Test
+    func versionFiveRoomStateMigratesWithoutLosingItsBadge() throws {
+        let fixture = try makeLedger()
+        let legacyState = LegacyNotificationBadgeRoomLedgerState(userID: "@alice:example.org",
+                                                                 isReconciled: true,
+                                                                 revision: 7,
+                                                                 unreadRoomIDs: ["!room:example.org"],
+                                                                 recentAuthoritativeCount: nil,
+                                                                 recentAuthoritativeDate: nil,
+                                                                 recentAuthoritativeRoomIDs: nil,
+                                                                 recentNotificationDates: [:],
+                                                                 provisionalNotificationDates: [:],
+                                                                 recentReadDates: [:])
+        try fixture.userDefaults.set(JSONEncoder().encode(legacyState),
+                                     forKey: "junchat.notificationBadgeRoomLedger.v5")
+
+        #expect(fixture.ledger.snapshot(for: "@alice:example.org")?.count == 1)
+        #expect(fixture.ledger.applyNotification(userID: "@alice:example.org",
+                                                 roomID: "!room:example.org",
+                                                 eventID: "$new",
+                                                 contributesToBadge: true,
+                                                 fallback: 1) == 2)
+        #expect(fixture.userDefaults.data(forKey: "junchat.notificationBadgeRoomLedger.v6") != nil)
+    }
+
     private func makeLedger(now: @escaping @Sendable () -> Date = { .now }) throws -> LedgerFixture {
         let identifier = UUID().uuidString
         let suiteName = "NotificationBadgeRoomLedgerTests.\(identifier)"
@@ -609,6 +671,19 @@ struct NotificationBadgeRoomLedgerTests {
                              directoryURL: directoryURL,
                              lockFileURL: lockFileURL)
     }
+}
+
+private struct LegacyNotificationBadgeRoomLedgerState: Codable {
+    let userID: String
+    let isReconciled: Bool
+    let revision: UInt64
+    let unreadRoomIDs: Set<String>
+    let recentAuthoritativeCount: Int?
+    let recentAuthoritativeDate: Date?
+    let recentAuthoritativeRoomIDs: Set<String>?
+    let recentNotificationDates: [String: Date]
+    let provisionalNotificationDates: [String: Date]
+    let recentReadDates: [String: Date]
 }
 
 private final class NotificationBadgeLedgerTestClock: @unchecked Sendable {

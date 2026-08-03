@@ -16,28 +16,54 @@ struct NotificationBadgeSnapshot: Equatable {
     let revision: UInt64
 }
 
+private func saturatingBadgeTotal<S: Sequence>(_ counts: S) -> Int where S.Element == Int {
+    counts.reduce(into: 0) { result, count in
+        let (sum, overflow) = result.addingReportingOverflow(count)
+        result = overflow ? Int.max : sum
+    }
+}
+
 final class NotificationBadgeRoomLedger: @unchecked Sendable {
+    private struct RecentEvent: Codable, Equatable {
+        let roomID: String
+        let countAfterEvent: Int
+        let date: Date
+    }
+
     private struct State: Codable, Equatable {
         let userID: String
         var isReconciled: Bool
         var revision: UInt64
-        var unreadRoomIDs: Set<String>
+        var unreadCountsByRoom: [String: Int]
         var recentAuthoritativeCount: Int?
         var recentAuthoritativeDate: Date?
-        var recentAuthoritativeRoomIDs: Set<String>?
-        var recentNotificationDates: [String: Date]
-        var provisionalNotificationDates: [String: Date]
+        var recentAuthoritativeRoomCounts: [String: Int]?
+        var recentNotificationEvents: [String: RecentEvent]
+        var provisionalNotificationEvents: [String: RecentEvent]
+        var recentSeenEventDates: [String: Date]
         var recentReadDates: [String: Date]
 
-        var badgeRoomIDs: Set<String> {
-            unreadRoomIDs
-                .union(recentNotificationDates.keys)
-                .union(provisionalNotificationDates.keys)
-                .subtracting(recentReadDates.keys)
+        var badgeRoomCounts: [String: Int] {
+            var counts = unreadCountsByRoom.filter { roomID, count in
+                count > 0 && recentReadDates[roomID] == nil
+            }
+            for event in recentNotificationEvents.values {
+                if let readDate = recentReadDates[event.roomID], readDate >= event.date {
+                    continue
+                }
+                counts[event.roomID] = max(counts[event.roomID] ?? 0, event.countAfterEvent)
+            }
+            for event in provisionalNotificationEvents.values {
+                if let readDate = recentReadDates[event.roomID], readDate >= event.date {
+                    continue
+                }
+                counts[event.roomID] = max(counts[event.roomID] ?? 0, event.countAfterEvent)
+            }
+            return counts
         }
 
         var badgeCount: Int {
-            badgeRoomIDs.count
+            saturatingBadgeTotal(badgeRoomCounts.values)
         }
 
         var authoritativeCountIsReconciled: Bool {
@@ -48,9 +74,9 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
             guard recentAuthoritativeCount > 0 else {
                 return true
             }
-            let authoritativeRoomIDs = recentAuthoritativeRoomIDs ?? []
-            return authoritativeRoomIDs.count == recentAuthoritativeCount
-                && authoritativeRoomIDs == badgeRoomIDs
+            let authoritativeRoomCounts = recentAuthoritativeRoomCounts ?? [:]
+            return saturatingBadgeTotal(authoritativeRoomCounts.values) == recentAuthoritativeCount
+                && authoritativeRoomCounts == badgeRoomCounts
         }
 
         var snapshot: NotificationBadgeSnapshot {
@@ -62,8 +88,23 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
         }
     }
 
-    private static let storageKey = "junchat.notificationBadgeRoomLedger.v5"
+    private struct LegacyStateV5: Codable {
+        let userID: String
+        var isReconciled: Bool
+        var revision: UInt64
+        var unreadRoomIDs: Set<String>
+        var recentAuthoritativeCount: Int?
+        var recentAuthoritativeDate: Date?
+        var recentAuthoritativeRoomIDs: Set<String>?
+        var recentNotificationDates: [String: Date]
+        var provisionalNotificationDates: [String: Date]
+        var recentReadDates: [String: Date]
+    }
+
+    private static let storageKey = "junchat.notificationBadgeRoomLedger.v6"
+    private static let legacyStorageKey = "junchat.notificationBadgeRoomLedger.v5"
     private static let notificationSyncGracePeriod: TimeInterval = 2 * 60
+    private static let eventDeduplicationPeriod: TimeInterval = 24 * 60 * 60
     private static let processLock = NSLock()
 
     private let userDefaults: UserDefaults
@@ -85,44 +126,52 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
             saveState(.init(userID: userID,
                             isReconciled: false,
                             revision: (currentState?.revision ?? 0) &+ 1,
-                            unreadRoomIDs: [],
+                            unreadCountsByRoom: [:],
                             recentAuthoritativeCount: nil,
                             recentAuthoritativeDate: nil,
-                            recentAuthoritativeRoomIDs: nil,
-                            recentNotificationDates: [:],
-                            provisionalNotificationDates: [:],
+                            recentAuthoritativeRoomCounts: nil,
+                            recentNotificationEvents: [:],
+                            provisionalNotificationEvents: [:],
+                            recentSeenEventDates: [:],
                             recentReadDates: [:]))
         }
     }
 
     func reconcile(userID: String, unreadRoomIDs: Set<String>) -> NotificationBadgeSnapshot? {
+        reconcile(userID: userID,
+                  unreadCountsByRoom: Dictionary(uniqueKeysWithValues: unreadRoomIDs.map { ($0, 1) }))
+    }
+
+    func reconcile(userID: String, unreadCountsByRoom: [String: Int]) -> NotificationBadgeSnapshot? {
         withExclusiveLock(fallback: nil) {
             guard let currentState = loadState(), currentState.userID == userID else { return nil }
+            let unreadCountsByRoom = unreadCountsByRoom.filter { $0.value > 0 }
             let cutoffDate = now().addingTimeInterval(-Self.notificationSyncGracePeriod)
-            let recentNotificationDates = currentState.recentNotificationDates.filter { roomID, date in
-                !unreadRoomIDs.contains(roomID) && date >= cutoffDate
+            let recentNotificationEvents = currentState.recentNotificationEvents.filter { _, event in
+                event.date >= cutoffDate && event.countAfterEvent > (unreadCountsByRoom[event.roomID] ?? 0)
             }
-            let provisionalNotificationDates = currentState.provisionalNotificationDates.filter { roomID, date in
-                !unreadRoomIDs.contains(roomID) && date >= cutoffDate
+            let provisionalNotificationEvents = currentState.provisionalNotificationEvents.filter { _, event in
+                event.date >= cutoffDate && event.countAfterEvent > (unreadCountsByRoom[event.roomID] ?? 0)
             }
             let recentReadDates = currentState.recentReadDates.filter { roomID, date in
-                unreadRoomIDs.contains(roomID) && date >= cutoffDate
+                unreadCountsByRoom[roomID] != nil && date >= cutoffDate
             }
             let shouldRetainAuthoritativeCount = currentState.recentAuthoritativeDate.map { $0 >= cutoffDate } ?? false
             var reconciledState = State(userID: userID,
                                         isReconciled: true,
                                         revision: currentState.revision,
-                                        unreadRoomIDs: unreadRoomIDs,
+                                        unreadCountsByRoom: unreadCountsByRoom,
                                         recentAuthoritativeCount: shouldRetainAuthoritativeCount ? currentState.recentAuthoritativeCount : nil,
                                         recentAuthoritativeDate: shouldRetainAuthoritativeCount ? currentState.recentAuthoritativeDate : nil,
-                                        recentAuthoritativeRoomIDs: shouldRetainAuthoritativeCount ? currentState.recentAuthoritativeRoomIDs : nil,
-                                        recentNotificationDates: recentNotificationDates,
-                                        provisionalNotificationDates: provisionalNotificationDates,
+                                        recentAuthoritativeRoomCounts: shouldRetainAuthoritativeCount ? currentState.recentAuthoritativeRoomCounts : nil,
+                                        recentNotificationEvents: recentNotificationEvents,
+                                        provisionalNotificationEvents: provisionalNotificationEvents,
+                                        recentSeenEventDates: currentState.recentSeenEventDates,
                                         recentReadDates: recentReadDates)
             if reconciledState.authoritativeCountIsReconciled {
                 reconciledState.recentAuthoritativeCount = nil
                 reconciledState.recentAuthoritativeDate = nil
-                reconciledState.recentAuthoritativeRoomIDs = nil
+                reconciledState.recentAuthoritativeRoomCounts = nil
             }
             let state = persistIfChanged(reconciledState,
                                          currentState: currentState)
@@ -132,6 +181,7 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
 
     func applyNotification(userID: String?,
                            roomID: String?,
+                           eventID: String? = nil,
                            contributesToBadge: Bool?,
                            isAuthoritative: Bool = false,
                            fallback: NSNumber?) -> NSNumber? {
@@ -147,39 +197,24 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
             }
 
             let previousState = state
+            if let roomID {
+                recordNotification(roomID: roomID,
+                                   eventID: eventID,
+                                   contributesToBadge: contributesToBadge,
+                                   fallback: fallback,
+                                   state: &state)
+            }
+
             if isAuthoritative, let fallback {
-                state.recentAuthoritativeCount = fallback.intValue
-                state.recentAuthoritativeDate = now()
-                var authoritativeRoomIDs = Set<String>()
-                if fallback.intValue > 0, contributesToBadge == true, let roomID {
-                    authoritativeRoomIDs.insert(roomID)
-                }
-                state.recentAuthoritativeRoomIDs = authoritativeRoomIDs
+                recordAuthoritativeCount(fallback.intValue,
+                                         roomID: roomID,
+                                         contributesToBadge: contributesToBadge,
+                                         state: &state)
             }
 
             guard state.isReconciled else {
                 state = persistIfChanged(state, currentState: previousState)
                 return state.recentAuthoritativeCount.map(NSNumber.init(value:)) ?? fallback
-            }
-
-            if let roomID {
-                switch contributesToBadge {
-                case true:
-                    state.recentNotificationDates[roomID] = now()
-                    state.provisionalNotificationDates[roomID] = nil
-                    state.recentReadDates[roomID] = nil
-                case false:
-                    state.provisionalNotificationDates[roomID] = nil
-                case nil:
-                    let fallbackCount = fallback?.intValue
-                    if !state.badgeRoomIDs.contains(roomID),
-                       state.recentNotificationDates[roomID] == nil,
-                       state.provisionalNotificationDates[roomID] == nil,
-                       fallbackCount == state.badgeCount + 1 {
-                        state.provisionalNotificationDates[roomID] = now()
-                        state.recentReadDates[roomID] = nil
-                    }
-                }
             }
 
             state = persistIfChanged(state, currentState: previousState)
@@ -196,21 +231,21 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
             }
 
             let previousState = state
-            state.unreadRoomIDs.remove(roomID)
-            state.recentNotificationDates[roomID] = nil
-            state.provisionalNotificationDates[roomID] = nil
+            state.unreadCountsByRoom[roomID] = nil
+            state.recentNotificationEvents = state.recentNotificationEvents.filter { $0.value.roomID != roomID }
+            state.provisionalNotificationEvents = state.provisionalNotificationEvents.filter { $0.value.roomID != roomID }
             state.recentReadDates[roomID] = now()
-            var authoritativeRoomIDs = state.recentAuthoritativeRoomIDs ?? []
-            let contributedToAuthoritativeCount = authoritativeRoomIDs.remove(roomID) != nil
-            state.recentAuthoritativeRoomIDs = authoritativeRoomIDs
-            if let authoritativeCount = state.recentAuthoritativeCount, contributedToAuthoritativeCount {
-                state.recentAuthoritativeCount = max(0, authoritativeCount - 1)
+            var authoritativeRoomCounts = state.recentAuthoritativeRoomCounts ?? [:]
+            let contributedCount = authoritativeRoomCounts.removeValue(forKey: roomID) ?? 0
+            state.recentAuthoritativeRoomCounts = authoritativeRoomCounts
+            if let authoritativeCount = state.recentAuthoritativeCount, contributedCount > 0 {
+                state.recentAuthoritativeCount = max(0, authoritativeCount - contributedCount)
                 state.recentAuthoritativeDate = now()
             }
             if state.authoritativeCountIsReconciled {
                 state.recentAuthoritativeCount = nil
                 state.recentAuthoritativeDate = nil
-                state.recentAuthoritativeRoomIDs = nil
+                state.recentAuthoritativeRoomCounts = nil
             }
             return persistIfChanged(state, currentState: previousState).snapshot
         }
@@ -247,20 +282,30 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
             saveState(.init(userID: "",
                             isReconciled: true,
                             revision: revision,
-                            unreadRoomIDs: [],
+                            unreadCountsByRoom: [:],
                             recentAuthoritativeCount: nil,
                             recentAuthoritativeDate: nil,
-                            recentAuthoritativeRoomIDs: nil,
-                            recentNotificationDates: [:],
-                            provisionalNotificationDates: [:],
+                            recentAuthoritativeRoomCounts: nil,
+                            recentNotificationEvents: [:],
+                            provisionalNotificationEvents: [:],
+                            recentSeenEventDates: [:],
                             recentReadDates: [:]))
         }
     }
 
     private func loadState() -> State? {
         userDefaults.synchronize()
-        guard let data = userDefaults.data(forKey: Self.storageKey) else { return nil }
-        return try? JSONDecoder().decode(State.self, from: data)
+        if let data = userDefaults.data(forKey: Self.storageKey),
+           let state = try? JSONDecoder().decode(State.self, from: data) {
+            return state
+        }
+        guard let data = userDefaults.data(forKey: Self.legacyStorageKey),
+              let legacyState = try? JSONDecoder().decode(LegacyStateV5.self, from: data) else {
+            return nil
+        }
+        let state = migratedState(from: legacyState)
+        saveState(state)
+        return state
     }
 
     private func saveState(_ state: State) {
@@ -280,14 +325,18 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
     private func loadStatePruningExpiredProvisionalEntries() -> State? {
         guard let currentState = loadState() else { return nil }
         let cutoffDate = now().addingTimeInterval(-Self.notificationSyncGracePeriod)
+        let deduplicationCutoffDate = now().addingTimeInterval(-Self.eventDeduplicationPeriod)
         var state = currentState
-        state.provisionalNotificationDates = state.provisionalNotificationDates.filter { _, date in
-            date >= cutoffDate
+        state.provisionalNotificationEvents = state.provisionalNotificationEvents.filter { _, event in
+            event.date >= cutoffDate
+        }
+        state.recentSeenEventDates = state.recentSeenEventDates.filter { _, date in
+            date >= deduplicationCutoffDate
         }
         if let authoritativeDate = state.recentAuthoritativeDate, authoritativeDate < cutoffDate {
             state.recentAuthoritativeCount = nil
             state.recentAuthoritativeDate = nil
-            state.recentAuthoritativeRoomIDs = nil
+            state.recentAuthoritativeRoomCounts = nil
         }
         return persistIfChanged(state, currentState: currentState)
     }
@@ -307,6 +356,137 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
             return NSNumber(value: state.badgeCount)
         }
         return fallback
+    }
+
+    private func migratedState(from legacyState: LegacyStateV5) -> State {
+        let unreadCountsByRoom = Dictionary(uniqueKeysWithValues: legacyState.unreadRoomIDs.map { ($0, 1) })
+        let recentNotificationEvents = Dictionary(uniqueKeysWithValues: legacyState.recentNotificationDates.map { roomID, date in
+            (eventKey(eventID: nil, roomID: roomID),
+             RecentEvent(roomID: roomID, countAfterEvent: max(1, unreadCountsByRoom[roomID] ?? 0), date: date))
+        })
+        let provisionalNotificationEvents = Dictionary(uniqueKeysWithValues: legacyState.provisionalNotificationDates.map { roomID, date in
+            ("provisional:\(roomID)",
+             RecentEvent(roomID: roomID, countAfterEvent: max(1, unreadCountsByRoom[roomID] ?? 0), date: date))
+        })
+        let recentAuthoritativeRoomCounts = legacyState.recentAuthoritativeRoomIDs.map {
+            Dictionary(uniqueKeysWithValues: $0.map { ($0, 1) })
+        }
+        return .init(userID: legacyState.userID,
+                     isReconciled: legacyState.isReconciled,
+                     revision: legacyState.revision,
+                     unreadCountsByRoom: unreadCountsByRoom,
+                     recentAuthoritativeCount: legacyState.recentAuthoritativeCount,
+                     recentAuthoritativeDate: legacyState.recentAuthoritativeDate,
+                     recentAuthoritativeRoomCounts: recentAuthoritativeRoomCounts,
+                     recentNotificationEvents: recentNotificationEvents,
+                     provisionalNotificationEvents: provisionalNotificationEvents,
+                     recentSeenEventDates: [:],
+                     recentReadDates: legacyState.recentReadDates)
+    }
+
+    private func eventKey(eventID: String?, roomID: String) -> String {
+        if let eventID, !eventID.isEmpty {
+            return "event:\(eventID)"
+        }
+        return "room:\(roomID)"
+    }
+
+    private func incremented(_ count: Int) -> Int {
+        count == Int.max ? Int.max : count + 1
+    }
+
+    private func recordNotification(roomID: String,
+                                    eventID: String?,
+                                    contributesToBadge: Bool?,
+                                    fallback: NSNumber?,
+                                    state: inout State) {
+        let eventKey = eventKey(eventID: eventID, roomID: roomID)
+        let hasStableEventID = eventID?.isEmpty == false
+        let wasSeen = hasStableEventID && state.recentSeenEventDates[eventKey] != nil
+        switch contributesToBadge {
+        case true:
+            recordConfirmedNotification(roomID: roomID,
+                                        eventKey: eventKey,
+                                        hasStableEventID: hasStableEventID,
+                                        wasSeen: wasSeen,
+                                        state: &state)
+        case false:
+            state.provisionalNotificationEvents[eventKey] = nil
+            if hasStableEventID, !wasSeen {
+                state.recentSeenEventDates[eventKey] = now()
+            }
+        case nil:
+            recordProvisionalNotification(roomID: roomID,
+                                          eventKey: eventKey,
+                                          hasStableEventID: hasStableEventID,
+                                          wasSeen: wasSeen,
+                                          fallback: fallback,
+                                          state: &state)
+        }
+    }
+
+    private func recordConfirmedNotification(roomID: String,
+                                             eventKey: String,
+                                             hasStableEventID: Bool,
+                                             wasSeen: Bool,
+                                             state: inout State) {
+        var didAddContribution = false
+        if state.recentNotificationEvents[eventKey] == nil {
+            if let provisionalEvent = state.provisionalNotificationEvents.removeValue(forKey: eventKey) {
+                state.recentNotificationEvents[eventKey] = .init(roomID: provisionalEvent.roomID,
+                                                                 countAfterEvent: provisionalEvent.countAfterEvent,
+                                                                 date: now())
+                didAddContribution = true
+            } else if state.isReconciled, !wasSeen {
+                state.recentNotificationEvents[eventKey] = .init(roomID: roomID,
+                                                                 countAfterEvent: incremented(state.badgeRoomCounts[roomID] ?? 0),
+                                                                 date: now())
+                didAddContribution = true
+            }
+        }
+        if hasStableEventID, !wasSeen {
+            state.recentSeenEventDates[eventKey] = now()
+        }
+        if didAddContribution {
+            state.recentReadDates[roomID] = nil
+        }
+    }
+
+    private func recordProvisionalNotification(roomID: String,
+                                               eventKey: String,
+                                               hasStableEventID: Bool,
+                                               wasSeen: Bool,
+                                               fallback: NSNumber?,
+                                               state: inout State) {
+        guard !wasSeen,
+              state.recentNotificationEvents[eventKey] == nil,
+              state.provisionalNotificationEvents[eventKey] == nil,
+              fallback?.intValue == incremented(state.badgeCount) else {
+            return
+        }
+        state.provisionalNotificationEvents[eventKey] = .init(roomID: roomID,
+                                                              countAfterEvent: incremented(state.badgeRoomCounts[roomID] ?? 0),
+                                                              date: now())
+        if hasStableEventID {
+            state.recentSeenEventDates[eventKey] = now()
+        }
+        state.recentReadDates[roomID] = nil
+    }
+
+    private func recordAuthoritativeCount(_ count: Int,
+                                          roomID: String?,
+                                          contributesToBadge: Bool?,
+                                          state: inout State) {
+        state.recentAuthoritativeCount = count
+        state.recentAuthoritativeDate = now()
+        let roomCounts = state.badgeRoomCounts
+        guard count > 0, contributesToBadge == true, let roomID else {
+            state.recentAuthoritativeRoomCounts = [:]
+            return
+        }
+        state.recentAuthoritativeRoomCounts = saturatingBadgeTotal(roomCounts.values) == count
+            ? roomCounts
+            : [roomID: 1]
     }
 
     private func withExclusiveLock<T>(fallback: T, operation: () -> T) -> T {

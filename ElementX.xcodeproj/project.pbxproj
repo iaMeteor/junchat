@@ -9949,7 +9949,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 48;
+				CURRENT_PROJECT_VERSION = 49;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = W834S4TA7S;
 				ENABLE_BITCODE = NO;
@@ -9976,7 +9976,7 @@
 				JUNCHAT_MATRIX_ACCOUNT_PROVIDER = junchat.yyzs120.cn;
 				JUNCHAT_OIDC_REDIRECT_URL = "https://junchat.yyzs120.cn/oidc/login";
 				JUNCHAT_PUSH_GATEWAY_BASE_URL = "https://sygnal-junchat.yyzs120.cn/junchat-sygnal-v2";
-				JUNCHAT_PUSH_GATEWAY_NOTIFY_URL = "https://sygnal-junchat.yyzs120.cn/_matrix/push/v1/notify?junchat-sygnal=v2";
+				JUNCHAT_PUSH_GATEWAY_NOTIFY_URL = "https://sygnal-junchat.yyzs120.cn/_matrix/push/v1/notify?junchat-sygnal=v2&junchat-badge=messages-v1";
 				JUNCHAT_RAGESHAKE_ENABLED = YES;
 				JUNCHAT_URL_SCHEME = matrix;
 				KEYCHAIN_ACCESS_GROUP_IDENTIFIER = "$(DEVELOPMENT_TEAM).$(BASE_BUNDLE_IDENTIFIER)";
@@ -10377,7 +10377,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 48;
+				CURRENT_PROJECT_VERSION = 49;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = W834S4TA7S;
 				ENABLE_BITCODE = NO;
@@ -10398,7 +10398,7 @@
 				JUNCHAT_MATRIX_ACCOUNT_PROVIDER = junchat.yyzs120.cn;
 				JUNCHAT_OIDC_REDIRECT_URL = "https://junchat.yyzs120.cn/oidc/login";
 				JUNCHAT_PUSH_GATEWAY_BASE_URL = "https://sygnal-junchat.yyzs120.cn/junchat-sygnal-v2";
-				JUNCHAT_PUSH_GATEWAY_NOTIFY_URL = "https://sygnal-junchat.yyzs120.cn/_matrix/push/v1/notify?junchat-sygnal=v2";
+				JUNCHAT_PUSH_GATEWAY_NOTIFY_URL = "https://sygnal-junchat.yyzs120.cn/_matrix/push/v1/notify?junchat-sygnal=v2&junchat-badge=messages-v1";
 				JUNCHAT_RAGESHAKE_ENABLED = YES;
 				JUNCHAT_URL_SCHEME = matrix;
 				KEYCHAIN_ACCESS_GROUP_IDENTIFIER = "$(DEVELOPMENT_TEAM).$(BASE_BUNDLE_IDENTIFIER)";
@@ -10456,7 +10456,7 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 48;
+				CURRENT_PROJECT_VERSION = 49;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = W834S4TA7S;
 				ENABLE_BITCODE = NO;
@@ -10483,7 +10483,7 @@
 				JUNCHAT_MATRIX_ACCOUNT_PROVIDER = junchat.yyzs120.cn;
 				JUNCHAT_OIDC_REDIRECT_URL = "https://junchat.yyzs120.cn/oidc/login";
 				JUNCHAT_PUSH_GATEWAY_BASE_URL = "https://sygnal-junchat.yyzs120.cn/junchat-sygnal-v2";
-				JUNCHAT_PUSH_GATEWAY_NOTIFY_URL = "https://sygnal-junchat.yyzs120.cn/_matrix/push/v1/notify?junchat-sygnal=v2";
+				JUNCHAT_PUSH_GATEWAY_NOTIFY_URL = "https://sygnal-junchat.yyzs120.cn/_matrix/push/v1/notify?junchat-sygnal=v2&junchat-badge=messages-v1";
 				JUNCHAT_RAGESHAKE_ENABLED = YES;
 				JUNCHAT_URL_SCHEME = matrix;
 				KEYCHAIN_ACCESS_GROUP_IDENTIFIER = "$(DEVELOPMENT_TEAM).$(BASE_BUNDLE_IDENTIFIER)";

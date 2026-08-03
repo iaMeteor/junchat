@@ -371,6 +371,7 @@ enum NSEBadgeDeliveryNormalizer {
 
         let reconciledBadge = ledger.applyNotification(userID: userID,
                                                        roomID: content.roomID,
+                                                       eventID: content.eventID,
                                                        contributesToBadge: content.badgeContribution,
                                                        isAuthoritative: content.hasAuthoritativeBadgeForDelivery,
                                                        fallback: mutableContent.badgeForDelivery)

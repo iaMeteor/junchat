@@ -63,6 +63,7 @@ class NotificationHandler {
             MXLog.error("\(tag) Failed retrieving notification item")
             reconcileBadge(userID: receiverID,
                            roomID: roomID,
+                           eventID: eventID,
                            contributesToBadge: nil)
             discardNotification()
             return
@@ -75,6 +76,7 @@ class NotificationHandler {
         }
         reconcileBadge(userID: notificationItemProxy.receiverID,
                        roomID: roomID,
+                       eventID: eventID,
                        contributesToBadge: contributesToBadge)
 
         switch processingResult {
@@ -120,9 +122,11 @@ class NotificationHandler {
 
     private func reconcileBadge(userID: String?,
                                 roomID: String,
+                                eventID: String,
                                 contributesToBadge: Bool?) {
         let correctedBadge = settings.notificationBadgeRoomLedger.applyNotification(userID: userID,
                                                                                     roomID: roomID,
+                                                                                    eventID: eventID,
                                                                                     contributesToBadge: contributesToBadge,
                                                                                     isAuthoritative: notificationContent.hasAuthoritativeBadgeForDelivery,
                                                                                     fallback: notificationContent.badgeForDelivery)

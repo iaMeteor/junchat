@@ -207,14 +207,17 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
 
         notificationCenter.removeDeliveredNotifications(withIdentifiers: notificationsIdentifiers)
 
-        let unreadRoomIDs = Set(rooms.lazy
-            .filter {
-                $0.hasUnreadNotifications ||
-                    $0.joinRequestType?.isInvite == true
+        let unreadCountsByRoom = rooms.reduce(into: [String: Int]()) { counts, room in
+            if room.joinRequestType?.isInvite == true {
+                counts[room.id] = 1
+            } else if room.unreadNotificationsCount > 0 {
+                counts[room.id] = room.unreadNotificationsCount > UInt(Int.max)
+                    ? Int.max
+                    : Int(room.unreadNotificationsCount)
             }
-            .map(\.id))
+        }
         guard appSettings.notificationBadgeRoomLedger.reconcile(userID: userID,
-                                                                unreadRoomIDs: unreadRoomIDs) != nil else {
+                                                                unreadCountsByRoom: unreadCountsByRoom) != nil else {
             return
         }
 
