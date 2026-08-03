@@ -219,13 +219,6 @@ private struct CallView: UIViewRepresentable {
         (() => {
             const junchatLanguage = "\(language)";
             const junchatCallIntent = new URL(window.location.href).searchParams.get("junchat_call_intent");
-            const junchatConfig = {
-                matrix_rtc_session: {
-                    wait_for_key_rotation_ms: 5000,
-                    delayed_leave_event_restart_ms: 20000,
-                    delayed_leave_event_delay_ms: 120000
-                }
-            };
             const junchatTranslations = {
                 "zh-Hans": {
                     common: {
@@ -481,13 +474,7 @@ private struct CallView: UIViewRepresentable {
             const mergeJunchatConfig = (config) => {
                 const sanitizedConfig = { ...(config || {}) };
                 delete sanitizedConfig.livekit;
-                return {
-                    ...sanitizedConfig,
-                    matrix_rtc_session: {
-                        ...(sanitizedConfig.matrix_rtc_session || {}),
-                        ...junchatConfig.matrix_rtc_session
-                    }
-                };
+                return sanitizedConfig;
             };
 
             const replaceJunchatVisibleText = () => {

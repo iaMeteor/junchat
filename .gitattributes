@@ -3,3 +3,4 @@ DevelopmentAssets/Media/** filter=lfs diff=lfs merge=lfs -text
 UnitTests/__Snapshots__/** filter=lfs diff=lfs merge=lfs -text
 PreviewTests/Sources/__Snapshots__/** filter=lfs diff=lfs merge=lfs -text
 compound-ios/Tests/CompoundTests/__Snapshots__/** filter=lfs diff=lfs merge=lfs -text
+Vendor/EmbeddedElementCall/Sources/dist/** -whitespace

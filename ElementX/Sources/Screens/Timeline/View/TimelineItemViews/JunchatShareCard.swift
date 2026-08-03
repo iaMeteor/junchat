@@ -10,63 +10,6 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-enum JunchatLinkPresentation: String, CaseIterable, Hashable {
-    case card
-    case text
-
-    private static let marker = #"data-junchat-link-presentation="text""#
-
-    static func encodedPresentation(in formattedBody: String?) -> Self {
-        formattedBody?.contains(marker) == true ? .text : .card
-    }
-
-    static func formattedBody(plain: String, html: String?, presentation: Self) -> String? {
-        guard presentation == .text else {
-            return html
-        }
-
-        let content = html ?? linkifiedHTML(from: plain)
-        return #"<div data-junchat-link-presentation="text">"# + content + "</div>"
-    }
-
-    private static func linkifiedHTML(from text: String) -> String {
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        let matches = MatrixEntityRegex.linkRegex.matches(in: text, options: [], range: range)
-        let string = text as NSString
-        var location = 0
-        var result = ""
-
-        for match in matches where match.resultType == .link {
-            let prefixRange = NSRange(location: location, length: match.range.location - location)
-            result += escapedHTML(string.substring(with: prefixRange))
-
-            let displayText = string.substring(with: match.range)
-            if let url = match.url, url.junchatIsExternalWebURL {
-                result += #"<a href=""# + escapedHTML(url.absoluteString) + #"">"#
-                    + escapedHTML(displayText) + "</a>"
-            } else {
-                result += escapedHTML(displayText)
-            }
-            location = NSMaxRange(match.range)
-        }
-
-        if location < string.length {
-            result += escapedHTML(string.substring(from: location))
-        }
-
-        return result.replacingOccurrences(of: "\n", with: "<br />")
-    }
-
-    private static func escapedHTML(_ string: String) -> String {
-        string
-            .replacingOccurrences(of: "&", with: "&amp;")
-            .replacingOccurrences(of: "<", with: "&lt;")
-            .replacingOccurrences(of: ">", with: "&gt;")
-            .replacingOccurrences(of: "\"", with: "&quot;")
-            .replacingOccurrences(of: "'", with: "&#39;")
-    }
-}
-
 struct JunchatShareCard: Equatable {
     private struct DetectedURL {
         let url: URL

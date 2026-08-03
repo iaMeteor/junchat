@@ -41,6 +41,11 @@ bash ci_scripts/tests/ci_post_xcodebuild_test.sh
 
 Use the repository's existing Xcode build and test schemes for the release
 candidate. Do not set `JUNCHAT_SKIP_SWIFTLINT=1` as a normal release path.
+Run `swift run tools build-element-call-candidate` without candidate arguments
+to verify that `project.yml`, `ElementCall.release.json`, and the complete
+vendored Element Call package agree before archiving. The lock's
+`rtcConfigurationAuthority` is the embedded package's `config.json`; native iOS
+bootstrap code must not redefine `matrix_rtc_session` values.
 The Release Hygiene pull-request workflow watches `project.yml`, `app.yml`, all
 `**/SupportingFiles/target.yml` files, variant specs, and generated release
 metadata. Its tested XcodeGen gate rejects unstaged or staged tracked changes,

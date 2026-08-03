@@ -67,6 +67,10 @@ grep -Fq 'ci_scripts/verify_xcodegen_is_current.sh' \
 for release_metadata_path in \
     'project.yml' \
     'app.yml' \
+    'docs/ELEMENT_CALL_CANDIDATE.md' \
+    'ElementCall.release.json' \
+    'Vendor/EmbeddedElementCall/**' \
+    'ElementX.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved' \
     '**/SupportingFiles/target.yml' \
     'Variants/**/*.yml' \
     'ElementX.xcodeproj/project.pbxproj' \

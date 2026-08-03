@@ -287,11 +287,11 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
 
     private func resolvedBadgeCount(for snapshot: NotificationBadgeSnapshot,
                                     shouldClearUnreconciledBadge: Bool) -> Int? {
-        if let authoritativeCount = snapshot.recentAuthoritativeCount {
-            return authoritativeCount
-        }
         if snapshot.isReconciled {
             return snapshot.count
+        }
+        if let authoritativeCount = snapshot.recentAuthoritativeCount {
+            return authoritativeCount
         }
         return shouldClearUnreconciledBadge ? 0 : nil
     }

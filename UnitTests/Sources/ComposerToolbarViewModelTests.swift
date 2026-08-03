@@ -288,6 +288,46 @@ final class ComposerToolbarViewModelTests {
         #expect(!draftServiceMock.clearDraftCalled)
         #expect(!draftServiceMock.loadDraftCalled)
     }
+
+    @Test
+    func saveDraftPlainURLPreservesLinkPresentation() async throws {
+        viewModel.context.composerFormattingEnabled = false
+        viewModel.context.plainComposerText = .init(string: "https://example.com/news")
+        viewModel.context.linkPresentation = .text
+
+        var capturedDraft: ComposerDraftProxy?
+        await waitForConfirmation("Save draft") { confirmation in
+            draftServiceMock.saveDraftClosure = { draft in
+                capturedDraft = draft
+                confirmation()
+                return .success(())
+            }
+            viewModel.saveDraft()
+        }
+
+        let draft = try #require(capturedDraft)
+        #expect(draft.linkPresentation == .text)
+        #expect(draft.htmlText == nil)
+    }
+
+    @Test
+    func saveDraftOrdinaryTextDoesNotPersistStaleLinkPresentation() async throws {
+        viewModel.context.composerFormattingEnabled = false
+        viewModel.context.plainComposerText = .init(string: "Hello world!")
+        viewModel.context.linkPresentation = .text
+
+        var capturedDraft: ComposerDraftProxy?
+        await waitForConfirmation("Save draft") { confirmation in
+            draftServiceMock.saveDraftClosure = { draft in
+                capturedDraft = draft
+                confirmation()
+                return .success(())
+            }
+            viewModel.saveDraft()
+        }
+
+        #expect(try #require(capturedDraft).linkPresentation == .card)
+    }
     
     @Test
     func saveDraftFormattedText() async throws {
@@ -460,6 +500,36 @@ final class ComposerToolbarViewModelTests {
         #expect(!viewModel.context.composerFormattingEnabled)
         #expect(viewModel.state.composerMode == .default)
         #expect(viewModel.context.plainComposerText == NSAttributedString(string: "Hello world!"))
+    }
+
+    @Test
+    func restorePersistedPlainURLPreservesLinkPresentationAndPlainComposer() async {
+        let persistedDraft = ComposerDraftProxy(plainText: "https://example.com/news",
+                                                htmlText: nil,
+                                                draftType: .newMessage,
+                                                linkPresentation: .text).toRust
+        draftServiceMock.loadDraftClosure = {
+            .success(.init(from: persistedDraft))
+        }
+
+        await viewModel.loadDraft()
+
+        #expect(!viewModel.context.composerFormattingEnabled)
+        #expect(viewModel.context.plainComposerText == NSAttributedString(string: "https://example.com/news"))
+        #expect(viewModel.context.linkPresentation == .text)
+    }
+
+    @Test
+    func restoreLegacyDraftWithoutLinkPresentationDefaultsToCard() {
+        let persistedDraft = ComposerDraft(plainText: "https://example.com/news",
+                                           htmlText: nil,
+                                           draftType: .newMessage,
+                                           attachments: [])
+
+        let draft = ComposerDraftProxy(from: persistedDraft)
+
+        #expect(draft.htmlText == nil)
+        #expect(draft.linkPresentation == .card)
     }
     
     @Test

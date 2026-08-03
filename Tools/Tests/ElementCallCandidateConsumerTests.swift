@@ -236,7 +236,7 @@ final class ElementCallCandidateConsumerTests: XCTestCase {
         }
     }
 
-    func testTransientSpecRequiresPublic0191AndDisablesPostGenerationMutation() throws {
+    func testTransientSpecRequiresReleaseLockedPackageAndDisablesPostGenerationMutation() throws {
         let projectYAMLURL = URL(filePath: FileManager.default.currentDirectoryPath).appending(path: "project.yml")
         let projectYAML = try String(contentsOf: projectYAMLURL, encoding: .utf8)
         let stagedPackageURL = URL(filePath: "/private/tmp/junchat-element-call-ios-test/EmbeddedElementCall")
@@ -289,12 +289,24 @@ final class ElementCallCandidateConsumerTests: XCTestCase {
         XCTAssertEqual(developmentSignedInspection.targetEntitlementPaths, inspection.targetEntitlementPaths)
         XCTAssertEqual(try String(contentsOf: projectYAMLURL, encoding: .utf8), projectYAML)
 
-        let driftedYAML = projectYAML.replacingOccurrences(of: "exactVersion: 0.19.1", with: "exactVersion: 0.19.2")
+        let driftedYAML = projectYAML.replacingOccurrences(of: "path: Vendor/EmbeddedElementCall",
+                                                           with: "path: Vendor/OtherElementCall")
         XCTAssertThrowsError(try ElementCallCandidateProjectSpec.make(defaultProjectYAML: driftedYAML,
                                                                       stagedPackageURL: stagedPackageURL,
                                                                       repositoryURL: repositoryURL)) { error in
-            XCTAssertTrue(error.localizedDescription.contains("0.19.1"))
+            XCTAssertTrue(error.localizedDescription.contains("release-locked"))
         }
+    }
+
+    func testReleaseSourceLockMatchesVendoredPackage() throws {
+        let repositoryURL = URL(filePath: FileManager.default.currentDirectoryPath)
+
+        let lock = try ElementCallReleaseSource.validate(repositoryURL: repositoryURL)
+
+        XCTAssertEqual(lock.sourceCommit, "a77d19d01ba5413e045fb621359efa4d9a49f109")
+        XCTAssertEqual(lock.version, "0.19.3-junchat.a77d19d01ba5")
+        XCTAssertEqual(lock.packageTreeSHA256, "9aa3a9b25d7ffa8a6ed24de80920637f04fac03a9bd1dacace150696a315be17")
+        XCTAssertEqual(lock.rtcConfigurationAuthority, "Vendor/EmbeddedElementCall/Sources/dist/config.json")
     }
 
     func testGeneratedTransientProjectUsesAbsoluteEntitlementBuildSettings() throws {
@@ -396,20 +408,19 @@ final class ElementCallCandidateConsumerTests: XCTestCase {
         XCTAssertThrowsError(try ElementCallCandidatePackageIdentity.validate(dumpPackageJSON: wrongName))
     }
 
-    func testTransientPackageResolutionChangesOnlyElementCallPin() throws {
+    func testTransientPackageResolutionKeepsRemotePinsUnchanged() throws {
         let publicURL = URL(filePath: FileManager.default.currentDirectoryPath)
             .appending(path: "ElementX.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved")
         let publicData = try Data(contentsOf: publicURL)
         var candidateRoot = try XCTUnwrap(JSONSerialization.jsonObject(with: publicData) as? [String: Any])
         let publicPins = try XCTUnwrap(candidateRoot["pins"] as? [[String: Any]])
-        let candidatePins = publicPins.filter { $0["identity"] as? String != "element-call-swift" }
-        XCTAssertEqual(publicPins.count, candidatePins.count + 1)
+        XCTAssertFalse(publicPins.contains { $0["identity"] as? String == "element-call-swift" })
+        XCTAssertNoThrow(try ElementCallCandidatePackageResolution.validateRelease(publicData))
         let publicOriginHash = try XCTUnwrap(candidateRoot["originHash"] as? String)
         let candidateOriginHash = publicOriginHash == String(repeating: "b", count: 64)
             ? String(repeating: "c", count: 64)
             : String(repeating: "b", count: 64)
         candidateRoot["originHash"] = candidateOriginHash
-        candidateRoot["pins"] = candidatePins
         let candidateData = try JSONSerialization.data(withJSONObject: candidateRoot, options: [.sortedKeys])
 
         XCTAssertNoThrow(try ElementCallCandidatePackageResolution.validate(publicData: publicData,
@@ -421,12 +432,19 @@ final class ElementCallCandidateConsumerTests: XCTestCase {
                                                                                 candidateData: JSONSerialization.data(withJSONObject: staleOrigin, options: [.sortedKeys])))
 
         var retainedRemotePin = candidateRoot
-        retainedRemotePin["pins"] = publicPins
+        retainedRemotePin["pins"] = publicPins + [[
+            "identity": "element-call-swift",
+            "kind": "remoteSourceControl",
+            "location": "https://github.com/element-hq/element-call-swift",
+            "state": ["revision": "a3d224d8c0983c7227bf8a8f1661b9984a0a9e35", "version": "0.19.1"]
+        ]]
+        let retainedRemotePinData = try JSONSerialization.data(withJSONObject: retainedRemotePin, options: [.sortedKeys])
+        XCTAssertThrowsError(try ElementCallCandidatePackageResolution.validateRelease(retainedRemotePinData))
         XCTAssertThrowsError(try ElementCallCandidatePackageResolution.validate(publicData: publicData,
-                                                                                candidateData: JSONSerialization.data(withJSONObject: retainedRemotePin, options: [.sortedKeys])))
+                                                                                candidateData: retainedRemotePinData))
 
         var changedDependency = candidateRoot
-        var changedPins = candidatePins
+        var changedPins = publicPins
         changedPins[0]["location"] = "https://invalid.example/dependency"
         changedDependency["pins"] = changedPins
         XCTAssertThrowsError(try ElementCallCandidatePackageResolution.validate(publicData: publicData,

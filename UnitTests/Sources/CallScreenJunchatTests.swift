@@ -37,8 +37,6 @@ struct CallScreenJunchatTests {
         #expect(script.contains("\"Only works while using app\": \"仅在使用 App 时生效\""))
         #expect(script.contains("\"Back to Speaker Mode\": \"返回扬声器模式\""))
         #expect(script.contains("\"Calling...\": \"正在呼叫...\""))
-        #expect(script.contains("delayed_leave_event_restart_ms: 20000"))
-        #expect(script.contains("delayed_leave_event_delay_ms: 120000"))
         #expect(script.contains("overlay_title: \"听筒模式\""))
         #expect(script.contains("overlay_description: \"仅在使用 App 时生效\""))
         #expect(script.contains("overlay_back_button: \"返回扬声器模式\""))
@@ -56,7 +54,10 @@ struct CallScreenJunchatTests {
         #expect(!script.contains("localStorage.setItem(\"matrix-setting-custom-livekit-url\""))
         #expect(script.contains("delete sanitizedConfig.livekit"))
         #expect(script.contains("localStorage.removeItem(\"matrix-setting-custom-livekit-url\")"))
-        #expect(script.contains("matrix_rtc_session"))
+        #expect(!script.contains("matrix_rtc_session"))
+        #expect(!script.contains("wait_for_key_rotation_ms"))
+        #expect(!script.contains("delayed_leave_event_restart_ms"))
+        #expect(!script.contains("delayed_leave_event_delay_ms"))
     }
 
     @Test

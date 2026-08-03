@@ -26,10 +26,10 @@ enum ElementCallCandidateProjectSpec {
 
     static func validateDefault(_ yaml: String) throws {
         let inspection = try inspect(yaml)
-        try candidateProjectRequire(inspection.packageKeys == ["url", "exactVersion"] &&
-            inspection.elementCallURL == "https://github.com/element-hq/element-call-swift" &&
-            inspection.elementCallExactVersion == "0.19.1" && inspection.elementCallPath == nil,
-            "The default EmbeddedElementCall dependency must remain the public remote 0.19.1 package.")
+        try candidateProjectRequire(inspection.packageKeys == ["path"] &&
+            inspection.elementCallPath == "Vendor/EmbeddedElementCall" &&
+            inspection.elementCallURL == nil && inspection.elementCallExactVersion == nil,
+            "The default EmbeddedElementCall dependency must remain the release-locked vendored package.")
     }
 
     static func make(defaultProjectYAML: String,
@@ -213,8 +213,14 @@ enum ElementCallCandidatePackageIdentity {
 
 enum ElementCallCandidatePackageResolution {
     private static let elementCallIdentity = "element-call-swift"
-    private static let elementCallLocation = "https://github.com/element-hq/element-call-swift"
-    private static let elementCallRevision = "a3d224d8c0983c7227bf8a8f1661b9984a0a9e35"
+
+    static func validateRelease(_ data: Data) throws {
+        let lock = try decode(data, label: "release Package.resolved")
+        try candidateProjectRequire(lock.version == 3 && ElementCallCandidateRequest.isLowercaseHex(lock.originHash, count: 64),
+                                    "The release Package.resolved metadata is invalid.")
+        try candidateProjectRequire(lock.pins.allSatisfy { try identity(of: $0) != elementCallIdentity },
+                                    "The release Package.resolved still contains the obsolete remote Element Call pin.")
+    }
 
     static func validate(publicData: Data, candidateData: Data) throws {
         let publicLock = try decode(publicData, label: "public Package.resolved")
@@ -226,14 +232,11 @@ enum ElementCallCandidatePackageResolution {
             publicLock.originHash != candidateLock.originHash,
             "The transient Package.resolved origin hash was not refreshed for the local package graph.")
 
-        let publicElementCallPins = try publicLock.pins.filter { try identity(of: $0) == elementCallIdentity }
-        try candidateProjectRequire(publicElementCallPins.count == 1,
-                                    "The public Package.resolved must contain exactly one Element Call pin.")
-        try validatePublicElementCallPin(publicElementCallPins[0])
-        let expectedPins = try publicLock.pins.filter { try identity(of: $0) != elementCallIdentity }
+        try candidateProjectRequire(publicLock.pins.allSatisfy { try identity(of: $0) != elementCallIdentity },
+                                    "The release Package.resolved still contains the obsolete remote Element Call pin.")
         try candidateProjectRequire(candidateLock.pins.allSatisfy { try identity(of: $0) != elementCallIdentity },
                                     "The transient Package.resolved still contains the remote Element Call pin.")
-        try candidateProjectRequire(canonicalJSON(expectedPins) == canonicalJSON(candidateLock.pins),
+        try candidateProjectRequire(canonicalJSON(publicLock.pins) == canonicalJSON(candidateLock.pins),
                                     "The transient Package.resolved changed a dependency other than Element Call.")
     }
 
@@ -259,19 +262,6 @@ enum ElementCallCandidatePackageResolution {
             throw ElementCallCandidateError.validation("Package.resolved contains an invalid package identity.")
         }
         return identity
-    }
-
-    private static func validatePublicElementCallPin(_ pin: [String: Any]) throws {
-        guard Set(pin.keys) == ["identity", "kind", "location", "state"],
-              pin["identity"] as? String == elementCallIdentity,
-              pin["kind"] as? String == "remoteSourceControl",
-              pin["location"] as? String == elementCallLocation,
-              let state = pin["state"] as? [String: Any],
-              Set(state.keys) == ["revision", "version"],
-              state["revision"] as? String == elementCallRevision,
-              state["version"] as? String == "0.19.1" else {
-            throw ElementCallCandidateError.validation("The public Element Call package pin drifted from remote 0.19.1.")
-        }
     }
 
     private static func canonicalJSON(_ value: Any) throws -> Data {
@@ -605,7 +595,10 @@ struct BuildElementCallCandidate: ParsableCommand {
             let projectYAMLURL = repositoryURL.appending(path: "project.yml")
             let defaultProjectYAML = try String(contentsOf: projectYAMLURL, encoding: .utf8)
             try ElementCallCandidateProjectSpec.validateDefault(defaultProjectYAML)
-            logger.info("No Element Call candidate requested; the public remote 0.19.1 dependency remains unchanged.")
+            let releaseSource = try ElementCallReleaseSource.validate(repositoryURL: repositoryURL)
+            let resolutionURL = repositoryURL.appending(path: TrackedProjectState.packageResolutionPath)
+            try ElementCallCandidatePackageResolution.validateRelease(Data(contentsOf: resolutionURL))
+            logger.info("No Element Call candidate requested; using release-locked \(releaseSource.version) at \(releaseSource.sourceCommit).")
             return
         }
 
@@ -613,6 +606,7 @@ struct BuildElementCallCandidate: ParsableCommand {
         let trackedState = try TrackedProjectState.capture(repositoryURL: repositoryURL)
         let defaultProjectYAML = try trackedState.projectYAML()
         try ElementCallCandidateProjectSpec.validateDefault(defaultProjectYAML)
+        _ = try ElementCallReleaseSource.validate(repositoryURL: repositoryURL)
         try trackedState.validateUnchanged()
         let package = try ElementCallCandidateManifest.verify(request)
         let temporaryParent = try ElementCallCandidatePath.systemTemporaryDirectory()

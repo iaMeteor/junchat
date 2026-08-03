@@ -305,6 +305,7 @@ final class ComposerToolbarViewModel: ComposerToolbarViewModelType, ComposerTool
     // MARK: - Private
     
     private func handleLoadDraft(_ draft: ComposerDraftProxy) {
+        context.linkPresentation = draft.linkPresentation
         if let html = draft.htmlText {
             context.composerFormattingEnabled = true
             DispatchQueue.main.async {
@@ -390,11 +391,18 @@ final class ComposerToolbarViewModel: ComposerToolbarViewModelType, ComposerTool
             return
         }
         
+        let linkPresentation = state.showsLinkPresentationControl ? context.linkPresentation : .card
         if isVolatile {
-            draftService.saveVolatileDraft(.init(plainText: plainText, htmlText: htmlText, draftType: type))
+            draftService.saveVolatileDraft(.init(plainText: plainText,
+                                                 htmlText: htmlText,
+                                                 draftType: type,
+                                                 linkPresentation: linkPresentation))
         } else {
             Task {
-                await draftService.saveDraft(.init(plainText: plainText, htmlText: htmlText, draftType: type))
+                await draftService.saveDraft(.init(plainText: plainText,
+                                                   htmlText: htmlText,
+                                                   draftType: type,
+                                                   linkPresentation: linkPresentation))
             }
         }
     }

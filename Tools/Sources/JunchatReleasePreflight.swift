@@ -87,12 +87,16 @@ enum JunchatReleasePreflight {
 
     static func validateCurrentRepositoryFiles() async throws {
         let projectDirectory = URL.projectDirectory
+        _ = try ElementCallReleaseSource.validate(repositoryURL: projectDirectory)
         let xcodeGenGate = projectDirectory.appending(path: "ci_scripts/verify_xcodegen_is_current.sh")
         try await CI.run(.path("/bin/bash"), [xcodeGenGate.path])
         try await JunchatReleasePreparation.validateCleanRepositoryStatus(CI.gitRepositoryStatus())
 
         let projectYAML = try String(contentsOf: projectDirectory.appending(path: JunchatReleasePreparation.projectYAMLPath),
                                      encoding: .utf8)
+        try ElementCallCandidateProjectSpec.validateDefault(projectYAML)
+        let packageResolutionURL = projectDirectory.appending(path: TrackedProjectState.packageResolutionPath)
+        try ElementCallCandidatePackageResolution.validateRelease(Data(contentsOf: packageResolutionURL))
         let changelog = try String(contentsOf: projectDirectory.appending(path: JunchatReleasePreparation.changelogPath),
                                    encoding: .utf8)
         let xcodeProject = try String(contentsOf: projectDirectory.appending(path: JunchatReleasePreparation.xcodeProjectPath),

@@ -1,5 +1,5 @@
 {
-  "originHash" : "ffbed4fcb99c97f1daf5f706d30ba2acbdb0810f8774b9720d29257d9854f83e",
+  "originHash" : "978bd48a1d67e00c6be69a70a93dbe5bb7434fde9a18aa0d62215303381d2802",
   "pins" : [
     {
       "identity" : "compound-design-tokens",
@@ -53,15 +53,6 @@
       "state" : {
         "revision" : "ab9a2570862d54aed2663691bb767f881226a12f",
         "version" : "1.2.0"
-      }
-    },
-    {
-      "identity" : "element-call-swift",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/element-hq/element-call-swift",
-      "state" : {
-        "revision" : "a3d224d8c0983c7227bf8a8f1661b9984a0a9e35",
-        "version" : "0.19.1"
       }
     },
     {

@@ -1,0 +1,18 @@
+{
+  "candidate": {
+    "manifestSha256": "2a241ac79128a2535506d281159c40c5b4501d5501b740f93a0263e272c08ffe",
+    "schema": "junchat.element-call-candidate/v4",
+    "version": "0.19.3-junchat.a77d19d01ba5"
+  },
+  "package": {
+    "path": "Vendor/EmbeddedElementCall",
+    "treeSha256": "9aa3a9b25d7ffa8a6ed24de80920637f04fac03a9bd1dacace150696a315be17"
+  },
+  "rtcConfigurationAuthority": "Vendor/EmbeddedElementCall/Sources/dist/config.json",
+  "schema": "junchat.element-call-ios-release/v1",
+  "source": {
+    "commit": "a77d19d01ba5413e045fb621359efa4d9a49f109",
+    "repository": "https://github.com/iaMeteor/junchat-element-call.git",
+    "tree": "fb6dbc6dc58085e54f2ab3bc413c13804c0c3965"
+  }
+}

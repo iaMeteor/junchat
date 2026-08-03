@@ -186,6 +186,29 @@ final class NotificationManagerTests {
     }
 
     @Test
+    func whenLifecycleSynchronizesBadgeCount_staleAuthoritativeCountDoesNotReplaceConfirmedEvents() async throws {
+        let ledger = appSettings.notificationBadgeRoomLedger
+        _ = ledger.reconcile(userID: clientProxy.userID, unreadRoomIDs: [])
+        for eventID in ["$event-1", "$event-2", "$event-3", "$event-4"] {
+            _ = ledger.applyNotification(userID: clientProxy.userID,
+                                         roomID: "!room:example.org",
+                                         eventID: eventID,
+                                         contributesToBadge: true,
+                                         isAuthoritative: true,
+                                         fallback: 1)
+        }
+        let snapshot = try #require(ledger.snapshot(for: clientProxy.userID))
+        #expect(snapshot.count == 4)
+        #expect(snapshot.recentAuthoritativeCount == 1)
+        notificationCenter.setBadgeCountCallsCount = 0
+
+        await notificationManager.synchronizeBadgeCount()
+
+        #expect(notificationCenter.setBadgeCountCallsCount == 1)
+        #expect(notificationCenter.setBadgeCountReceivedCount == 4)
+    }
+
+    @Test
     func whenSynchronizingWithoutAnActiveSession_badgeIsNotCleared() async {
         let startupNotificationCenter = UserNotificationCenterMock()
         let startupNotificationManager = NotificationManager(notificationCenter: startupNotificationCenter, appSettings: appSettings)

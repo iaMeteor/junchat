@@ -41,17 +41,33 @@ struct ComposerDraftProxy: Equatable {
     let plainText: String
     let htmlText: String?
     let draftType: ComposerDraftType
+    let linkPresentation: JunchatLinkPresentation
+
+    init(plainText: String,
+         htmlText: String?,
+         draftType: ComposerDraftType,
+         linkPresentation: JunchatLinkPresentation = .card) {
+        self.plainText = plainText
+        self.htmlText = htmlText
+        self.draftType = draftType
+        self.linkPresentation = linkPresentation
+    }
     
     var toRust: ComposerDraft {
-        ComposerDraft(plainText: plainText, htmlText: htmlText, draftType: draftType.toRust, attachments: [])
+        ComposerDraft(plainText: plainText,
+                      htmlText: JunchatLinkPresentation.draftHTML(html: htmlText, presentation: linkPresentation),
+                      draftType: draftType.toRust,
+                      attachments: [])
     }
 }
 
 extension ComposerDraftProxy {
     init(from rustDraft: ComposerDraft) {
+        let decodedDraftHTML = JunchatLinkPresentation.decodeDraftHTML(rustDraft.htmlText)
         plainText = rustDraft.plainText
-        htmlText = rustDraft.htmlText
+        htmlText = decodedDraftHTML.html
         draftType = ComposerDraftType(from: rustDraft.draftType)
+        linkPresentation = decodedDraftHTML.presentation
     }
 }
 

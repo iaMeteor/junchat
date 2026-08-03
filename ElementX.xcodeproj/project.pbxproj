@@ -116,6 +116,7 @@
 		0FA03F5A33C0857231B32B44 /* ReportRoomScreenViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1FDB0B87D925AE830E32621 /* ReportRoomScreenViewModel.swift */; };
 		108D3C0707A90B0F848CDBB9 /* ResolveVerifiedUserSendFailureScreenModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60011EF0086E49DBD78E16E5 /* ResolveVerifiedUserSendFailureScreenModels.swift */; };
 		109AEB7D33C4497727AFB87F /* TimelineInteractionHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BA894BC09972DC45E497D37 /* TimelineInteractionHandler.swift */; };
+		10A0FA624207F37122EB0EF8 /* JunchatLinkPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DE2F4DBC1FCB1910DEE166A /* JunchatLinkPresentation.swift */; };
 		10D60D287025B71F4743A425 /* RoomDirectorySearchProxy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 471BB7276C97AF60B3A5463B /* RoomDirectorySearchProxy.swift */; };
 		112C6F1C493B3F26AB22716A /* LinkMetadataProviderProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6885D1340AA9C76063E26868 /* LinkMetadataProviderProtocol.swift */; };
 		1146E9EDCF8344F7D6E0D553 /* MockCoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0376C429FAB1687C3D905F3E /* MockCoder.swift */; };
@@ -913,6 +914,7 @@
 		90C683C87BF6D39419402E5B /* AuthenticationClassicAppBackupInstructionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2B0E0A2F16603E7C827C295 /* AuthenticationClassicAppBackupInstructionsView.swift */; };
 		90DF83A6A347F7EE7EDE89EE /* AttributedStringBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF25E364AE85090A70AE4644 /* AttributedStringBuilderTests.swift */; };
 		90EB25D13AE6EEF034BDE9D2 /* Assets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71D52BAA5BADB06E5E8C295D /* Assets.swift */; };
+		91029BBA92773077AA5A1BC6 /* JunchatLinkPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DE2F4DBC1FCB1910DEE166A /* JunchatLinkPresentation.swift */; };
 		914BDF61447C723F104BCE33 /* SessionDirectories.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43C2067FF58B4996323EB40C /* SessionDirectories.swift */; };
 		915B4CDAF220D9AEB4047D45 /* PollInteractionHandlerProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 259E5B05BDE6E20C26CF11B4 /* PollInteractionHandlerProtocol.swift */; };
 		91ABC91758A6E4A5FAA2E9C4 /* ReadReceipt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 314F1C79850BE46E8ABEAFCB /* ReadReceipt.swift */; };
@@ -2341,6 +2343,7 @@
 		6CD4823EAB4B4E8BAB4F6B8C /* TimelineStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineStyle.swift; sourceTree = "<group>"; };
 		6CEBE5EA91E8691EDF364EC2 /* UITestsScreenIdentifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestsScreenIdentifier.swift; sourceTree = "<group>"; };
 		6DB53055CB130F0651C70763 /* da */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = da; path = da.lproj/Localizable.strings; sourceTree = "<group>"; };
+		6DE2F4DBC1FCB1910DEE166A /* JunchatLinkPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JunchatLinkPresentation.swift; sourceTree = "<group>"; };
 		6DF438EAFC732D2D95D34BF6 /* StartChatViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartChatViewModelTests.swift; sourceTree = "<group>"; };
 		6E5E9C044BEB7C70B1378E91 /* UserSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserSession.swift; sourceTree = "<group>"; };
 		6E964AF2DFEB31E2B799999F /* RoomPollsHistoryScreenModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomPollsHistoryScreenModels.swift; sourceTree = "<group>"; };
@@ -2763,6 +2766,7 @@
 		B172057567E049007A5C4D92 /* Strings+SAS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Strings+SAS.swift"; sourceTree = "<group>"; };
 		B18A454132A5A5247802821E /* TimelineMediaPreviewDataSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TimelineMediaPreviewDataSource.swift; sourceTree = "<group>"; };
 		B1FDB0B87D925AE830E32621 /* ReportRoomScreenViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReportRoomScreenViewModel.swift; sourceTree = "<group>"; };
+		B201B5C27969B83058CBDAAA /* EmbeddedElementCall */ = {isa = PBXFileReference; lastKnownFileType = folder; name = EmbeddedElementCall; path = Vendor/EmbeddedElementCall; sourceTree = SOURCE_ROOT; };
 		B251F5B4511D1CA0BA8361FE /* CoordinatorProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoordinatorProtocol.swift; sourceTree = "<group>"; };
 		B2AD8A56CD37E23071A2F4BF /* PHGPostHogMock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PHGPostHogMock.swift; sourceTree = "<group>"; };
 		B2AF1828A5B76B7C371240FE /* StateRoomTimelineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StateRoomTimelineView.swift; sourceTree = "<group>"; };
@@ -5815,6 +5819,7 @@
 				72F37B5DA798C9AE436F2C2C /* AttributedStringBuilderProtocol.swift */,
 				C024C151639C4E1B91FCC68B /* ElementXAttributeScope.swift */,
 				27A5FBB74981BF8EFFDAE90D /* HTMLFixtures.swift */,
+				6DE2F4DBC1FCB1910DEE166A /* JunchatLinkPresentation.swift */,
 				AB07F03461023BC39C730922 /* PhishingDetector.swift */,
 			);
 			path = HTMLParsing;
@@ -5911,6 +5916,7 @@
 			isa = PBXGroup;
 			children = (
 				174E4AEF3DED300AA81046EC /* compound-ios */,
+				B201B5C27969B83058CBDAAA /* EmbeddedElementCall */,
 			);
 			name = Packages;
 			sourceTree = "<group>";
@@ -7825,7 +7831,6 @@
 				4C34425923978C97409A3EF2 /* XCRemoteSwiftPackageReference "DSWaveformImage" */,
 				D5F7D47BBAAE0CF1DDEB3034 /* XCRemoteSwiftPackageReference "DeviceKit" */,
 				75CC627F59499C9E93D8FDAD /* XCRemoteSwiftPackageReference "Dynamic" */,
-				8213398B60F9B660D9216ADF /* XCRemoteSwiftPackageReference "element-call-swift" */,
 				821C67C9A7F8CC3FD41B28B4 /* XCRemoteSwiftPackageReference "emojibase-bindings" */,
 				701C7BEF8F70F7A83E852DCC /* XCRemoteSwiftPackageReference "GZIP" */,
 				395DE6AE429B7ACC7C7FE31D /* XCRemoteSwiftPackageReference "KZFileWatchers" */,
@@ -7845,6 +7850,7 @@
 				EC6D0C817B1C21D9D096505A /* XCRemoteSwiftPackageReference "Version" */,
 				EE40B0E16A55BD23ECBFFD22 /* XCRemoteSwiftPackageReference "matrix-rich-text-editor-swift" */,
 				C89CF7729E028671C5DC461E /* XCLocalSwiftPackageReference "compound-ios" */,
+				770317DBD8F4992C5A763F4A /* XCLocalSwiftPackageReference "Vendor/EmbeddedElementCall" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 681566846AF307E9BA4C72C6 /* Products */;
@@ -8197,6 +8203,7 @@
 				31CCF3159E5CE1C05AE5781B /* HTMLFixtures.swift in Sources */,
 				59F940FCBE6BC343AECEF75E /* ImageCache.swift in Sources */,
 				EBE13FAB4E29738AC41BD3E5 /* InfoPlistReader.swift in Sources */,
+				91029BBA92773077AA5A1BC6 /* JunchatLinkPresentation.swift in Sources */,
 				31D664F9477D3488D4C9F82A /* JunchatServerEnvironment.swift in Sources */,
 				8691186F9B99BCDDB7CACDD8 /* KeychainController.swift in Sources */,
 				A440D4BC02088482EC633A88 /* KeychainControllerProtocol.swift in Sources */,
@@ -8891,6 +8898,7 @@
 				E3CA565A4B9704F191B191F0 /* JoinedRoomSize+MemberCount.swift in Sources */,
 				0BA9F76219FABBA3C4A21651 /* JunchatContactsService.swift in Sources */,
 				2B0193EE8C838C4312497ECB /* JunchatDiagnosticsUploader.swift in Sources */,
+				10A0FA624207F37122EB0EF8 /* JunchatLinkPresentation.swift in Sources */,
 				D60192D7DFBF1F46AB3767D4 /* JunchatMapKitMapView.swift in Sources */,
 				A3FE793EDF5ABA839898F258 /* JunchatMapProvider.swift in Sources */,
 				BB814FB8ACF92803794D20F7 /* JunchatPasswordChangeRequest.swift in Sources */,
@@ -10858,6 +10866,10 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
+		770317DBD8F4992C5A763F4A /* XCLocalSwiftPackageReference "Vendor/EmbeddedElementCall" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/EmbeddedElementCall;
+		};
 		C89CF7729E028671C5DC461E /* XCLocalSwiftPackageReference "compound-ios" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "compound-ios";
@@ -10943,14 +10955,6 @@
 			requirement = {
 				kind = exactVersion;
 				version = 1.2;
-			};
-		};
-		8213398B60F9B660D9216ADF /* XCRemoteSwiftPackageReference "element-call-swift" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/element-hq/element-call-swift";
-			requirement = {
-				kind = exactVersion;
-				version = 0.19.1;
 			};
 		};
 		821C67C9A7F8CC3FD41B28B4 /* XCRemoteSwiftPackageReference "emojibase-bindings" */ = {
@@ -11194,7 +11198,6 @@
 		};
 		424B603C07AEA6FCA7C8E7C9 /* EmbeddedElementCall */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 8213398B60F9B660D9216ADF /* XCRemoteSwiftPackageReference "element-call-swift" */;
 			productName = EmbeddedElementCall;
 		};
 		4278261E147DB2DE5CFB7FC5 /* PostHog */ = {

@@ -904,7 +904,21 @@ enum ElementCallCandidateManifest {
         return TreeDescription(path: path, treeSHA256: digest, files: files)
     }
 
+    static func describeTree(_ root: URL, label: String) throws -> TreeDescription {
+        let snapshots = try snapshotTree(root, label: label)
+        let files = snapshots.map { FileDescription(path: $0.path, sha256: sha256($0.data), size: Int64($0.data.count)) }
+        return TreeDescription(path: "", treeSHA256: treeSHA256(files), files: files)
+    }
+
     private static func verifyTree(_ root: URL, expected: TreeDescription, label: String) throws -> [ElementCallCandidateFileSnapshot] {
+        let snapshots = try snapshotTree(root, label: label)
+        let actual = snapshots.map { FileDescription(path: $0.path, sha256: sha256($0.data), size: Int64($0.data.count)) }
+        try candidateRequire(actual == expected.files && treeSHA256(actual) == expected.treeSHA256,
+                             "The retained \(label) does not match its manifest.")
+        return snapshots
+    }
+
+    private static func snapshotTree(_ root: URL, label: String) throws -> [ElementCallCandidateFileSnapshot] {
         _ = try ElementCallCandidatePath.validateExisting(root, kind: .directory, label: label)
         var snapshots = [ElementCallCandidateFileSnapshot]()
         func visit(_ directory: URL) throws {
@@ -927,9 +941,6 @@ enum ElementCallCandidateManifest {
         }
         try visit(root)
         snapshots.sort { utf8Less($0.path, $1.path) }
-        let actual = snapshots.map { FileDescription(path: $0.path, sha256: sha256($0.data), size: Int64($0.data.count)) }
-        try candidateRequire(actual == expected.files && treeSHA256(actual) == expected.treeSHA256,
-                             "The retained \(label) does not match its manifest.")
         return snapshots
     }
 
