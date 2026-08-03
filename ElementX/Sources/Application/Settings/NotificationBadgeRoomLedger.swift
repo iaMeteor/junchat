@@ -43,7 +43,7 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
         var recentSeenEventDates: [String: Date]
         var recentReadDates: [String: Date]
 
-        var badgeRoomCounts: [String: Int] {
+        var confirmedBadgeRoomCounts: [String: Int] {
             var counts = unreadCountsByRoom.filter { roomID, count in
                 count > 0 && recentReadDates[roomID] == nil
             }
@@ -53,6 +53,11 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
                 }
                 counts[event.roomID] = max(counts[event.roomID] ?? 0, event.countAfterEvent)
             }
+            return counts
+        }
+
+        var badgeRoomCounts: [String: Int] {
+            var counts = confirmedBadgeRoomCounts
             for event in provisionalNotificationEvents.values {
                 if let readDate = recentReadDates[event.roomID], readDate >= event.date {
                     continue
@@ -64,6 +69,10 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
 
         var badgeCount: Int {
             saturatingBadgeTotal(badgeRoomCounts.values)
+        }
+
+        var confirmedBadgeCount: Int {
+            saturatingBadgeTotal(confirmedBadgeRoomCounts.values)
         }
 
         var authoritativeCountIsReconciled: Bool {
@@ -80,11 +89,23 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
         }
 
         var snapshot: NotificationBadgeSnapshot {
-            .init(userID: userID,
-                  count: recentAuthoritativeCount ?? badgeCount,
-                  isReconciled: isReconciled,
-                  recentAuthoritativeCount: recentAuthoritativeCount,
-                  revision: revision)
+            let count: Int
+            if !isReconciled {
+                count = recentAuthoritativeCount ?? badgeCount
+            } else if recentAuthoritativeCount == 0 {
+                count = 0
+            } else if let recentAuthoritativeCount {
+                // Provisional events without a stable event ID must not push a
+                // server snapshot ahead, but confirmed distinct events may.
+                count = max(recentAuthoritativeCount, confirmedBadgeCount)
+            } else {
+                count = badgeCount
+            }
+            return .init(userID: userID,
+                         count: count,
+                         isReconciled: isReconciled,
+                         recentAuthoritativeCount: recentAuthoritativeCount,
+                         revision: revision)
         }
     }
 
@@ -197,6 +218,10 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
             }
 
             let previousState = state
+            let wasKnownStableEvent = roomID.flatMap { roomID in
+                guard let eventID, !eventID.isEmpty else { return nil }
+                return state.recentSeenEventDates[eventKey(eventID: eventID, roomID: roomID)] != nil
+            } ?? false
             if let roomID {
                 recordNotification(roomID: roomID,
                                    eventID: eventID,
@@ -205,7 +230,7 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
                                    state: &state)
             }
 
-            if isAuthoritative, let fallback {
+            if isAuthoritative, !wasKnownStableEvent, let fallback {
                 recordAuthoritativeCount(fallback.intValue,
                                          roomID: roomID,
                                          contributesToBadge: contributesToBadge,
@@ -349,11 +374,11 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
         guard state.userID == userID else {
             return state.isReconciled ? NSNumber(value: state.snapshot.count) : NSNumber(value: 0)
         }
+        if state.isReconciled {
+            return NSNumber(value: state.snapshot.count)
+        }
         if let recentAuthoritativeCount = state.recentAuthoritativeCount {
             return NSNumber(value: recentAuthoritativeCount)
-        }
-        if state.isReconciled {
-            return NSNumber(value: state.badgeCount)
         }
         return fallback
     }
@@ -484,9 +509,28 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
             state.recentAuthoritativeRoomCounts = [:]
             return
         }
-        state.recentAuthoritativeRoomCounts = saturatingBadgeTotal(roomCounts.values) == count
-            ? roomCounts
-            : [roomID: 1]
+        if saturatingBadgeTotal(roomCounts.values) == count {
+            state.recentAuthoritativeRoomCounts = roomCounts
+            return
+        }
+
+        guard state.isReconciled else {
+            state.recentAuthoritativeRoomCounts = [roomID: 1]
+            return
+        }
+
+        let otherRoomTotal = saturatingBadgeTotal(roomCounts.lazy
+            .filter { $0.key != roomID }
+            .map(\.value))
+        let localRoomCount = roomCounts[roomID] ?? 0
+        if count >= otherRoomTotal,
+           count - otherRoomTotal >= localRoomCount {
+            var inferredRoomCounts = roomCounts
+            inferredRoomCounts[roomID] = count - otherRoomTotal
+            state.recentAuthoritativeRoomCounts = inferredRoomCounts
+        } else {
+            state.recentAuthoritativeRoomCounts = [roomID: 1]
+        }
     }
 
     private func withExclusiveLock<T>(fallback: T, operation: () -> T) -> T {

@@ -328,26 +328,31 @@ struct NotificationBadgeRoomLedgerTests {
                                          roomID: "!one:example.org",
                                          eventID: "$one",
                                          contributesToBadge: true,
+                                         isAuthoritative: true,
                                          fallback: 1) == 1)
         #expect(ledger.applyNotification(userID: "@alice:example.org",
                                          roomID: "!one:example.org",
                                          eventID: "$two",
                                          contributesToBadge: true,
+                                         isAuthoritative: true,
                                          fallback: 1) == 2)
         #expect(ledger.applyNotification(userID: "@alice:example.org",
                                          roomID: "!one:example.org",
                                          eventID: "$two",
                                          contributesToBadge: true,
+                                         isAuthoritative: true,
                                          fallback: 1) == 2)
         #expect(ledger.applyNotification(userID: "@alice:example.org",
                                          roomID: "!one:example.org",
                                          eventID: "$three",
                                          contributesToBadge: true,
+                                         isAuthoritative: true,
                                          fallback: 1) == 3)
         #expect(ledger.applyNotification(userID: "@alice:example.org",
                                          roomID: "!one:example.org",
                                          eventID: "$four",
                                          contributesToBadge: true,
+                                         isAuthoritative: true,
                                          fallback: 1) == 4)
 
         #expect(ledger.markRoomRead(userID: "@alice:example.org", roomID: "!one:example.org")?.count == 0)
@@ -355,12 +360,30 @@ struct NotificationBadgeRoomLedgerTests {
                                          roomID: "!one:example.org",
                                          eventID: "$four",
                                          contributesToBadge: true,
+                                         isAuthoritative: true,
                                          fallback: 1) == 0)
         #expect(ledger.applyNotification(userID: "@alice:example.org",
                                          roomID: "!one:example.org",
                                          eventID: "$five",
                                          contributesToBadge: true,
+                                         isAuthoritative: true,
                                          fallback: 1) == 1)
+    }
+
+    @Test
+    func aBatchedAuthoritativeRoomTotalIsClearedWhenThatRoomIsRead() throws {
+        let fixture = try makeLedger()
+        let ledger = fixture.ledger
+        ledger.prepare(for: "@alice:example.org")
+        _ = ledger.reconcile(userID: "@alice:example.org", unreadRoomIDs: [])
+
+        #expect(ledger.applyNotification(userID: "@alice:example.org",
+                                         roomID: "!one:example.org",
+                                         eventID: "$fourth-delivered",
+                                         contributesToBadge: true,
+                                         isAuthoritative: true,
+                                         fallback: 4) == 4)
+        #expect(ledger.markRoomRead(userID: "@alice:example.org", roomID: "!one:example.org")?.count == 0)
     }
 
     @Test
