@@ -20,17 +20,31 @@ struct CallAudioSessionControllerTests {
     }
 
     @Test
-    func activateForCallPreparesHapticsWithoutTakingWebKitAudioSession() {
-        controller.activateForCall()
+    func activateForVoiceCallConfiguresTheSessionWithoutTakingCallKitActivation() throws {
+        controller.activateForCall(voiceOnly: true)
 
         #expect(audioSessionMock.setAllowHapticsAndSystemSoundsDuringRecordingReceivedInValue == true)
-        #expect(audioSessionMock.setCategoryModeOptionsCallsCount == 0)
+        let arguments = try #require(audioSessionMock.setCategoryModeOptionsReceivedArguments)
+        #expect(arguments.category == .playAndRecord)
+        #expect(arguments.mode == .voiceChat)
+        #expect(arguments.options == [.allowBluetoothHFP])
+        #expect(audioSessionMock.setActiveOptionsCallsCount == 0)
+    }
+
+    @Test
+    func activateForVideoCallDefaultsToSpeaker() throws {
+        controller.activateForCall(voiceOnly: false)
+
+        let arguments = try #require(audioSessionMock.setCategoryModeOptionsReceivedArguments)
+        #expect(arguments.category == .playAndRecord)
+        #expect(arguments.mode == .videoChat)
+        #expect(arguments.options == [.allowBluetoothHFP, .defaultToSpeaker])
         #expect(audioSessionMock.setActiveOptionsCallsCount == 0)
     }
 
     @Test
     func handleInterruptionEndedDoesNotReactivateWebKitAudioSession() {
-        controller.activateForCall()
+        controller.activateForCall(voiceOnly: true)
         let hapticsCount = audioSessionMock.setAllowHapticsAndSystemSoundsDuringRecordingCallsCount
         let activationCount = audioSessionMock.setActiveOptionsCallsCount
         let categoryCount = audioSessionMock.setCategoryModeOptionsCallsCount
@@ -53,25 +67,26 @@ struct CallAudioSessionControllerTests {
     }
 
     @Test
-    func handleMediaServicesResetDoesNotReactivateWebKitAudioSession() {
-        controller.activateForCall()
-        let hapticsCount = audioSessionMock.setAllowHapticsAndSystemSoundsDuringRecordingCallsCount
+    func handleMediaServicesResetAllowsCallAudioConfigurationToBeRestored() {
+        controller.activateForCall(voiceOnly: true)
 
         controller.handleMediaServicesReset()
+        controller.activateForCall(voiceOnly: true)
 
-        #expect(audioSessionMock.setAllowHapticsAndSystemSoundsDuringRecordingCallsCount == hapticsCount)
-        #expect(audioSessionMock.setCategoryModeOptionsCallsCount == 0)
+        #expect(audioSessionMock.setAllowHapticsAndSystemSoundsDuringRecordingCallsCount == 2)
+        #expect(audioSessionMock.setCategoryModeOptionsCallsCount == 2)
         #expect(audioSessionMock.setActiveOptionsCallsCount == 0)
     }
 
     @Test
     func deactivateAfterCallOnlyClearsRouteOverride() {
+        controller.activateForCall(voiceOnly: true)
         controller.routeAudioToSpeaker()
         controller.deactivateAfterCall()
 
         #expect(audioSessionMock.overrideOutputAudioPortReceivedPortOverride == AVAudioSession.PortOverride.none)
         #expect(audioSessionMock.setActiveOptionsCallsCount == 0)
-        #expect(audioSessionMock.setCategoryModeOptionsCallsCount == 0)
+        #expect(audioSessionMock.setCategoryModeOptionsCallsCount == 1)
     }
 
     @Test

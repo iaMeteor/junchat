@@ -56,8 +56,8 @@ enum CallDiagnostics {
     }
 
     static func errorSummary(_ error: Error) -> String {
-        let errorCode = (error as NSError).code
-        return "type=\(String(describing: type(of: error))) code=\(errorCode)"
+        let nsError = error as NSError
+        return "type=\(String(describing: type(of: error))) domain=\(nsError.domain) code=\(nsError.code)"
     }
 
     static func valueSummary(_ value: Any?) -> String {

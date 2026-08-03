@@ -157,6 +157,23 @@ enum CallWebViewMessageTrustPolicy {
     }
 }
 
+enum CallWebViewMicrophoneRecoveryPolicy {
+    static func shouldReactivate(isAudioEnabled: Bool,
+                                 isPictureInPictureActive: Bool,
+                                 captureState: WKMediaCaptureState,
+                                 recoveryInFlight: Bool) -> Bool {
+        isAudioEnabled &&
+            isPictureInPictureActive &&
+            captureState == .muted &&
+            !recoveryInFlight
+    }
+
+    static func shouldConfirmForBackgrounding(isAudioEnabled: Bool,
+                                              captureState: WKMediaCaptureState) -> Bool {
+        isAudioEnabled && captureState != .none
+    }
+}
+
 private struct CallView: UIViewRepresentable {
     /// The top-level view this representable displays. It wraps the web view when picture in picture isn't running.
     typealias WebViewWrapper = UIView
@@ -198,11 +215,15 @@ private struct CallView: UIViewRepresentable {
         private var webView: WKWebView!
         private var pictureInPictureController: AVPictureInPictureController?
         private var pictureInPicturePossibleObservation: NSKeyValueObservation?
+        private var microphoneCaptureStateObservation: NSKeyValueObservation?
         private let pictureInPictureViewController: AVPictureInPictureVideoCallViewController
         private let pictureInPictureRequestTracker = CallPictureInPictureRequestTracker()
         private let pictureInPictureDelegateEventProcessor = CallPictureInPictureDelegateEventProcessor<PictureInPictureDelegateEvent>()
         private var pictureInPictureWebModeTask: Task<Void, Never>?
         private var pictureInPictureValidationTask: Task<Void, Never>?
+        private var microphoneCaptureRecoveryTask: Task<Void, Never>?
+        private var microphoneCaptureRecoveryInFlight = false
+        private var hasFinishedNavigation = false
         private var isInvalidated = false
         private var routePickerView: AVRoutePickerView!
 
@@ -714,6 +735,12 @@ private struct CallView: UIViewRepresentable {
             webView = WKWebView(frame: .zero, configuration: configuration)
             webView.uiDelegate = self
             webView.navigationDelegate = self
+            microphoneCaptureStateObservation = webView.observe(\.microphoneCaptureState, options: [.initial, .new]) { [weak self] webView, _ in
+                Task { @MainActor [weak self] in
+                    guard let self, !isInvalidated else { return }
+                    self.microphoneCaptureStateChanged(webView.microphoneCaptureState)
+                }
+            }
             #if DEBUG
             webView.isInspectable = true
             #else
@@ -754,6 +781,15 @@ private struct CallView: UIViewRepresentable {
             } else {
                 MXLog.warning("[JunchatCallPiP] PiP is not supported on this device")
             }
+
+            NotificationCenter.default.addObserver(self,
+                                                   selector: #selector(applicationWillResignActive),
+                                                   name: UIApplication.willResignActiveNotification,
+                                                   object: nil)
+            NotificationCenter.default.addObserver(self,
+                                                   selector: #selector(applicationDidEnterBackground),
+                                                   name: UIApplication.didEnterBackgroundNotification,
+                                                   object: nil)
         }
 
         deinit {
@@ -766,8 +802,12 @@ private struct CallView: UIViewRepresentable {
         func invalidate() {
             guard !isInvalidated else { return }
             isInvalidated = true
+            NotificationCenter.default.removeObserver(self, name: UIApplication.willResignActiveNotification, object: nil)
+            NotificationCenter.default.removeObserver(self, name: UIApplication.didEnterBackgroundNotification, object: nil)
             pictureInPicturePossibleObservation?.invalidate()
             pictureInPicturePossibleObservation = nil
+            microphoneCaptureStateObservation?.invalidate()
+            microphoneCaptureStateObservation = nil
             pictureInPictureController?.delegate = nil
             pictureInPictureDelegateEventProcessor.invalidate()
             pictureInPictureRequestTracker.invalidate()
@@ -775,6 +815,8 @@ private struct CallView: UIViewRepresentable {
             pictureInPictureWebModeTask = nil
             pictureInPictureValidationTask?.cancel()
             pictureInPictureValidationTask = nil
+            microphoneCaptureRecoveryTask?.cancel()
+            microphoneCaptureRecoveryTask = nil
             pictureInPictureController?.stopPictureInPicture()
             viewModelContext?.javaScriptEvaluator = nil
             viewModelContext?.requestPictureInPictureHandler = nil
@@ -913,12 +955,35 @@ private struct CallView: UIViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            hasFinishedNavigation = true
             MXLog.info("[JunchatCallWebView] didFinish \(CallDiagnostics.urlSummary(webView.url))")
             viewModelContext?.send(viewAction: .urlChanged(webView.url))
             viewModelContext?.send(viewAction: .pictureInPictureReadinessChanged)
         }
 
         // MARK: - Picture in Picture
+
+        @objc private func applicationWillResignActive() {
+            MXLog.info("[JunchatCallMicrophone] application will resign active state=\(microphoneCaptureStateDescription(webView.microphoneCaptureState)) audioEnabled=\(viewModelContext?.isAudioEnabled?() ?? false)")
+            confirmMicrophoneCaptureForBackgrounding(reason: "application will resign active")
+
+            guard !isInvalidated,
+                  hasFinishedNavigation,
+                  let pictureInPictureController,
+                  pictureInPictureController.isPictureInPicturePossible,
+                  !pictureInPictureController.isPictureInPictureActive else {
+                return
+            }
+
+            // Starting synchronously is important. Awaiting JavaScript here lets iOS suspend the
+            // WebKit process before AVKit has begun PiP, which fails with AVKit error -1001.
+            MXLog.info("[JunchatCallPiP] synchronous start before application resigns active")
+            pictureInPictureController.startPictureInPicture()
+        }
+
+        @objc private func applicationDidEnterBackground() {
+            confirmMicrophoneCaptureForBackgrounding(reason: "application did enter background")
+        }
 
         func requestPictureInPicture() async -> Result<Void, CallScreenError> {
             guard pictureInPictureController?.isPictureInPictureActive != true else {
@@ -1006,6 +1071,7 @@ private struct CallView: UIViewRepresentable {
                 setWebPictureInPictureEnabled(true)
             case .didStart(let isActive, let isSuspended):
                 MXLog.info("[JunchatCallPiP] did start active=\(isActive) suspended=\(isSuspended)")
+                scheduleMicrophoneCaptureRecovery(reason: "picture in picture started")
                 switch pictureInPictureRequestTracker.didStart() {
                 case .started:
                     viewModelContext?.send(viewAction: .pictureInPictureStarted)
@@ -1027,6 +1093,8 @@ private struct CallView: UIViewRepresentable {
                 restoreWebViewAfterPictureInPicture()
             case .willStop(let isActive, let isSuspended):
                 MXLog.info("[JunchatCallPiP] will stop active=\(isActive) suspended=\(isSuspended)")
+                microphoneCaptureRecoveryTask?.cancel()
+                microphoneCaptureRecoveryTask = nil
                 pictureInPictureValidationTask?.cancel()
                 pictureInPictureValidationTask = nil
                 if pictureInPictureRequestTracker.willStop() {
@@ -1063,6 +1131,82 @@ private struct CallView: UIViewRepresentable {
             guard !isInvalidated else { return }
             webViewWrapper.addMatchedSubview(webView)
             setWebPictureInPictureEnabled(false)
+        }
+
+        private func microphoneCaptureStateChanged(_ captureState: WKMediaCaptureState) {
+            MXLog.info("[JunchatCallMicrophone] capture state changed state=\(microphoneCaptureStateDescription(captureState)) audioEnabled=\(viewModelContext?.isAudioEnabled?() ?? false) \(pictureInPictureStateDescription())")
+
+            guard captureState == .muted else { return }
+            scheduleMicrophoneCaptureRecovery(reason: "capture state changed to muted")
+        }
+
+        private func confirmMicrophoneCaptureForBackgrounding(reason: String) {
+            guard !isInvalidated else { return }
+
+            let captureState = webView.microphoneCaptureState
+            let isAudioEnabled = viewModelContext?.isAudioEnabled?() ?? false
+            guard CallWebViewMicrophoneRecoveryPolicy.shouldConfirmForBackgrounding(isAudioEnabled: isAudioEnabled,
+                                                                                    captureState: captureState) else {
+                MXLog.info("[JunchatCallMicrophone] background confirmation skipped reason=\(reason) state=\(microphoneCaptureStateDescription(captureState)) audioEnabled=\(isAudioEnabled)")
+                return
+            }
+
+            // WKWebView can report capture as active while its WebContent process stops delivering
+            // microphone samples during the background transition. Reassert the desired state before
+            // the app is suspended instead of relying solely on the KVO value.
+            MXLog.info("[JunchatCallMicrophone] confirming active capture reason=\(reason) reportedState=\(microphoneCaptureStateDescription(captureState))")
+            webView.setMicrophoneCaptureState(.active) { [weak self, weak webView] in
+                guard let self, let webView, !isInvalidated else { return }
+                MXLog.info("[JunchatCallMicrophone] background confirmation completed reason=\(reason) state=\(microphoneCaptureStateDescription(webView.microphoneCaptureState))")
+            }
+        }
+
+        private func scheduleMicrophoneCaptureRecovery(reason: String) {
+            microphoneCaptureRecoveryTask?.cancel()
+            microphoneCaptureRecoveryTask = Task { @MainActor [weak self] in
+                guard let self else { return }
+
+                for attempt in 1...3 {
+                    if attempt > 1 {
+                        try? await Task.sleep(for: .milliseconds(attempt == 2 ? 250 : 750))
+                    }
+                    guard !Task.isCancelled, !isInvalidated else { return }
+
+                    let captureState = webView.microphoneCaptureState
+                    guard CallWebViewMicrophoneRecoveryPolicy.shouldReactivate(isAudioEnabled: viewModelContext?.isAudioEnabled?() ?? false,
+                                                                               isPictureInPictureActive: pictureInPictureController?.isPictureInPictureActive == true,
+                                                                               captureState: captureState,
+                                                                               recoveryInFlight: microphoneCaptureRecoveryInFlight) else {
+                        let details = "reason=\(reason) attempt=\(attempt) " +
+                            "state=\(microphoneCaptureStateDescription(captureState)) " +
+                            "audioEnabled=\(viewModelContext?.isAudioEnabled?() ?? false) " +
+                            pictureInPictureStateDescription()
+                        MXLog.info("[JunchatCallMicrophone] recovery skipped \(details)")
+                        return
+                    }
+
+                    microphoneCaptureRecoveryInFlight = true
+                    MXLog.info("[JunchatCallMicrophone] reactivating capture reason=\(reason) attempt=\(attempt)")
+                    await webView.setMicrophoneCaptureState(.active)
+                    microphoneCaptureRecoveryInFlight = false
+                    MXLog.info("[JunchatCallMicrophone] reactivation completed state=\(microphoneCaptureStateDescription(webView.microphoneCaptureState))")
+
+                    guard webView.microphoneCaptureState != .active else { return }
+                }
+            }
+        }
+
+        private func microphoneCaptureStateDescription(_ state: WKMediaCaptureState) -> String {
+            switch state {
+            case .none:
+                "none"
+            case .active:
+                "active"
+            case .muted:
+                "muted"
+            @unknown default:
+                "unknown(\(state.rawValue))"
+            }
         }
 
         private func setWebPictureInPictureEnabled(_ enabled: Bool) {

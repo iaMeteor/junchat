@@ -47,6 +47,10 @@ typealias CallMediaLifecycleEventHandler = @MainActor (CallMediaLifecycleEvent) 
 typealias CallPictureInPictureAttemptHandler = @MainActor (CallPictureInPictureRecoveryAttempt) async -> CallPictureInPictureAttemptResult
 
 enum CallAudioRoutePolicy {
+    static func shouldRecoverAfterRouteChange(_ reason: AVAudioSession.RouteChangeReason?) -> Bool {
+        reason != .override
+    }
+
     static func shouldEnableProximityMonitoring(voiceOnly: Bool,
                                                 selectedOutput: CallAudioOutputSelection,
                                                 remoteMediaConnected: Bool) -> Bool {
@@ -244,22 +248,22 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
     func prepareForCall() {
         guard !hasStopped, ownsSharedMediaState else { return }
 
+        audioSessionController.activateForCall(voiceOnly: voiceOnly)
         if playConnectedTone {
             ringbackTonePlayer.start()
         }
-        audioSessionController.activateForCall()
         restoreSelectedOutput()
     }
 
     func mediaCapturePermissionGranted() {
         guard !hasStopped, ownsSharedMediaState else { return }
 
-        audioSessionController.activateForCall()
+        audioSessionController.activateForCall(voiceOnly: voiceOnly)
         restoreSelectedOutput()
     }
 
     func selectOutput(_ output: CallAudioOutputSelection) {
-        guard !hasStopped, ownsSharedMediaState else { return }
+        guard !hasStopped, ownsSharedMediaState, selectedOutput != output else { return }
 
         selectedOutput = output
         applySelectedOutputRoute()
@@ -273,7 +277,7 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
     func recoverAfterLifecycleEvent() {
         guard !hasStopped, ownsSharedMediaState else { return }
 
-        audioSessionController.activateForCall()
+        audioSessionController.activateForCall(voiceOnly: voiceOnly)
         restoreSelectedOutput()
     }
 
@@ -382,7 +386,13 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
     private func observeLifecycleNotifications() {
         notificationCenter.publisher(for: AVAudioSession.routeChangeNotification)
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
+            .sink { [weak self] notification in
+                let reasonRawValue = (notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? NSNumber)?.uintValue
+                let reason = reasonRawValue.flatMap(AVAudioSession.RouteChangeReason.init(rawValue:))
+                guard CallAudioRoutePolicy.shouldRecoverAfterRouteChange(reason) else {
+                    MXLog.info("[JunchatCallAudio] ignoring self-generated audio route override")
+                    return
+                }
                 self?.emitAudioRouteChanged()
             }
             .store(in: &notificationCancellables)

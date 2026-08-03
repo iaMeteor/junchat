@@ -9,28 +9,36 @@ import AVFoundation
 
 final class CallAudioSessionController {
     private let audioSession: AudioSessionProtocol
-    private var hasPreparedForCall = false
+    private var preparedVoiceOnly: Bool?
 
     init(audioSession: AudioSessionProtocol = AVAudioSession.sharedInstance()) {
         self.audioSession = audioSession
     }
 
-    func activateForCall() {
+    func activateForCall(voiceOnly: Bool) {
+        guard preparedVoiceOnly != voiceOnly else { return }
+
         do {
-            // Element Call runs WebRTC inside WebKit. Let WebKit own the active
-            // PlayAndRecord/VoiceChat session; the native shell only prepares
-            // system behavior and applies route overrides.
+            let mode = voiceOnly ? AVAudioSession.Mode.voiceChat : .videoChat
+            let options: AVAudioSession.CategoryOptions = voiceOnly
+                ? [.allowBluetoothHFP]
+                : [.allowBluetoothHFP, .defaultToSpeaker]
+
+            // Configure before WebKit starts media capture. Do not activate the
+            // session here; WebKit owns outgoing media after incoming CallKit
+            // audio ownership has been released.
+            try audioSession.setCategory(.playAndRecord, mode: mode, options: options)
             try audioSession.setAllowHapticsAndSystemSoundsDuringRecording(true)
-            hasPreparedForCall = true
+            preparedVoiceOnly = voiceOnly
         } catch {
             MXLog.error("Failed preparing call audio session: \(error)")
         }
     }
 
     func deactivateAfterCall() {
+        preparedVoiceOnly = nil
         do {
             try audioSession.overrideOutputAudioPort(.none)
-            hasPreparedForCall = false
         } catch {
             MXLog.error("Failed clearing call audio route override: \(error)")
         }
@@ -39,7 +47,6 @@ final class CallAudioSessionController {
     func routeAudioToNativeEarpiece() {
         do {
             try audioSession.overrideOutputAudioPort(.none)
-            hasPreparedForCall = true
         } catch {
             MXLog.error("Failed routing call audio to native earpiece: \(error)")
         }
@@ -48,14 +55,13 @@ final class CallAudioSessionController {
     func routeAudioToSpeaker() {
         do {
             try audioSession.overrideOutputAudioPort(.speaker)
-            hasPreparedForCall = true
         } catch {
             MXLog.error("Failed routing call audio to speaker: \(error)")
         }
     }
 
     func handleInterruption(notification: Notification) {
-        guard hasPreparedForCall,
+        guard preparedVoiceOnly != nil,
               let typeValue = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
               AVAudioSession.InterruptionType(rawValue: typeValue) == .ended else {
             return
@@ -64,9 +70,6 @@ final class CallAudioSessionController {
     }
 
     func handleMediaServicesReset() {
-        guard hasPreparedForCall else {
-            return
-        }
-        // WebKit owns the active WebRTC session; lifecycle recovery is handled by CallScreenViewModel.
+        preparedVoiceOnly = nil
     }
 }

@@ -78,6 +78,13 @@ struct ElementCallWidgetMessage: Codable {
         }
     }
 
+    var isHostGeneratedResponse: Bool {
+        direction == .toWidget &&
+            response != nil &&
+            requestId.hasPrefix("widgetapi-") &&
+            isHostHandledAction
+    }
+
     func successResponseJSON() -> String? {
         var message = self
         message.response = .init()
@@ -296,6 +303,10 @@ final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked
             return .success(true)
         }
 
+        if let widgetMessage = decodeHostGeneratedResponse(message), widgetMessage.widgetId == widgetID {
+            return .success(true)
+        }
+
         let result = await runtime.send(message: message)
         MXLog.debug("Sent widget message: \(CallDiagnostics.jsonSummary(message)) accepted=\(result)")
 
@@ -439,6 +450,16 @@ final class ElementCallWidgetDriver: ElementCallWidgetDriverProtocol, @unchecked
               widgetMessage.direction == .fromWidget,
               widgetMessage.widgetId == widgetID,
               widgetMessage.isHostHandledAction else {
+            return nil
+        }
+
+        return widgetMessage
+    }
+
+    private func decodeHostGeneratedResponse(_ message: String) -> ElementCallWidgetMessage? {
+        guard let data = message.data(using: .utf8),
+              let widgetMessage = try? JSONDecoder().decode(ElementCallWidgetMessage.self, from: data),
+              widgetMessage.isHostGeneratedResponse else {
             return nil
         }
 

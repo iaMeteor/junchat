@@ -14,8 +14,51 @@ import Foundation
 import JavaScriptCore
 import Testing
 import UIKit
+import WebKit
 
 struct CallScreenJunchatTests {
+    @Test(arguments: [WKMediaCaptureState.none, .active])
+    func microphoneRecoveryDoesNotOverrideNonMutedCapture(_ captureState: WKMediaCaptureState) {
+        #expect(!CallWebViewMicrophoneRecoveryPolicy.shouldReactivate(isAudioEnabled: true,
+                                                                      isPictureInPictureActive: true,
+                                                                      captureState: captureState,
+                                                                      recoveryInFlight: false))
+    }
+
+    @Test
+    func microphoneRecoveryOnlyReactivatesSystemMutedPictureInPictureCapture() {
+        #expect(CallWebViewMicrophoneRecoveryPolicy.shouldReactivate(isAudioEnabled: true,
+                                                                     isPictureInPictureActive: true,
+                                                                     captureState: .muted,
+                                                                     recoveryInFlight: false))
+        #expect(!CallWebViewMicrophoneRecoveryPolicy.shouldReactivate(isAudioEnabled: false,
+                                                                      isPictureInPictureActive: true,
+                                                                      captureState: .muted,
+                                                                      recoveryInFlight: false))
+        #expect(!CallWebViewMicrophoneRecoveryPolicy.shouldReactivate(isAudioEnabled: true,
+                                                                      isPictureInPictureActive: false,
+                                                                      captureState: .muted,
+                                                                      recoveryInFlight: false))
+        #expect(!CallWebViewMicrophoneRecoveryPolicy.shouldReactivate(isAudioEnabled: true,
+                                                                      isPictureInPictureActive: true,
+                                                                      captureState: .muted,
+                                                                      recoveryInFlight: true))
+    }
+
+    @Test(arguments: [WKMediaCaptureState.active, .muted])
+    func backgroundMicrophoneConfirmationReassertsExistingCapture(_ captureState: WKMediaCaptureState) {
+        #expect(CallWebViewMicrophoneRecoveryPolicy.shouldConfirmForBackgrounding(isAudioEnabled: true,
+                                                                                  captureState: captureState))
+    }
+
+    @Test
+    func backgroundMicrophoneConfirmationPreservesUserMuteAndStoppedCapture() {
+        #expect(!CallWebViewMicrophoneRecoveryPolicy.shouldConfirmForBackgrounding(isAudioEnabled: false,
+                                                                                   captureState: .active))
+        #expect(!CallWebViewMicrophoneRecoveryPolicy.shouldConfirmForBackgrounding(isAudioEnabled: true,
+                                                                                   captureState: .none))
+    }
+
     @Test
     func elementCallLanguageFollowsJunchatChineseOnlyPolicy() {
         Bundle.overrideLocalizations = ["en-US"]
@@ -79,21 +122,28 @@ struct CallScreenJunchatTests {
     }
 
     @Test
-    func widgetBridgeAcceptsOnlyTrustedMainWindowAndWKWebViewFileMessages() throws {
+    func widgetBridgeUsesTheNativeFrameBoundaryForWKWebViewFileMessages() throws {
         let context = try #require(JSContext())
         let results = try #require(context.evaluateScript("""
         const trustPolicy = (\(CallScreenJavaScriptMessageName.widgetMessageSourceTrustFunctionScript));
         const evaluateTrust = (protocol, locationOrigin, eventOrigin, sourceKind) => {
-            const currentWindow = { location: { protocol, origin: locationOrigin } };
-            const source = sourceKind === "window" ? currentWindow : sourceKind === "null" ? null : {};
+            const childFrame = {};
+            const currentWindow = { location: { protocol, origin: locationOrigin }, frames: [childFrame] };
+            const source = sourceKind === "window" ? currentWindow
+                : sourceKind === "null" ? null
+                : sourceKind === "child" ? childFrame
+                : {};
             return trustPolicy({ source, origin: eventOrigin }, currentWindow);
         };
         [
             evaluateTrust("file:", "null", "null", "null"),
             evaluateTrust("file:", "null", "null", "window"),
+            evaluateTrust("file:", "null", "null", "child"),
             evaluateTrust("file:", "null", "null", "foreign"),
+            evaluateTrust("file:", "null", "https://evil.example", "child"),
             evaluateTrust("file:", "null", "https://evil.example", "null"),
             evaluateTrust("https:", "https://call.example", "https://call.example", "window"),
+            evaluateTrust("https:", "https://call.example", "https://call.example", "child"),
             evaluateTrust("https:", "https://call.example", "https://call.example", "null"),
             evaluateTrust("https:", "https://call.example", "https://call.example", "foreign"),
             evaluateTrust("https:", "https://call.example", "https://evil.example", "window"),
@@ -101,7 +151,7 @@ struct CallScreenJunchatTests {
         """).toArray() as? [Bool])
 
         #expect(context.exception == nil)
-        #expect(results == [true, true, false, false, true, false, false, false])
+        #expect(results == [true, true, true, true, true, true, true, false, false, false, false])
     }
 
     @Test
@@ -117,8 +167,10 @@ struct CallScreenJunchatTests {
             warn() {},
             error() {},
         };
+        const elementCallFrame = {};
         const window = {
             location: { protocol: "file:", origin: "null" },
+            frames: [elementCallFrame],
             controls: {},
             addEventListener: (name, handler) => {
                 if (name === "message") widgetMessageHandler = handler;
@@ -135,7 +187,7 @@ struct CallScreenJunchatTests {
         };
         \(CallScreenJavaScriptMessageName.allCasesInjectionScript)
         widgetMessageHandler({
-            source: null,
+            source: elementCallFrame,
             origin: "null",
             data: { api: "fromWidget", action: "content_loaded" },
         });
@@ -1293,6 +1345,66 @@ struct CallScreenJunchatBehaviorTests {
         }
 
         #expect(condition(), sourceLocation: sourceLocation)
+    }
+}
+
+struct CallScreenMediaStateSynchronizationTests {
+    @Test
+    @MainActor
+    func matchingMuteStateIsNotEchoedBetweenElementCallAndCallKit() async throws {
+        let serviceActions = PassthroughSubject<ElementCallServiceAction, Never>()
+        let elementCallService = ElementCallServiceMock(.init())
+        elementCallService.underlyingActions = serviceActions.eraseToAnyPublisher()
+
+        let widgetActions = PassthroughSubject<ElementCallWidgetDriverAction, Never>()
+        let widgetDriver = ElementCallWidgetDriverMock()
+        widgetDriver.underlyingWidgetID = "widget"
+        widgetDriver.underlyingMessagePublisher = .init()
+        widgetDriver.underlyingActions = widgetActions.eraseToAnyPublisher()
+        widgetDriver.startBaseURLClientIDColorSchemeVoiceOnlyRageshakeURLAnalyticsConfigurationReturnValue = .success(URL.userDirectory)
+        widgetDriver.handleMessageReturnValue = .success(true)
+
+        let roomProxy = JoinedRoomProxyMock(.init(id: "room-id", name: "Call Room"))
+        roomProxy.elementCallWidgetDriverDeviceIDReturnValue = widgetDriver
+
+        let viewModel = CallScreenViewModel(elementCallService: elementCallService,
+                                            configuration: .init(roomProxy: roomProxy,
+                                                                 clientProxy: ClientProxyMock(.init(deviceID: "device-id")),
+                                                                 clientID: "com.heyujk.junchat",
+                                                                 elementCallBaseURL: URL.homeDirectory,
+                                                                 elementCallBaseURLOverride: nil,
+                                                                 voiceOnly: true,
+                                                                 colorScheme: .dark),
+                                            allowPictureInPicture: false,
+                                            appHooks: AppHooks(),
+                                            appSettings: AppSettings(),
+                                            analyticsService: AnalyticsService(client: AnalyticsClientMock(), appSettings: AppSettings()),
+                                            callConnectedTonePlayer: { },
+                                            callEndedTonePlayer: { })
+
+        var evaluatedJavaScript = [String]()
+        viewModel.context.javaScriptEvaluator = { script in
+            evaluatedJavaScript.append(script)
+            return "ok"
+        }
+
+        widgetActions.send(.mediaStateChanged(audioEnabled: false, videoEnabled: true))
+        widgetActions.send(.mediaStateChanged(audioEnabled: false, videoEnabled: true))
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(elementCallService.setAudioEnabledRoomIDCallsCount == 1)
+
+        serviceActions.send(.setAudioEnabled(false, roomID: "room-id"))
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(evaluatedJavaScript.isEmpty)
+
+        serviceActions.send(.setAudioEnabled(true, roomID: "room-id"))
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(evaluatedJavaScript.contains {
+            $0.contains(#""action":"io.element.device_mute""#) &&
+                $0.contains(#""audio_enabled":true"#)
+        })
+        viewModel.stop()
     }
 }
 

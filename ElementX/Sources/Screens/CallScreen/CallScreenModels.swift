@@ -27,6 +27,7 @@ struct Bindings {
     var javaScriptEvaluator: ((String) async throws -> Any)?
     var requestPictureInPictureHandler: (() async -> Result<Void, CallScreenError>)?
     var stopPictureInPictureHandler: (() -> Void)?
+    var isAudioEnabled: (() -> Bool)?
     
     var alertInfo: AlertInfo<UUID>?
 }
@@ -68,9 +69,12 @@ enum CallScreenJavaScriptMessageName: String, CaseIterable {
         """
         (event, currentWindow) => {
             const isLocalCall = currentWindow.location.protocol === "file:";
-            const expectedOrigin = isLocalCall ? "null" : currentWindow.location.origin;
-            const sourceIsTrusted = event.source === currentWindow || (isLocalCall && event.source === null);
-            return sourceIsTrusted && event.origin === expectedOrigin;
+            // WebKit does not preserve stable WindowProxy or opaque-origin
+            // values for messages from a local file page. The native bridge
+            // separately verifies that this script is running in the exact
+            // bundled call document's main frame.
+            return isLocalCall
+                || (event.source === currentWindow && event.origin === currentWindow.location.origin);
         }
         """
     }

@@ -106,6 +106,10 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         super.init(initialViewState: CallScreenViewState(script: CallScreenJavaScriptMessageName.allCasesInjectionScript,
                                                          certificateValidator: appHooks.certificateValidatorHook))
 
+        state.bindings.isAudioEnabled = { [weak self] in
+            self?.callMediaCoordinator.currentAudioEnabled ?? false
+        }
+
         elementCallService.registerCallSession(generation: callSessionGeneration)
 
         self.callMediaCoordinator.startLifecycleHandling { [weak self] event in
@@ -126,6 +130,8 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
                         MXLog.error("Received mute request for a different room")
                         return
                     }
+
+                    guard self.callMediaCoordinator.currentAudioEnabled != enabled else { return }
 
                     self.callMediaCoordinator.updateAudioEnabled(enabled)
                     Task {
@@ -157,6 +163,8 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
                 case .callEnded:
                     completeCall()
                 case .mediaStateChanged(let audioEnabled, _):
+                    guard self.callMediaCoordinator.currentAudioEnabled != audioEnabled else { return }
+
                     self.callMediaCoordinator.updateAudioEnabled(audioEnabled)
                     elementCallService.setAudioEnabled(audioEnabled, roomID: configuration.callRoomID)
                 }

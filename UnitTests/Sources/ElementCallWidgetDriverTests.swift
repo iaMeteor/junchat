@@ -162,6 +162,23 @@ struct ElementCallWidgetDriverTests {
     }
 
     @Test
+    func hostGeneratedResponsesDoNotEnterTheRustWidgetMachine() async throws {
+        let probe = ElementCallWidgetDriverLifecycleProbe()
+        let driver = makeDriver(probe: probe)
+        await expectSuccess(start(driver))
+
+        let response = ElementCallWidgetMessage(direction: .toWidget,
+                                                action: .mediaState,
+                                                widgetId: driver.widgetID,
+                                                response: .init())
+        let message = try #require(String(data: JSONEncoder().encode(response), encoding: .utf8))
+
+        #expect(try await driver.handleMessage(message).get())
+        #expect(probe.snapshot.sendStarted == 0)
+        driver.stop()
+    }
+
+    @Test
     func voiceOnlySessionCarriesAnAudioIntentWithoutChangingTheGroupWidgetIntent() async throws {
         let probe = ElementCallWidgetDriverLifecycleProbe()
         let driver = makeDriver(probe: probe)

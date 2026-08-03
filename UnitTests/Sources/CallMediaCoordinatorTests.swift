@@ -13,6 +13,13 @@ import UIKit
 @MainActor
 struct CallMediaCoordinatorTests {
     @Test
+    func selfGeneratedRouteOverridesDoNotScheduleRecovery() {
+        #expect(!CallAudioRoutePolicy.shouldRecoverAfterRouteChange(.override))
+        #expect(CallAudioRoutePolicy.shouldRecoverAfterRouteChange(.newDeviceAvailable))
+        #expect(CallAudioRoutePolicy.shouldRecoverAfterRouteChange(nil))
+    }
+
+    @Test
     func outboundVoiceCallUsesEarpieceUntilRemoteMediaConnects() {
         let audioSession = AudioSessionMock()
         let ringbackTonePlayer = TestCallRingbackTonePlayer()
@@ -60,6 +67,25 @@ struct CallMediaCoordinatorTests {
         #expect(coordinator.selectedOutput == .nativeSpeaker)
         #expect(audioSession.overrideOutputAudioPortReceivedPortOverride == AVAudioSession.PortOverride.speaker)
         #expect(proximityValues.last == false)
+    }
+
+    @Test
+    func repeatedOutputSelectionDoesNotReapplyTheAudioRoute() {
+        let audioSession = AudioSessionMock()
+        let setProximityMonitoringEnabled: (Bool) -> Void = { _ in }
+        let coordinator = CallMediaCoordinator(voiceOnly: true,
+                                               playConnectedTone: false,
+                                               audioSessionController: .init(audioSession: audioSession),
+                                               connectedTonePlayer: { },
+                                               ringbackTonePlayer: TestCallRingbackTonePlayer(),
+                                               setProximityMonitoringEnabled: setProximityMonitoringEnabled)
+
+        coordinator.prepareForCall()
+        let routeOverrideCount = audioSession.overrideOutputAudioPortCallsCount
+
+        coordinator.selectOutput(.nativeEarpiece)
+
+        #expect(audioSession.overrideOutputAudioPortCallsCount == routeOverrideCount)
     }
 
     @Test
