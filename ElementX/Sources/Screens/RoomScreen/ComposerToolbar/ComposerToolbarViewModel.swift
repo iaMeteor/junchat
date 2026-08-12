@@ -923,7 +923,7 @@ private struct PlainComposerContent {
 }
 
 private enum JunchatContentFilter {
-    private static let blockedTerms = [
+    private static let sensitiveTopics = [
         "色情",
         "淫秽",
         "裸聊",
@@ -942,6 +942,106 @@ private enum JunchatContentFilter {
         "scam",
         "harassment"
     ]
+
+    private static let prohibitedActionSignals = [
+        "私聊我",
+        "联系我",
+        "加我",
+        "扫码",
+        "进群",
+        "加入我们",
+        "招募",
+        "代理加盟",
+        "出售",
+        "售卖",
+        "收购",
+        "购买",
+        "买卖",
+        "交易",
+        "代办",
+        "下注",
+        "返利",
+        "包赢",
+        "稳赚",
+        "赚快钱",
+        "拉人头",
+        "教你实施",
+        "绕过监管",
+        "洗钱",
+        "开户",
+        "contact me",
+        "message me",
+        "dm me",
+        "join us",
+        "recruit",
+        "for sale",
+        "buy now",
+        "sell",
+        "purchase",
+        "trade",
+        "place a bet",
+        "guaranteed win",
+        "guaranteed profit",
+        "cashback",
+        "how to commit",
+        "bypass regulation",
+        "money laundering"
+    ]
+
+    private static let legitimateContextSignals = [
+        "防范",
+        "反诈",
+        "反诈骗",
+        "警惕",
+        "请勿",
+        "不要",
+        "禁止",
+        "举报",
+        "法律",
+        "法规",
+        "违法",
+        "犯罪",
+        "风险",
+        "新闻",
+        "报道",
+        "案例",
+        "讨论",
+        "研究",
+        "教育",
+        "科普",
+        "受害",
+        "被骗",
+        "涉嫌",
+        "罪名",
+        "法院",
+        "检察院",
+        "公安",
+        "警方",
+        "律师",
+        "判决",
+        "合同",
+        "商业秘密",
+        "prevent",
+        "prevention",
+        "anti-fraud",
+        "warning",
+        "do not",
+        "illegal",
+        "crime",
+        "criminal",
+        "law",
+        "legal",
+        "news",
+        "report",
+        "case study",
+        "discuss",
+        "research",
+        "education",
+        "victim",
+        "police",
+        "court",
+        "fraud awareness"
+    ]
     
     static func containsObjectionableContent(_ text: String) -> Bool {
         let normalizedText = normalized(text)
@@ -949,11 +1049,18 @@ private enum JunchatContentFilter {
             return false
         }
         
-        return blockedTerms
+        guard containsAny(sensitiveTopics, in: normalizedText),
+              containsAny(prohibitedActionSignals, in: normalizedText) else {
+            return false
+        }
+
+        return !containsAny(legitimateContextSignals, in: normalizedText)
+    }
+
+    private static func containsAny(_ terms: [String], in normalizedText: String) -> Bool {
+        terms.lazy
             .map(normalized)
-            .contains { normalizedTerm in
-                !normalizedTerm.isEmpty && normalizedText.contains(normalizedTerm)
-            }
+            .contains { !$0.isEmpty && normalizedText.contains($0) }
     }
     
     private static func normalized(_ text: String) -> String {

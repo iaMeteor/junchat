@@ -115,9 +115,9 @@ final class ElementCallServiceTests {
                                                                                          incomingCallIdentity: incomingCallIdentity))
         
         #expect(!callController.requestedActions.contains { $0 is CXAnswerCallAction })
-        #expect(callProvider.reportCallWithEndedAtReasonReceivedInvocations.contains {
-            $0.uuid == incomingCallIdentity.callKitID && $0.reason == .remoteEnded
-        })
+        let endedCall = try #require(callProvider.reportCallWithEndedAtReasonReceivedArguments)
+        #expect(endedCall.uuid == incomingCallIdentity.callKitID)
+        #expect(endedCall.reason == .remoteEnded)
         #expect(service.incomingCallRoomIDPublisher.value == nil)
         
         let generation = ElementCallSessionGeneration()
@@ -148,9 +148,9 @@ final class ElementCallServiceTests {
         #expect(acceptedIdentity == incomingCallIdentity)
         #expect(!service.hasPendingAnswerCallHandoff)
         #expect(service.incomingCallIdentityPublisher.value == nil)
-        #expect(callProvider.reportCallWithEndedAtReasonReceivedInvocations.contains {
-            $0.uuid == incomingCallIdentity.callKitID && $0.reason == .remoteEnded
-        })
+        let endedCall = try #require(callProvider.reportCallWithEndedAtReasonReceivedArguments)
+        #expect(endedCall.uuid == incomingCallIdentity.callKitID)
+        #expect(endedCall.reason == .remoteEnded)
         withExtendedLifetime(provider) { }
     }
 

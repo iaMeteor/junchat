@@ -750,7 +750,9 @@ struct CallScreenJunchatBehaviorTests {
         #expect(viewModel.context.alertInfo == nil)
 
         releaseStart?.resume(returning: .success(URL.userDirectory))
-        try await Task.sleep(for: .milliseconds(40))
+        for _ in 0..<100 where viewModel.context.alertInfo == nil {
+            try await Task.sleep(for: .milliseconds(5))
+        }
         #expect(viewModel.context.alertInfo != nil)
         viewModel.stop()
     }

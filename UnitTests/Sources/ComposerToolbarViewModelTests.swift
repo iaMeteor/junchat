@@ -802,7 +802,7 @@ final class ComposerToolbarViewModelTests {
     @Test
     func objectionablePlainTextIsFilteredBeforeSending() {
         viewModel.context.composerFormattingEnabled = false
-        viewModel.context.plainComposerText = NSAttributedString(string: "这里有色情内容")
+        viewModel.context.plainComposerText = NSAttributedString(string: "提供色情资源，私聊我购买")
         
         var sendMessageActionWasPublished = false
         let cancellable = viewModel.actions.sink { action in
@@ -816,6 +816,25 @@ final class ComposerToolbarViewModelTests {
         
         #expect(!sendMessageActionWasPublished)
         #expect(viewModel.state.bindings.alertInfo?.title == "内容已拦截")
+    }
+
+    @Test
+    func sensitiveTopicInLegalContextCanBeSent() {
+        viewModel.context.composerFormattingEnabled = false
+        viewModel.context.plainComposerText = NSAttributedString(string: "合同内容属于商业秘密，泄露可能涉嫌犯罪；请注意防范诈骗风险。")
+
+        var sendMessageActionWasPublished = false
+        let cancellable = viewModel.actions.sink { action in
+            if case .sendMessage = action {
+                sendMessageActionWasPublished = true
+            }
+        }
+        defer { cancellable.cancel() }
+
+        viewModel.process(viewAction: .sendMessage)
+
+        #expect(sendMessageActionWasPublished)
+        #expect(viewModel.state.bindings.alertInfo == nil)
     }
     
     @Test
