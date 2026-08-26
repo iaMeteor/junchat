@@ -370,6 +370,34 @@ struct UserSessionFlowCoordinatorTests {
     }
 
     @Test
+    func connectedToneOnlyPlaysForDirectOutgoingCallsByDefault() {
+        #expect(CallConnectedTonePolicy.shouldPlay(explicit: nil,
+                                                   isIncoming: false,
+                                                   isDirect: true,
+                                                   isSpace: false))
+        #expect(!CallConnectedTonePolicy.shouldPlay(explicit: nil,
+                                                    isIncoming: false,
+                                                    isDirect: false,
+                                                    isSpace: false))
+        #expect(!CallConnectedTonePolicy.shouldPlay(explicit: nil,
+                                                    isIncoming: true,
+                                                    isDirect: true,
+                                                    isSpace: false))
+        #expect(!CallConnectedTonePolicy.shouldPlay(explicit: nil,
+                                                    isIncoming: false,
+                                                    isDirect: true,
+                                                    isSpace: true))
+        #expect(CallConnectedTonePolicy.shouldPlay(explicit: true,
+                                                   isIncoming: true,
+                                                   isDirect: false,
+                                                   isSpace: true))
+        #expect(!CallConnectedTonePolicy.shouldPlay(explicit: false,
+                                                    isIncoming: false,
+                                                    isDirect: true,
+                                                    isSpace: false))
+    }
+
+    @Test
     mutating func incomingCallOverlayIsShownEvenWhenViewingTheSameRoom() async throws {
         try await process(route: .room(roomID: "1", via: []), expectedChatsState: .roomList(detailState: .room(roomID: "1")))
 

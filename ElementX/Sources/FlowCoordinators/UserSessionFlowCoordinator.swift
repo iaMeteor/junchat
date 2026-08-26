@@ -20,6 +20,16 @@ enum UserSessionFlowCoordinatorAction {
 
 typealias CallScreenCoordinatorFactory = @MainActor (CallScreenCoordinatorParameters) -> any CallScreenCoordinatorProtocol
 
+enum CallConnectedTonePolicy {
+    static func shouldPlay(explicit: Bool?, isIncoming: Bool, isDirect: Bool, isSpace: Bool) -> Bool {
+        if let explicit {
+            return explicit
+        }
+
+        return !isIncoming && isDirect && !isSpace
+    }
+}
+
 class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
     enum HomeTab: Hashable { case chats, contacts, entertainment, spaces }
 
@@ -581,7 +591,11 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
             return
         }
 
-        let shouldPlayConnectedTone = playConnectedTone ?? (incomingCallIdentity == nil)
+        let roomInfo = roomProxy.infoPublisher.value
+        let shouldPlayConnectedTone = CallConnectedTonePolicy.shouldPlay(explicit: playConnectedTone,
+                                                                         isIncoming: incomingCallIdentity != nil,
+                                                                         isDirect: roomInfo.isDirect,
+                                                                         isSpace: roomInfo.isSpace)
         let callPresentationDetails = [
             "voice=\(isVoiceCall)",
             "playConnectedTone=\(shouldPlayConnectedTone)",
@@ -598,7 +612,7 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
 
     private func presentCallScreen(roomProxy: JoinedRoomProxyProtocol,
                                    voiceOnly: Bool,
-                                   playConnectedTone: Bool = true,
+                                   playConnectedTone: Bool? = nil,
                                    incomingCallIdentity: ElementCallIncomingCallIdentity? = nil,
                                    requestID: UUID) async {
         guard callPresentationRequestID == requestID else {
@@ -607,7 +621,12 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
             return
         }
 
-        MXLog.info("[JunchatCall] presentCallScreen roomProxy voice=\(voiceOnly) playConnectedTone=\(playConnectedTone)")
+        let roomInfo = roomProxy.infoPublisher.value
+        let shouldPlayConnectedTone = CallConnectedTonePolicy.shouldPlay(explicit: playConnectedTone,
+                                                                         isIncoming: incomingCallIdentity != nil,
+                                                                         isDirect: roomInfo.isDirect,
+                                                                         isSpace: roomInfo.isSpace)
+        MXLog.info("[JunchatCall] presentCallScreen roomProxy voice=\(voiceOnly) playConnectedTone=\(shouldPlayConnectedTone)")
         let colorScheme: ColorScheme = flowParameters.windowManager.mainWindow?.traitCollection.userInterfaceStyle == .light ? .light : .dark
         await presentCallScreen(configuration: .init(roomProxy: roomProxy,
                                                      clientProxy: userSession.clientProxy,
@@ -616,7 +635,7 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
                                                      elementCallBaseURLOverride: flowParameters.appSettings.elementCallBaseURLOverride,
                                                      voiceOnly: voiceOnly,
                                                      colorScheme: colorScheme,
-                                                     playConnectedTone: playConnectedTone,
+                                                     playConnectedTone: shouldPlayConnectedTone,
                                                      incomingCallIdentity: incomingCallIdentity),
                                 requestID: requestID)
     }
