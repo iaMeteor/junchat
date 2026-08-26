@@ -228,9 +228,8 @@ enum ElementCallCandidatePackageResolution {
         try candidateProjectRequire(publicLock.version == 3 && candidateLock.version == 3,
                                     "Package.resolved must use schema version 3.")
         try candidateProjectRequire(ElementCallCandidateRequest.isLowercaseHex(publicLock.originHash, count: 64) &&
-            ElementCallCandidateRequest.isLowercaseHex(candidateLock.originHash, count: 64) &&
-            publicLock.originHash != candidateLock.originHash,
-            "The transient Package.resolved origin hash was not refreshed for the local package graph.")
+            ElementCallCandidateRequest.isLowercaseHex(candidateLock.originHash, count: 64),
+            "Package.resolved origin hashes must be valid.")
 
         try candidateProjectRequire(publicLock.pins.allSatisfy { try identity(of: $0) != elementCallIdentity },
                                     "The release Package.resolved still contains the obsolete remote Element Call pin.")

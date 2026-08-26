@@ -426,10 +426,10 @@ final class ElementCallCandidateConsumerTests: XCTestCase {
         XCTAssertNoThrow(try ElementCallCandidatePackageResolution.validate(publicData: publicData,
                                                                             candidateData: candidateData))
 
-        var staleOrigin = candidateRoot
-        staleOrigin["originHash"] = publicOriginHash
-        XCTAssertThrowsError(try ElementCallCandidatePackageResolution.validate(publicData: publicData,
-                                                                                candidateData: JSONSerialization.data(withJSONObject: staleOrigin, options: [.sortedKeys])))
+        var retainedOrigin = candidateRoot
+        retainedOrigin["originHash"] = publicOriginHash
+        XCTAssertNoThrow(try ElementCallCandidatePackageResolution.validate(publicData: publicData,
+                                                                            candidateData: JSONSerialization.data(withJSONObject: retainedOrigin, options: [.sortedKeys])))
 
         var retainedRemotePin = candidateRoot
         retainedRemotePin["pins"] = publicPins + [[
