@@ -2,6 +2,10 @@
 
 JunChat fork release notes are recorded here. Upstream history remains in `CHANGES.md`.
 
+## 1.9.6 (2026-08-27)
+
+- Restores call controls after they auto-hide on iOS and improves voice and video call audio stability.
+
 ## 1.9.5 (2026-08-02)
 
 - Improves encrypted message delivery and prevents duplicate local message echoes when recipient devices are unsigned.
