@@ -96,6 +96,21 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
         return await setPusher(with: deviceToken, clientProxy: userSession.clientProxy)
     }
 
+    func unregisterPusher(for userSession: UserSessionProtocol) async {
+        guard let pushKey = appSettings.pusherPushKey else { return }
+
+        do {
+            try await userSession.clientProxy.deletePusher(identifiers: .init(pushkey: pushKey,
+                                                                              appId: appSettings.pusherAppID))
+            if appSettings.pusherPushKey == pushKey {
+                appSettings.pusherPushKey = nil
+            }
+            MXLog.info("Deleted pusher during session teardown")
+        } catch {
+            MXLog.error("Failed deleting pusher during session teardown: \(error)")
+        }
+    }
+
     func setUserSession(_ userSession: UserSessionProtocol?) {
         let previousUserID = self.userSession?.clientProxy.userID
         self.userSession = userSession
@@ -308,22 +323,47 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
 
     private func setPusher(with deviceToken: Data, clientProxy: ClientProxyProtocol) async -> Bool {
         do {
+            let pushKey = deviceToken.base64EncodedString()
+            let profileTag = pusherProfileTag()
+            let previousPushKey = appSettings.pusherPushKey
+
             let defaultPayload = APNSPayload(aps: APSInfo(mutableContent: 1,
                                                           alert: APSAlert(locKey: "Notification",
                                                                           locArgs: []),
                                                           sound: "junchat-message.caf"),
                                              pusherNotificationClientIdentifier: clientProxy.pusherNotificationClientIdentifier)
 
-            let configuration = try await PusherConfiguration(identifiers: .init(pushkey: deviceToken.base64EncodedString(),
+            let configuration = try await PusherConfiguration(identifiers: .init(pushkey: pushKey,
                                                                                  appId: appSettings.pusherAppID),
                                                               kind: .http(data: .init(url: appSettings.pushGatewayNotifyEndpoint.absoluteString,
                                                                                       format: .eventIdOnly,
                                                                                       defaultPayload: defaultPayload.toJsonString())),
                                                               appDisplayName: "\(InfoPlistReader.main.bundleDisplayName) (iOS)",
                                                               deviceDisplayName: UIDevice.current.name,
-                                                              profileTag: pusherProfileTag(),
+                                                              profileTag: profileTag,
                                                               lang: Bundle.junchatPreferredLocalizations.first ?? Bundle.junchatSimplifiedChineseLocalization)
             try await clientProxy.setPusher(with: configuration)
+            appSettings.pusherPushKey = pushKey
+
+            if let previousPushKey,
+               previousPushKey != pushKey {
+                do {
+                    try await clientProxy.deletePusher(identifiers: .init(pushkey: previousPushKey,
+                                                                          appId: appSettings.pusherAppID))
+                    MXLog.info("Deleted superseded APNs pusher")
+                } catch {
+                    MXLog.error("Failed deleting superseded APNs pusher: \(error)")
+                }
+            }
+
+            do {
+                try await clientProxy.deleteSupersededPushers(appID: appSettings.pusherAppID,
+                                                              pushKey: pushKey,
+                                                              profileTag: profileTag)
+            } catch {
+                MXLog.error("Failed deleting superseded installation pushers: \(error)")
+            }
+
             MXLog.info("Set pusher succeeded")
             return true
         } catch {

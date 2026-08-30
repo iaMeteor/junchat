@@ -230,6 +230,10 @@ protocol ClientProxyProtocol: AnyObject {
     func logout() async
 
     func setPusher(with configuration: PusherConfiguration) async throws
+
+    func deletePusher(identifiers: PusherIdentifiers) async throws
+
+    func deleteSupersededPushers(appID: String, pushKey: String, profileTag: String) async throws
     
     func searchUsers(searchTerm: String, limit: UInt) async -> Result<SearchUsersResultsProxy, ClientProxyError>
     

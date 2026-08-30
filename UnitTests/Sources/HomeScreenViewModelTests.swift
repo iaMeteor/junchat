@@ -81,6 +81,16 @@ final class HomeScreenViewModelTests {
         await Task.yield()
         #expect(correctResult)
     }
+
+    @Test
+    func refreshingRoomListRebuildsRoomSummaries() async {
+        setupViewModel()
+
+        context.send(viewAction: .refreshRoomList)
+        await Task.yield()
+
+        #expect(roomSummaryProvider.refreshRoomSummariesCallsCount == 1)
+    }
     
     @Test
     func leaveRoomAlert() async throws {

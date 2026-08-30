@@ -867,8 +867,7 @@ class AppCoordinator: AppCoordinatorProtocol, AuthenticationFlowCoordinatorDeleg
             return
         }
         
-        // The user will log out, clear any existing notifications and unregister from receving new ones
-        notificationManager.setUserSession(nil)
+        // The user will log out, clear any existing notifications and unregister from receiving new ones.
         UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
         UNUserNotificationCenter.current().removeAllDeliveredNotifications()
         UNUserNotificationCenter.current().setBadgeCount(0)
@@ -876,6 +875,9 @@ class AppCoordinator: AppCoordinatorProtocol, AuthenticationFlowCoordinatorDeleg
         unregisterForRemoteNotifications()
         
         Task {
+            await notificationManager.unregisterPusher(for: userSession)
+            notificationManager.setUserSession(nil)
+
             // First log out from the server
             await userSession.clientProxy.logout()
             

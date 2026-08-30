@@ -4917,6 +4917,70 @@ class ClientProxyMock: ClientProxyProtocol, @unchecked Sendable {
         }
         try await setPusherWithClosure?(configuration)
     }
+    //MARK: - deletePusher
+
+    var deletePusherIdentifiersThrowableError: Error?
+    var deletePusherIdentifiersUnderlyingCallsCount = 0
+    var deletePusherIdentifiersCallsCount: Int {
+        get {
+            if Thread.isMainThread {
+                return deletePusherIdentifiersUnderlyingCallsCount
+            } else {
+                var returnValue: Int? = nil
+                DispatchQueue.main.sync {
+                    returnValue = deletePusherIdentifiersUnderlyingCallsCount
+                }
+
+                return returnValue!
+            }
+        }
+        set {
+            if Thread.isMainThread {
+                deletePusherIdentifiersUnderlyingCallsCount = newValue
+            } else {
+                DispatchQueue.main.sync {
+                    deletePusherIdentifiersUnderlyingCallsCount = newValue
+                }
+            }
+        }
+    }
+    var deletePusherIdentifiersCalled: Bool {
+        return deletePusherIdentifiersCallsCount > 0
+    }
+    var deletePusherIdentifiersReceivedIdentifiers: PusherIdentifiers?
+    var deletePusherIdentifiersReceivedInvocations: [PusherIdentifiers] = []
+    var deletePusherIdentifiersClosure: ((PusherIdentifiers) async throws -> Void)?
+
+    func deletePusher(identifiers: PusherIdentifiers) async throws {
+        if let error = deletePusherIdentifiersThrowableError {
+            throw error
+        }
+        deletePusherIdentifiersCallsCount += 1
+        deletePusherIdentifiersReceivedIdentifiers = identifiers
+        DispatchQueue.main.async {
+            self.deletePusherIdentifiersReceivedInvocations.append(identifiers)
+        }
+        try await deletePusherIdentifiersClosure?(identifiers)
+    }
+    //MARK: - deleteSupersededPushers
+
+    var deleteSupersededPushersAppIDPushKeyProfileTagThrowableError: Error?
+    var deleteSupersededPushersAppIDPushKeyProfileTagCallsCount = 0
+    var deleteSupersededPushersAppIDPushKeyProfileTagReceivedArguments: (appID: String, pushKey: String, profileTag: String)?
+    var deleteSupersededPushersAppIDPushKeyProfileTagReceivedInvocations: [(appID: String, pushKey: String, profileTag: String)] = []
+    var deleteSupersededPushersAppIDPushKeyProfileTagClosure: ((String, String, String) async throws -> Void)?
+
+    func deleteSupersededPushers(appID: String, pushKey: String, profileTag: String) async throws {
+        if let error = deleteSupersededPushersAppIDPushKeyProfileTagThrowableError {
+            throw error
+        }
+        deleteSupersededPushersAppIDPushKeyProfileTagCallsCount += 1
+        deleteSupersededPushersAppIDPushKeyProfileTagReceivedArguments = (appID: appID, pushKey: pushKey, profileTag: profileTag)
+        DispatchQueue.main.async {
+            self.deleteSupersededPushersAppIDPushKeyProfileTagReceivedInvocations.append((appID: appID, pushKey: pushKey, profileTag: profileTag))
+        }
+        try await deleteSupersededPushersAppIDPushKeyProfileTagClosure?(appID, pushKey, profileTag)
+    }
     //MARK: - searchUsers
 
     var searchUsersSearchTermLimitUnderlyingCallsCount = 0
@@ -14406,6 +14470,47 @@ class NotificationManagerMock: NotificationManagerProtocol, @unchecked Sendable 
         }
         setUserSessionClosure?(userSession)
     }
+    //MARK: - unregisterPusher
+
+    var unregisterPusherForUnderlyingCallsCount = 0
+    var unregisterPusherForCallsCount: Int {
+        get {
+            if Thread.isMainThread {
+                return unregisterPusherForUnderlyingCallsCount
+            } else {
+                var returnValue: Int? = nil
+                DispatchQueue.main.sync {
+                    returnValue = unregisterPusherForUnderlyingCallsCount
+                }
+
+                return returnValue!
+            }
+        }
+        set {
+            if Thread.isMainThread {
+                unregisterPusherForUnderlyingCallsCount = newValue
+            } else {
+                DispatchQueue.main.sync {
+                    unregisterPusherForUnderlyingCallsCount = newValue
+                }
+            }
+        }
+    }
+    var unregisterPusherForCalled: Bool {
+        return unregisterPusherForCallsCount > 0
+    }
+    var unregisterPusherForReceivedUserSession: UserSessionProtocol?
+    var unregisterPusherForReceivedInvocations: [UserSessionProtocol] = []
+    var unregisterPusherForClosure: ((UserSessionProtocol) async -> Void)?
+
+    func unregisterPusher(for userSession: UserSessionProtocol) async {
+        unregisterPusherForCallsCount += 1
+        unregisterPusherForReceivedUserSession = userSession
+        DispatchQueue.main.async {
+            self.unregisterPusherForReceivedInvocations.append(userSession)
+        }
+        await unregisterPusherForClosure?(userSession)
+    }
     //MARK: - requestAuthorization
 
     var requestAuthorizationUnderlyingCallsCount = 0
@@ -17787,6 +17892,41 @@ class RoomSummaryProviderMock: RoomSummaryProviderProtocol, @unchecked Sendable 
             self.updateVisibleRangeReceivedInvocations.append(range)
         }
         updateVisibleRangeClosure?(range)
+    }
+    //MARK: - refreshRoomSummaries
+
+    var refreshRoomSummariesUnderlyingCallsCount = 0
+    var refreshRoomSummariesCallsCount: Int {
+        get {
+            if Thread.isMainThread {
+                return refreshRoomSummariesUnderlyingCallsCount
+            } else {
+                var returnValue: Int? = nil
+                DispatchQueue.main.sync {
+                    returnValue = refreshRoomSummariesUnderlyingCallsCount
+                }
+
+                return returnValue!
+            }
+        }
+        set {
+            if Thread.isMainThread {
+                refreshRoomSummariesUnderlyingCallsCount = newValue
+            } else {
+                DispatchQueue.main.sync {
+                    refreshRoomSummariesUnderlyingCallsCount = newValue
+                }
+            }
+        }
+    }
+    var refreshRoomSummariesCalled: Bool {
+        return refreshRoomSummariesCallsCount > 0
+    }
+    var refreshRoomSummariesClosure: (() -> Void)?
+
+    func refreshRoomSummaries() {
+        refreshRoomSummariesCallsCount += 1
+        refreshRoomSummariesClosure?()
     }
     //MARK: - setFilter
 

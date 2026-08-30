@@ -2,6 +2,12 @@
 
 JunChat fork release notes are recorded here. Upstream history remains in `CHANGES.md`.
 
+## 1.9.8 (2026-08-30)
+
+- Refreshes conversation previews after messages are removed or expire.
+- Prevents stale notification registrations from producing duplicate pushes.
+- Makes incoming voice calls start on the earpiece unless speaker is selected for that call.
+
 ## 1.9.6 (2026-08-27)
 
 - Restores call controls after they auto-hide on iOS and improves voice and video call audio stability.

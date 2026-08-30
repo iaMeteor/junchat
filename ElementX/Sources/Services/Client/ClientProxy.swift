@@ -808,6 +808,38 @@ class ClientProxy: ClientProxyProtocol {
                                    profileTag: configuration.profileTag,
                                    lang: configuration.lang)
     }
+
+    func deletePusher(identifiers: PusherIdentifiers) async throws {
+        try await client.deletePusher(identifiers: identifiers)
+    }
+
+    func deleteSupersededPushers(appID: String, pushKey: String, profileTag: String) async throws {
+        let session = try client.session()
+        guard let homeserverURL = URL(string: session.homeserverUrl) else {
+            throw ClientProxyError.invalidServerName
+        }
+
+        let url = homeserverURL
+            .appending(path: "_matrix")
+            .appending(path: "client")
+            .appending(path: "v3")
+            .appending(path: "pushers")
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(session.accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        let (data, response) = try await URLSession.shared.dataWithRetry(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              200..<300 ~= httpResponse.statusCode,
+              data.count <= 1_048_576 else {
+            throw ClientProxyError.invalidResponse
+        }
+
+        let pushers = try JSONDecoder().decode(JunchatPushersResponse.self, from: data).pushers
+        for pusher in pushers where pusher.appID == appID && pusher.profileTag == profileTag && pusher.pushKey != pushKey {
+            try await client.deletePusher(identifiers: .init(pushkey: pusher.pushKey, appId: pusher.appID))
+        }
+    }
     
     func searchUsers(searchTerm: String, limit: UInt) async -> Result<SearchUsersResultsProxy, ClientProxyError> {
         do {
@@ -1471,6 +1503,22 @@ class ClientProxy: ClientProxyProtocol {
             MXLog.error("Failed retrieving user identity: \(error)")
             return .failure(.sdkError(error))
         }
+    }
+}
+
+private struct JunchatPushersResponse: Decodable {
+    let pushers: [JunchatPusher]
+}
+
+private struct JunchatPusher: Decodable {
+    let appID: String
+    let pushKey: String
+    let profileTag: String?
+
+    enum CodingKeys: String, CodingKey {
+        case appID = "app_id"
+        case pushKey = "pushkey"
+        case profileTag = "profile_tag"
     }
 }
 

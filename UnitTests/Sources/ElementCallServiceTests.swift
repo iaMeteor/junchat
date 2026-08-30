@@ -96,6 +96,15 @@ final class ElementCallServiceTests {
     }
 
     @Test
+    func incomingCallWithoutIntentDefaultsToVoice() async throws {
+        await receiveIncomingPush(PKPushPayloadMock().updatingExpiration(currentDate, lifetime: 30))
+
+        let incomingCallIdentity = try #require(service.incomingCallIdentityPublisher.value)
+
+        #expect(incomingCallIdentity.isVoiceCall)
+    }
+
+    @Test
     func acceptingIncomingCallReleasesCallKitBeforeStartingTheWebCall() async throws {
         await confirmation { confirmation in
             let pkPushPayloadMock = PKPushPayloadMock().updatingExpiration(currentDate, lifetime: 30)

@@ -244,6 +244,7 @@ final class AppSettings {
         case enableNotifications
         case enableInAppNotifications
         case pusherProfileTag
+        case pusherPushKey
         case lastNotificationBootTime
         case logLevel
         case traceLogPacks
@@ -538,6 +539,10 @@ final class AppSettings {
     /// Tag describing which set of device specific rules a pusher executes.
     @UserPreference(key: UserDefaultsKeys.pusherProfileTag, storageType: .userDefaults(store))
     var pusherProfileTag: String?
+
+    /// The APNs push key currently registered for this installation.
+    @UserPreference(key: UserDefaultsKeys.pusherPushKey, storageType: .userDefaults(store))
+    var pusherPushKey: String?
 
     /// The device's last boot time as recorded by the NSE.
     @UserPreference(key: UserDefaultsKeys.lastNotificationBootTime, storageType: .userDefaults(store))

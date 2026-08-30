@@ -262,7 +262,7 @@ class NotificationHandler {
                        ElementCallServiceNotificationKey.roomDisplayName.rawValue: roomDisplayName,
                        ElementCallServiceNotificationKey.expirationDate.rawValue: expirationDate,
                        ElementCallServiceNotificationKey.rtcNotifyEventID.rawValue: rtcNotifyEventID,
-                       ElementCallServiceNotificationKey.isVoiceCall.rawValue: callIntent == RtcCallIntent.audio] as [String: Any]
+                       ElementCallServiceNotificationKey.isVoiceCall.rawValue: callIntent != RtcCallIntent.video] as [String: Any]
         
         do {
             try await CXProvider.reportNewIncomingVoIPPushPayload(payload)

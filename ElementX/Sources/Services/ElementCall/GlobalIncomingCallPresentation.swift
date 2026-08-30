@@ -15,7 +15,7 @@ struct GlobalIncomingCallCandidate {
     init(roomSummary: RoomSummary, incomingCallIdentity: ElementCallIncomingCallIdentity? = nil) {
         roomID = roomSummary.id
         roomTitle = roomSummary.name
-        isVoiceCall = incomingCallIdentity?.isVoiceCall ?? (roomSummary.activeCallIntent == .audio)
+        isVoiceCall = incomingCallIdentity?.isVoiceCall ?? (roomSummary.activeCallIntent != .video)
         self.incomingCallIdentity = incomingCallIdentity
         
         if roomSummary.isSpace {

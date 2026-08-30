@@ -212,6 +212,8 @@ class HomeScreenViewModel: HomeScreenViewModelType, HomeScreenViewModelProtocol 
             state.securityBannerMode = .none
         case .dismissNewSoundBanner:
             appSettings.hasSeenNewSoundBanner = true
+        case .refreshRoomList:
+            roomSummaryProvider?.refreshRoomSummaries()
         case .updateVisibleItemRange(let range):
             roomSummaryProvider?.updateVisibleRange(range)
         case .startChat:

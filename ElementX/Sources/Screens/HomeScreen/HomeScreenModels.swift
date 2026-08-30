@@ -43,6 +43,7 @@ enum HomeScreenViewAction {
     case skipRecoveryKeyConfirmation
     case dismissChatBackupBannerPermanently
     case dismissNewSoundBanner
+    case refreshRoomList
     case updateVisibleItemRange(Range<Int>)
     case spaceFilters
     case markRoomAsUnread(roomIdentifier: String)

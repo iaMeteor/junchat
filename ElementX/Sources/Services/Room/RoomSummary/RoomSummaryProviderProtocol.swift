@@ -58,6 +58,8 @@ protocol StaticRoomSummaryProviderProtocol {
 // sourcery: AutoMockable
 protocol RoomSummaryProviderProtocol: StaticRoomSummaryProviderProtocol {
     func updateVisibleRange(_ range: Range<Int>)
+
+    func refreshRoomSummaries()
     
     func setFilter(_ filter: RoomSummaryProviderFilter)
 }

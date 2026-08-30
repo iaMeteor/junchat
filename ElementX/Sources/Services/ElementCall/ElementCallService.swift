@@ -718,7 +718,7 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
         return IncomingPushDetails(roomID: roomID,
                                    rtcNotificationID: rtcNotificationID,
                                    roomDisplayName: dictionary[ElementCallServiceNotificationKey.roomDisplayName.rawValue] as? String,
-                                   isVoiceCall: dictionary[ElementCallServiceNotificationKey.isVoiceCall.rawValue] as? Bool ?? false,
+                                   isVoiceCall: dictionary[ElementCallServiceNotificationKey.isVoiceCall.rawValue] as? Bool ?? true,
                                    ringDuration: .seconds(min(expirationDate.timeIntervalSince1970 - now.timeIntervalSince1970, 90)))
     }
 

@@ -33,6 +33,9 @@ struct HomeScreen: View {
             .track(screen: .Home)
             .toolbarBloom(hasSearchBar: true)
             .sentryTrace("\(Self.self)")
+            .onAppear {
+                context.send(viewAction: .refreshRoomList)
+            }
             .sheet(item: $context.spaceFiltersViewModel) { vm in
                 ChatsSpaceFiltersScreen(context: vm.context)
                     .navigationTransition(.zoom(sourceID: NavigationTransitionSourceID.spaceFilters,

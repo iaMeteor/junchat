@@ -123,6 +123,80 @@ final class NotificationManagerTests {
     }
 
     @Test
+    func registrationRemovesOnlySupersededPushersForThisInstallation() async throws {
+        appSettings.pusherProfileTag = "installation-profile"
+        let pushKey = Data("current-token".utf8).base64EncodedString()
+
+        _ = await notificationManager.register(with: Data("current-token".utf8))
+        let arguments = try #require(clientProxy.deleteSupersededPushersAppIDPushKeyProfileTagReceivedArguments)
+
+        #expect(arguments.appID == appSettings.pusherAppID)
+        #expect(arguments.pushKey == pushKey)
+        #expect(arguments.profileTag == "installation-profile")
+    }
+
+    @Test
+    func registrationRemainsSuccessfulWhenSupersededPusherCleanupFails() async {
+        enum TestError: Error {
+            case cleanupFailed
+        }
+
+        let newToken = Data("new-token".utf8)
+        clientProxy.deleteSupersededPushersAppIDPushKeyProfileTagThrowableError = TestError.cleanupFailed
+
+        let success = await notificationManager.register(with: newToken)
+
+        #expect(success)
+        #expect(clientProxy.setPusherWithCalled)
+        #expect(appSettings.pusherPushKey == newToken.base64EncodedString())
+    }
+
+    @Test
+    func registeringRotatedTokenDeletesPreviousPusher() async throws {
+        appSettings.pusherPushKey = Data("old-token".utf8).base64EncodedString()
+        let newToken = Data("new-token".utf8)
+
+        let success = await notificationManager.register(with: newToken)
+        let identifiers = try #require(clientProxy.deletePusherIdentifiersReceivedIdentifiers)
+
+        #expect(success)
+        #expect(identifiers.pushkey == Data("old-token".utf8).base64EncodedString())
+        #expect(identifiers.appId == appSettings.pusherAppID)
+        #expect(appSettings.pusherPushKey == newToken.base64EncodedString())
+    }
+
+    @Test
+    func failedTokenRegistrationKeepsPreviousPusher() async {
+        enum TestError: Error {
+            case registrationFailed
+        }
+
+        let previousPushKey = Data("old-token".utf8).base64EncodedString()
+        appSettings.pusherPushKey = previousPushKey
+        clientProxy.setPusherWithThrowableError = TestError.registrationFailed
+
+        let success = await notificationManager.register(with: Data("new-token".utf8))
+
+        #expect(!success)
+        #expect(!clientProxy.deletePusherIdentifiersCalled)
+        #expect(clientProxy.deleteSupersededPushersAppIDPushKeyProfileTagCallsCount == 0)
+        #expect(appSettings.pusherPushKey == previousPushKey)
+    }
+
+    @Test
+    func unregisteringSessionDeletesCurrentPusher() async throws {
+        let pushKey = Data("registered-token".utf8).base64EncodedString()
+        appSettings.pusherPushKey = pushKey
+
+        await notificationManager.unregisterPusher(for: mockUserSession)
+        let identifiers = try #require(clientProxy.deletePusherIdentifiersReceivedIdentifiers)
+
+        #expect(identifiers.pushkey == pushKey)
+        #expect(identifiers.appId == appSettings.pusherAppID)
+        #expect(appSettings.pusherPushKey == nil)
+    }
+
+    @Test
     func whenRemovingNotificationsForFullyReadRoomsAndAllRoomsAreRead_badgeIsCleared() async {
         await notificationManager.removeDeliveredNotificationsForFullyReadRooms([
             roomSummary(id: "1", hasUnreadMessages: false),

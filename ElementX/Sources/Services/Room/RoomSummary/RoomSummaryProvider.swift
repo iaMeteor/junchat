@@ -9,6 +9,7 @@
 import Combine
 import Foundation
 import MatrixRustSDK
+import UIKit
 
 class RoomSummaryProvider: RoomSummaryProviderProtocol {
     private let roomListService: RoomListServiceProtocol
@@ -80,6 +81,12 @@ class RoomSummaryProvider: RoomSummaryProviderProtocol {
         setupVisibleRangeObservers()
         
         setupNotificationSettingsSubscription()
+
+        NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
+            .sink { [weak self] _ in
+                self?.refreshRoomSummaries()
+            }
+            .store(in: &cancellables)
     }
     
     func setRoomList(_ roomList: RoomList) {
@@ -115,6 +122,12 @@ class RoomSummaryProvider: RoomSummaryProviderProtocol {
     
     func updateVisibleRange(_ range: Range<Int>) {
         visibleItemRangePublisher.send(range)
+    }
+
+    func refreshRoomSummaries() {
+        serialDispatchQueue.async { [weak self] in
+            self?.rebuildRoomSummaries()
+        }
     }
     
     func setFilter(_ filter: RoomSummaryProviderFilter) {
@@ -415,7 +428,7 @@ class RoomSummaryProvider: RoomSummaryProviderProtocol {
                 guard let self else { return }
                 switch callback {
                 case .settingsDidChange:
-                    self.rebuildRoomSummaries()
+                    self.refreshRoomSummaries()
                 }
             }
             .store(in: &cancellables)

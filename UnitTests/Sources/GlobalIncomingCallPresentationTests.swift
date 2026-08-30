@@ -109,6 +109,17 @@ struct GlobalIncomingCallPresentationTests {
     }
 
     @Test
+    func foregroundSyncedCallWithoutIntentDefaultsToVoice() {
+        var presentation = GlobalIncomingCallPresentation()
+
+        let candidate = presentation.candidate(from: [
+            room(id: "ringing", hasOngoingCall: true, activeCallIntent: nil, activeRoomCallParticipants: ["@caller:junchat.yyzs120.cn"])
+        ], ongoingCallRoomID: nil, pendingIncomingCallIdentity: nil, ownUserID: "@me:junchat.yyzs120.cn")
+
+        #expect(candidate?.isVoiceCall == true)
+    }
+
+    @Test
     func ignoresOwnOutgoingCallWhenTheSameRoomIsOngoingWithoutPendingIncomingCall() {
         var presentation = GlobalIncomingCallPresentation()
 
