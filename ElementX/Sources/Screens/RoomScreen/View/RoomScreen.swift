@@ -150,7 +150,9 @@ struct RoomScreen: View {
             Spacer(minLength: 0)
 
             Button {
-                context.send(viewAction: .displayCall(isVoiceCall: context.viewState.activeRoomCallIntent == .audio))
+                let shouldJoinAsVoice = RoomCallControlsToolbar.shouldJoinAsVoice(isDirectOneToOneRoom: context.viewState.isDirectOneToOneRoom,
+                                                                                  activeCallIntent: context.viewState.activeRoomCallIntent)
+                context.send(viewAction: .displayCall(isVoiceCall: shouldJoinAsVoice))
             } label: {
                 Text("加入")
             }

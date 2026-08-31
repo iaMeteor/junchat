@@ -1365,7 +1365,8 @@ class TimelineViewModel: TimelineViewModelType, TimelineViewModelProtocol {
             }
         }
 
-        let itemsGroupedByTimelineDisplayStyle = timelineItems.chunked { current, next in
+        let visibleTimelineItems = timelineItems.filter { !($0 is RedactedRoomTimelineItem) }
+        let itemsGroupedByTimelineDisplayStyle = visibleTimelineItems.chunked { current, next in
             canGroupItem(timelineItem: current, with: next)
         }
 

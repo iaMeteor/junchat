@@ -485,9 +485,15 @@ private struct CallView: UIViewRepresentable {
 
                 window.__junchatAudioOnlyCapturePatched = true;
                 const originalGetUserMedia = navigator.mediaDevices.getUserMedia;
+                let initialVideoRequestPending = true;
                 navigator.mediaDevices.getUserMedia = function(requestedConstraints) {
                     const constraints = { ...(requestedConstraints || {}) };
-                    constraints.video = false;
+                    if (initialVideoRequestPending) {
+                        initialVideoRequestPending = false;
+                        if (constraints.video) {
+                            constraints.video = false;
+                        }
+                    }
                     return originalGetUserMedia.call(this, constraints);
                 };
             };

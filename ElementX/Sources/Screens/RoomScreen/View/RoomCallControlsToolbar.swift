@@ -33,10 +33,13 @@ struct RoomCallControlsToolbar: ToolbarContent {
         }
     }
 
-    /// Both a voice and a video call can be started in every room. A voice call outside of a
-    /// 1:1 DM maps to the group call intent and skips the lobby, so group voice calls are
-    /// startable rather than only joinable.
-    static let startCallOptions: [StartCallOption] = [.voice, .video]
+    static func startCallOptions(isDirectOneToOneRoom: Bool) -> [StartCallOption] {
+        isDirectOneToOneRoom ? [.voice, .video] : [.voice]
+    }
+
+    static func shouldJoinAsVoice(isDirectOneToOneRoom: Bool, activeCallIntent: CallIntent?) -> Bool {
+        !isDirectOneToOneRoom || activeCallIntent == .audio
+    }
 
     let viewState: RoomScreenViewState
     var isDisabled = false
@@ -45,27 +48,39 @@ struct RoomCallControlsToolbar: ToolbarContent {
     var body: some ToolbarContent {
         if viewState.hasOngoingCall {
             ToolbarItem(placement: .primaryAction) {
-                JoinCallButton(isVoiceCall: viewState.activeRoomCallIntent == .audio) {
-                    onCallTap(viewState.activeRoomCallIntent == .audio)
+                let shouldJoinAsVoice = Self.shouldJoinAsVoice(isDirectOneToOneRoom: viewState.isDirectOneToOneRoom,
+                                                               activeCallIntent: viewState.activeRoomCallIntent)
+                JoinCallButton(isVoiceCall: shouldJoinAsVoice) {
+                    onCallTap(shouldJoinAsVoice)
                 }
                 .accessibilityIdentifier(A11yIdentifiers.roomScreen.joinCall)
                 .disabled(!viewState.canJoinCall || isDisabled)
             }
         } else {
             ToolbarItem(placement: .primaryAction) {
-                Menu {
-                    ForEach(Self.startCallOptions, id: \.self) { option in
-                        Button {
-                            onCallTap(option.isVoiceCall)
-                        } label: {
-                            Label(option.title, icon: option.icon)
+                if viewState.isDirectOneToOneRoom {
+                    Menu {
+                        ForEach(Self.startCallOptions(isDirectOneToOneRoom: true), id: \.self) { option in
+                            Button {
+                                onCallTap(option.isVoiceCall)
+                            } label: {
+                                Label(option.title, icon: option.icon)
+                            }
                         }
+                    } label: {
+                        CompoundIcon(\.voiceCallSolid)
                     }
-                } label: {
-                    CompoundIcon(\.voiceCallSolid)
+                    .accessibilityLabel(L10n.a11yStartCall)
+                    .disabled(!viewState.canJoinCall || isDisabled)
+                } else {
+                    Button {
+                        onCallTap(true)
+                    } label: {
+                        CompoundIcon(\.voiceCallSolid)
+                    }
+                    .accessibilityLabel(L10n.a11yStartVoiceCall)
+                    .disabled(!viewState.canJoinCall || isDisabled)
                 }
-                .accessibilityLabel(L10n.a11yStartCall)
-                .disabled(!viewState.canJoinCall || isDisabled)
             }
         }
     }

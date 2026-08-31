@@ -37,9 +37,10 @@ struct RoomTests {
 
     @Test(arguments: CallRoomScenario.all)
     @MainActor
-    func everyRoomOffersAVoiceAndAVideoStartAction(_ scenario: CallRoomScenario) async {
-        let startCallOptions = RoomCallControlsToolbar.startCallOptions
-        #expect(startCallOptions.map(\.isVoiceCall) == [true, false])
+    func groupRoomsStartAudioFirstWhileDirectRoomsKeepBothActions(_ scenario: CallRoomScenario) async {
+        let startCallOptions = RoomCallControlsToolbar.startCallOptions(isDirectOneToOneRoom: scenario.isDirectOneToOneRoom)
+        let expectedOptions = scenario.isDirectOneToOneRoom ? [true, false] : [true]
+        #expect(startCallOptions.map(\.isVoiceCall) == expectedOptions)
 
         for option in startCallOptions {
             let room = RoomSDKMock()
@@ -54,6 +55,14 @@ struct RoomTests {
             #expect(configuration.voiceOnly == option.isVoiceCall)
             #expect(configuration.skipLobby == scenario.expectedSkipLobby)
         }
+    }
+
+    @Test
+    @MainActor
+    func groupCallJoinsAudioFirstEvenWhenTheAdvertisedIntentIsVideo() {
+        #expect(RoomCallControlsToolbar.shouldJoinAsVoice(isDirectOneToOneRoom: false, activeCallIntent: .video))
+        #expect(!RoomCallControlsToolbar.shouldJoinAsVoice(isDirectOneToOneRoom: true, activeCallIntent: .video))
+        #expect(RoomCallControlsToolbar.shouldJoinAsVoice(isDirectOneToOneRoom: true, activeCallIntent: .audio))
     }
 
     @Test(arguments: [false, true], [false, true])
@@ -100,6 +109,10 @@ struct CallRoomScenario: CustomTestStringConvertible {
 
     private var usesDirectCallIntent: Bool {
         isDirect && !isSpace
+    }
+
+    var isDirectOneToOneRoom: Bool {
+        usesDirectCallIntent && activeMembersCount == 2
     }
 
     func expectedIntent(hasActiveCall: Bool, voiceOnly: Bool) -> Intent {

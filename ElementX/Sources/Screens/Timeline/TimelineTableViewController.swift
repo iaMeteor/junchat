@@ -455,11 +455,14 @@ class TimelineTableViewController: UIViewController {
         
         let currentSnapshot = dataSource.snapshot()
         
-        // We only animate when new items come at the end of a live timeline, ignoring transitions through empty.
         let newestItemIdentifier = snapshot.mainItemIdentifiers.first
         let currentNewestItemIdentifier = currentSnapshot.mainItemIdentifiers.first
         let newestItemIDChanged = snapshot.numberOfMainItems > 0 && currentSnapshot.numberOfMainItems > 0 && newestItemIdentifier != currentNewestItemIdentifier
-        let animated = isLive && !isSwitchingTimelines && newestItemIDChanged
+        let animated = TimelineSnapshotAnimationPolicy.shouldAnimate(isLive: isLive,
+                                                                     isSwitchingTimelines: isSwitchingTimelines,
+                                                                     newestItemIDChanged: newestItemIDChanged,
+                                                                     currentItemIDs: currentSnapshot.mainItemIdentifiers,
+                                                                     newItemIDs: snapshot.mainItemIdentifiers)
         
         let layout: Layout? = if !isLive, newestItemIDChanged {
             snapshotLayout()
@@ -661,6 +664,19 @@ class TimelineTableViewController: UIViewController {
         guard isTimelineVisible, isTimelineContentVisible, !isFocussedScrollPending else { return nil }
 
         return visibleItemIdentifiers.first { $0.eventID != nil }
+    }
+}
+
+enum TimelineSnapshotAnimationPolicy {
+    static func shouldAnimate(isLive: Bool,
+                              isSwitchingTimelines: Bool,
+                              newestItemIDChanged: Bool,
+                              currentItemIDs: [TimelineItemIdentifier.UniqueID],
+                              newItemIDs: [TimelineItemIdentifier.UniqueID]) -> Bool {
+        guard isLive, !isSwitchingTimelines else { return false }
+
+        let removedItemIDs = Set(currentItemIDs).subtracting(newItemIDs)
+        return newestItemIDChanged || !removedItemIDs.isEmpty
     }
 }
 

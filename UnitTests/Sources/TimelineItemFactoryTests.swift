@@ -46,6 +46,23 @@ struct TimelineItemFactoryTests {
         #expect(restoredItem.properties.isPrivacyControlled)
     }
 
+    @Test
+    func liveTimelineAnimatesRemovedItemsButNotTimelineSwitches() {
+        let removedID = TimelineItemIdentifier.UniqueID("removed")
+        let retainedID = TimelineItemIdentifier.UniqueID("retained")
+
+        #expect(TimelineSnapshotAnimationPolicy.shouldAnimate(isLive: true,
+                                                              isSwitchingTimelines: false,
+                                                              newestItemIDChanged: false,
+                                                              currentItemIDs: [removedID, retainedID],
+                                                              newItemIDs: [retainedID]))
+        #expect(!TimelineSnapshotAnimationPolicy.shouldAnimate(isLive: true,
+                                                               isSwitchingTimelines: true,
+                                                               newestItemIDChanged: false,
+                                                               currentItemIDs: [removedID, retainedID],
+                                                               newItemIDs: [retainedID]))
+    }
+
     private func buildPrivacyControlledTimelineItem(uniqueID: TimelineItemIdentifier.UniqueID) throws -> TextRoomTimelineItem {
         let ownUserID = "@alice:matrix.org"
         let factory = RoomTimelineItemFactory(userID: ownUserID,

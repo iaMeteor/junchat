@@ -336,7 +336,9 @@ extension TimelineViewModelTests {
                                                     canBeRepliedTo: false,
                                                     sender: item.sender)
 
-        try await assertDirectContextMenuForwardingIsInvalidated(originalItem: item, replacementItem: redactedItem)
+        try await assertDirectContextMenuForwardingIsInvalidated(originalItem: item,
+                                                                 replacementItem: redactedItem,
+                                                                 replacementRemainsVisible: false)
     }
 
     @Test
@@ -1336,7 +1338,8 @@ extension TimelineViewModelTests {
     }
 
     private func assertDirectContextMenuForwardingIsInvalidated(originalItem: TextRoomTimelineItem,
-                                                                replacementItem: RoomTimelineItemProtocol) async throws {
+                                                                replacementItem: RoomTimelineItemProtocol,
+                                                                replacementRemainsVisible: Bool = true) async throws {
         let contentGate = ProviderForwardingContentGate()
         defer { contentGate.resume() }
         let timelineController = MockTimelineController(timelineItems: [originalItem])
@@ -1356,7 +1359,11 @@ extension TimelineViewModelTests {
 
         let replacementType = RoomTimelineItemType(item: replacementItem)
         let replacementPublished = deferFulfillment(viewModel.context.$viewState) { state in
-            state.timelineState.itemViewStates.first?.type == replacementType
+            if replacementRemainsVisible {
+                state.timelineState.itemViewStates.first?.type == replacementType
+            } else {
+                state.timelineState.itemViewStates.isEmpty
+            }
         }
         timelineController.timelineItems = [replacementItem]
         timelineController.callbacks.send(.updatedTimelineItems(timelineItems: [replacementItem],

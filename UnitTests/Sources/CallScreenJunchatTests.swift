@@ -113,10 +113,13 @@ struct CallScreenJunchatTests {
     }
 
     @Test
-    func elementCallBootstrapForcesAudioOnlyIntentToDisableCameraCapture() {
+    func elementCallBootstrapStartsAudioOnlyAndAllowsLaterCameraCapture() {
         let script = CallScreen.junchatElementCallBootstrapScript(language: "zh-Hans")
 
         #expect(script.contains("junchat_call_intent"))
+        #expect(script.contains("let initialVideoRequestPending = true"))
+        #expect(script.contains("initialVideoRequestPending = false"))
+        #expect(!script.contains("initialVideoRequestPending && constraints.video"))
         #expect(script.contains("constraints.video = false"))
         #expect(script.contains("originalGetUserMedia.call(this, constraints)"))
     }

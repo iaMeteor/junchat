@@ -228,7 +228,7 @@ struct TimelineMediaPreviewViewModelTests {
 
     @Test
     mutating func forwardingRejectsContentExtractedBeforeRedaction() async throws {
-        try await assertForwardingIsInvalidated { item in
+        try await assertForwardingIsInvalidated(replacementRemainsVisible: false) { item in
             RedactedRoomTimelineItem(id: item.id,
                                      body: "Message deleted",
                                      timestamp: item.timestamp,
@@ -430,7 +430,8 @@ struct TimelineMediaPreviewViewModelTests {
                                                   appMediator: AppMediatorMock())
     }
 
-    private mutating func assertForwardingIsInvalidated(replacement: (EventBasedMessageTimelineItemProtocol) -> RoomTimelineItemProtocol) async throws {
+    private mutating func assertForwardingIsInvalidated(replacementRemainsVisible: Bool = true,
+                                                        replacement: (EventBasedMessageTimelineItemProtocol) -> RoomTimelineItemProtocol) async throws {
         setupViewModel()
         guard case let .media(mediaItem) = context.viewState.currentItem else {
             Issue.record("There should be a current item.")
@@ -457,7 +458,11 @@ struct TimelineMediaPreviewViewModelTests {
         let replacementItem = replacement(mediaItem.timelineItem)
         let replacementType = RoomTimelineItemType(item: replacementItem)
         let replacementPublished = deferFulfillment(timelineViewModel.context.$viewState) { state in
-            state.timelineState.itemViewStates.first?.type == replacementType
+            if replacementRemainsVisible {
+                state.timelineState.itemViewStates.first?.type == replacementType
+            } else {
+                state.timelineState.itemViewStates.isEmpty
+            }
         }
         timelineController.timelineItems = [replacementItem]
         timelineController.callbacks.send(.updatedTimelineItems(timelineItems: [replacementItem],

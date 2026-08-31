@@ -2,6 +2,11 @@
 
 JunChat fork release notes are recorded here. Upstream history remains in `CHANGES.md`.
 
+## 1.9.9 (2026-08-31)
+
+- Starts group calls with audio only and lets each participant enable video when needed.
+- Animates destroyed messages out of the conversation and removes them from the timeline.
+
 ## 1.9.8 (2026-08-30)
 
 - Refreshes conversation previews after messages are removed or expire.
