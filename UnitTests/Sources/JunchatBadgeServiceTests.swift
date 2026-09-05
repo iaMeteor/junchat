@@ -25,14 +25,14 @@ struct JunchatBadgeServiceTests {
     func authenticatedSnapshotUsesExactPrefixedServerAndIntegerRevision() async throws {
         let session = session()
         let payload = payload()
-        let service = JunchatBadgeService(sessionProvider: { session }) { request in
+        let service = JunchatBadgeService(sessionProvider: { session }, send: { request in
             #expect(request.url?.path == "/prefix/_matrix/client/v3/junchat/badge")
             #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer test-token")
             #expect(request.cachePolicy == .reloadIgnoringLocalCacheData)
             #expect(request.timeoutInterval == 10)
             let url = try #require(request.url)
             return try (payload, #require(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)))
-        }
+        })
         let snapshot = try #require(await service.snapshot())
         #expect(snapshot.total == 4)
         #expect(snapshot.revision == 9_007_199_254_740_992)
@@ -42,10 +42,10 @@ struct JunchatBadgeServiceTests {
     func unsupportedOrUnavailableServerIsNotAZero(_ status: Int) async {
         let session = session()
         let payload = payload()
-        let service = JunchatBadgeService(sessionProvider: { session }) { request in
+        let service = JunchatBadgeService(sessionProvider: { session }, send: { request in
             let url = try #require(request.url)
             return try (payload, #require(HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)))
-        }
+        })
         #expect(await service.snapshot() == nil)
     }
 
@@ -53,10 +53,10 @@ struct JunchatBadgeServiceTests {
     func mismatchedAccountCannotSupplyBadgeCount() async {
         let session = session()
         let payload = payload(userID: "@bob:example.org")
-        let service = JunchatBadgeService(sessionProvider: { session }) { request in
+        let service = JunchatBadgeService(sessionProvider: { session }, send: { request in
             let url = try #require(request.url)
             return try (payload, #require(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)))
-        }
+        })
         #expect(await service.snapshot() == nil)
     }
 
@@ -64,11 +64,11 @@ struct JunchatBadgeServiceTests {
     func redirectedResponseAndOversizedResponseAreRejected(_ redirect: Bool) async {
         let session = session()
         let payload = payload()
-        let service = JunchatBadgeService(sessionProvider: { session }) { request in
+        let service = JunchatBadgeService(sessionProvider: { session }, send: { request in
             let url = try #require(redirect ? URL(string: "https://other.example.org/") : request.url)
             let data = redirect ? payload : Data(repeating: 0, count: 16385)
             return try (data, #require(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)))
-        }
+        })
         #expect(await service.snapshot() == nil)
     }
 }

@@ -9,7 +9,7 @@ import CoreFoundation
 import Darwin
 import Foundation
 
-struct NotificationBadgeServerSnapshot: Codable, Equatable, Sendable {
+struct NotificationBadgeServerSnapshot: Codable, Equatable {
     let userID: String
     let generation: String
     let revision: UInt64

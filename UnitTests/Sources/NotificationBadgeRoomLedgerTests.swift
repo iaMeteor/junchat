@@ -741,12 +741,12 @@ extension NotificationBadgeRoomLedgerTests {
     @Test
     func orderedBadgeSurvivesRestartAndDoesNotExpireIntoOldCounts() throws {
         let clock = NotificationBadgeLedgerTestClock(now: Date(timeIntervalSince1970: 1000))
-        let fixture = try makeLedger(now: { clock.now })
+        let fixture = try makeLedger { clock.now }
         let ledger = fixture.ledger
         ledger.prepare(for: "@alice:example.org")
         _ = try ledger.reconcileServerSnapshot(serverSnapshot(total: 4, revision: "9007199254740992"), expectedGeneration: nil)
         clock.advance(by: 3600)
-        let reloaded = NotificationBadgeRoomLedger(userDefaults: fixture.userDefaults, lockFileURL: fixture.lockFileURL, now: { clock.now })
+        let reloaded = NotificationBadgeRoomLedger(userDefaults: fixture.userDefaults, lockFileURL: fixture.lockFileURL) { clock.now }
         #expect(reloaded.serverSnapshot(for: "@alice:example.org")?.revision == 9_007_199_254_740_992)
         #expect(reloaded.reconcile(userID: "@alice:example.org", unreadCountsByRoom: [:])?.count == 4)
         reloaded.reset()
