@@ -14,6 +14,9 @@ import UserNotifications
 final class NotificationManager: NSObject, NotificationManagerProtocol {
     private let notificationCenter: UserNotificationCenterProtocol
     private let appSettings: AppSettings
+    private let orderedBadgeSnapshotsEnabled: Bool
+    @MainActor private var badgeSessionGeneration = UUID()
+    @MainActor private var badgeRefreshTask: Task<Void, Never>?
     
     private var userSession: UserSessionProtocol?
     
@@ -21,9 +24,11 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
     private var notificationsEnabled = false
     
     init(notificationCenter: UserNotificationCenterProtocol,
-         appSettings: AppSettings) {
+         appSettings: AppSettings,
+         orderedBadgeSnapshotsEnabled: Bool = false) {
         self.notificationCenter = notificationCenter
         self.appSettings = appSettings
+        self.orderedBadgeSnapshotsEnabled = orderedBadgeSnapshotsEnabled
         super.init()
     }
 
@@ -93,6 +98,9 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
         guard let userSession else {
             return false
         }
+        let generation = await MainActor.run { badgeSessionGeneration }
+        await refreshServerBadgeSnapshot()
+        guard await MainActor.run(body: { generation == badgeSessionGeneration }) else { return false }
         return await setPusher(with: deviceToken, clientProxy: userSession.clientProxy)
     }
 
@@ -111,7 +119,10 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
         }
     }
 
-    func setUserSession(_ userSession: UserSessionProtocol?) {
+    @MainActor func setUserSession(_ userSession: UserSessionProtocol?) {
+        badgeRefreshTask?.cancel()
+        badgeRefreshTask = nil
+        badgeSessionGeneration = UUID()
         let previousUserID = self.userSession?.clientProxy.userID
         self.userSession = userSession
         let userID = userSession?.clientProxy.userID
@@ -244,6 +255,7 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
     }
 
     private func synchronizeBadgeCountWithActiveSession(shouldClearUnreconciledBadge: Bool = false) async {
+        await refreshServerBadgeSnapshot()
         guard userSession?.clientProxy.userID != nil else {
             if shouldClearUnreconciledBadge {
                 do {
@@ -311,6 +323,51 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
         return shouldClearUnreconciledBadge ? 0 : nil
     }
 
+    @MainActor private func refreshServerBadgeSnapshot() async {
+        guard orderedBadgeSnapshotsEnabled, let clientProxy = userSession?.clientProxy else { return }
+        if let badgeRefreshTask {
+            await badgeRefreshTask.value
+            return
+        }
+        let sessionGeneration = badgeSessionGeneration
+        let generation = appSettings.notificationBadgeRoomLedger.serverSnapshot(for: clientProxy.userID)?.generation
+        let task = Task { [weak self] in
+            guard let snapshot = await clientProxy.junchatBadgeSnapshot(),
+                  !Task.isCancelled, let self,
+                  badgeSessionGeneration == sessionGeneration else { return }
+            _ = appSettings.notificationBadgeRoomLedger.reconcileServerSnapshot(snapshot, expectedGeneration: generation)
+        }
+        badgeRefreshTask = task
+        await task.value
+        if badgeSessionGeneration == sessionGeneration {
+            badgeRefreshTask = nil
+        }
+    }
+
+    func handleBackgroundBadgeSnapshot(_ payload: [AnyHashable: Any]) async -> Bool {
+        let ledger = appSettings.notificationBadgeRoomLedger
+        guard orderedBadgeSnapshotsEnabled,
+              let snapshot = NotificationBadgeServerSnapshot(payload: payload),
+              ledger.serverSnapshot(for: snapshot.userID) != nil else { return false }
+        _ = ledger.applyNotification(userID: snapshot.userID, roomID: nil, contributesToBadge: nil,
+                                     isAuthoritative: true, serverSnapshot: snapshot, fallback: nil)
+        for _ in 0..<8 {
+            guard let current = ledger.snapshot(for: snapshot.userID) else {
+                await synchronizeBadgeCountWithActiveSession(shouldClearUnreconciledBadge: true)
+                return true
+            }
+            do {
+                try await notificationCenter.setBadgeCount(current.count)
+            } catch {
+                return false
+            }
+            if ledger.snapshot(for: snapshot.userID) == current {
+                return true
+            }
+        }
+        return false
+    }
+
     private func synchronizeBadgeCountAfterLifecycleChange() {
         Task { [weak self] in
             await self?.synchronizeBadgeCountWithActiveSession()
@@ -335,7 +392,7 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
 
             let configuration = try await PusherConfiguration(identifiers: .init(pushkey: pushKey,
                                                                                  appId: appSettings.pusherAppID),
-                                                              kind: .http(data: .init(url: appSettings.pushGatewayNotifyEndpoint.absoluteString,
+                                                              kind: .http(data: .init(url: pushGatewayEndpoint(for: clientProxy.userID).absoluteString,
                                                                                       format: .eventIdOnly,
                                                                                       defaultPayload: defaultPayload.toJsonString())),
                                                               appDisplayName: "\(InfoPlistReader.main.bundleDisplayName) (iOS)",
@@ -384,6 +441,17 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
 
         appSettings.pusherProfileTag = newTag
         return newTag
+    }
+
+    private func pushGatewayEndpoint(for userID: String) -> URL {
+        let url = appSettings.pushGatewayNotifyEndpoint
+        guard orderedBadgeSnapshotsEnabled,
+              appSettings.notificationBadgeRoomLedger.serverSnapshot(for: userID) != nil,
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+        var query = (components.queryItems ?? []).filter { $0.name != "junchat-badge-order" }
+        query.append(.init(name: "junchat-badge-order", value: "state-v1"))
+        components.queryItems = query
+        return components.url ?? url
     }
     
     private func enableNotifications(_ enable: Bool) {

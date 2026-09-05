@@ -17,6 +17,7 @@ enum AppDelegateCallback {
 final class AppDelegate: NSObject, UIApplicationDelegate {
     let callbacks = PassthroughSubject<AppDelegateCallback, Never>()
     var orientationLock = UIInterfaceOrientationMask.all
+    var backgroundNotificationHandler: (([AnyHashable: Any]) async -> Bool)?
     
     func application(_ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession, options: UIScene.ConnectionOptions) -> UISceneConfiguration {
         // Add a SceneDelegate to the SwiftUI scene so that we can connect up the WindowManager.
@@ -36,6 +37,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
         callbacks.send(.failedToRegisteredNotifications(error: error))
+    }
+
+    func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any]) async -> UIBackgroundFetchResult {
+        await backgroundNotificationHandler?(userInfo) == true ? .newData : .noData
     }
     
     func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {

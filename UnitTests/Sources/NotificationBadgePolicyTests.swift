@@ -1131,6 +1131,53 @@ struct NotificationBadgePolicyTests {
     }
 }
 
+extension NotificationBadgePolicyTests {
+    @Test
+    func orderedReplacementPreservesStateButNeverRelabelsAReconciledCount() throws {
+        let content = sensitiveContentWithBadge(total: 4)
+        content.userInfo["junchat_badge_state"] = ["user_id": "@alice:example.org",
+                                                   "generation": "16a85460-6ed5-4cf9-ae72-f53689a2f831",
+                                                   "revision": "9007199254740992"]
+        let snapshot = try #require(content.orderedBadgeSnapshot)
+        let replacement = content.badgeReplacementContentForDelivery
+        #expect(replacement.orderedBadgeSnapshot == snapshot)
+        #expect(replacement.title.isEmpty)
+        #expect(replacement.body.isEmpty)
+        replacement.overrideBadgeForDelivery(5)
+        #expect(replacement.badge == 5)
+        #expect(replacement.orderedBadgeSnapshot == nil)
+        #expect(replacement.userInfo["junchat_badge_state"] == nil)
+    }
+
+    @Test
+    func delayedOrderedNotificationStillDeliversItsMessageWithTheLatestCount() throws {
+        let fixture = try NotificationBadgeFinalizerFixture()
+        let userID = "@alice:example.org"
+        fixture.ledger.prepare(for: userID)
+        let content = sensitiveContentWithBadge(total: 4)
+        var state = ["user_id": userID, "generation": "16a85460-6ed5-4cf9-ae72-f53689a2f831", "revision": "3"]
+        content.userInfo["junchat_badge_state"] = state
+        let latest = try #require(content.orderedBadgeSnapshot)
+        _ = fixture.ledger.reconcileServerSnapshot(latest, expectedGeneration: nil)
+        state["revision"] = "1"
+        content.userInfo["junchat_badge_state"] = state
+        content.userInfo["badge_total"] = 0
+        let normalized = try #require(NSEBadgeDeliveryNormalizer.normalizedContent(content, userID: userID, ledger: fixture.ledger))
+        #expect(normalized.title == content.title)
+        #expect(normalized.body == content.body)
+        #expect(normalized.badge == 4)
+        var delivered: UNNotificationContent?
+        NSEBadgeContentFinalizer.finalize(normalized,
+                                          userID: userID,
+                                          ledger: fixture.ledger,
+                                          badgeSetter: { _, completion in completion(nil) },
+                                          delivery: { delivered = $0 })
+        #expect(delivered?.badge == 4)
+        #expect(delivered?.body == content.body)
+        #expect(fixture.ledger.serverSnapshot(for: userID) == latest)
+    }
+}
+
 private final class NotificationBadgePolicyFixtureToken { }
 
 private final class NotificationBadgeFinalizerFixture {

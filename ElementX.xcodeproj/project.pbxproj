@@ -48,6 +48,7 @@
 		044DD8F80231BC30570F7965 /* UserDiscoveryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65AAD845E53B0C8B5E0812C2 /* UserDiscoveryService.swift */; };
 		04F17DE71A50206336749BAC /* UserPreferenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA241DEEF7C8A7181C0AEDC9 /* UserPreferenceTests.swift */; };
 		053B8BD2496207838878C6C9 /* PinnedItemsBannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 60C9BAE9F9436B14E4E22E8F /* PinnedItemsBannerView.swift */; };
+		0579DA67B143951F4FD089BE /* JunchatBadgeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56F2E8E66F0FF09511599C0F /* JunchatBadgeService.swift */; };
 		057C2540705B46138D83B149 /* ContactsServiceProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF332B9EE11FA00CD3B1C64A /* ContactsServiceProtocol.swift */; };
 		059173B3C77056C406906B6D /* target.yml in Resources */ = {isa = PBXBuildFile; fileRef = D4DA544B2520BFA65D6DB4BB /* target.yml */; };
 		059A6BEDE9BADF3C81AC4146 /* SpaceAddRoomsScreenSelectedItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77AB44FFCF7DA5300D943169 /* SpaceAddRoomsScreenSelectedItem.swift */; };
@@ -230,6 +231,7 @@
 		22B380C579C148BA0BFB5952 /* Secrets.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3557ACB95D0F666EF5AF0CE /* Secrets.swift */; };
 		22BA593A5E19D8D3DE2FAA6F /* TimelineEventContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F926D08EB3D622A480BCA71 /* TimelineEventContent.swift */; };
 		22C5483D01EEB290B8339817 /* HomeScreenInviteCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8FC33C3F6BF597E095CE9FA /* HomeScreenInviteCell.swift */; };
+		22EABAA4E4DABB6A85304953 /* JunchatBadgeServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCF6C0AAB5798B336BD0725B /* JunchatBadgeServiceTests.swift */; };
 		2322E3CF5338BE836BB6884B /* junchat-call-soft-bell.caf in Resources */ = {isa = PBXBuildFile; fileRef = BE6706EF03375C3C5D36393E /* junchat-call-soft-bell.caf */; };
 		2335D1AB954C151FD8779F45 /* RoomPermissionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0096BC5DA86AF6B6E5742AC /* RoomPermissionsTests.swift */; };
 		23701DE32ACD6FD40AA992C3 /* MediaUploadingPreprocessorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE203026B9AD3DB412439866 /* MediaUploadingPreprocessorTests.swift */; };
@@ -2224,6 +2226,7 @@
 		565F1B2B300597C616B37888 /* FullscreenDialog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FullscreenDialog.swift; sourceTree = "<group>"; };
 		56852036214ABA9D7D305768 /* ResolveVerifiedUserSendFailureScreenViewModelProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResolveVerifiedUserSendFailureScreenViewModelProtocol.swift; sourceTree = "<group>"; };
 		56D6F88FE35A0979D2821E06 /* AppLockScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLockScreen.swift; sourceTree = "<group>"; };
+		56F2E8E66F0FF09511599C0F /* JunchatBadgeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JunchatBadgeService.swift; sourceTree = "<group>"; };
 		57084488B03BDB33C7B7CA0E /* ResolveVerifiedUserSendFailureScreenViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResolveVerifiedUserSendFailureScreenViewModelTests.swift; sourceTree = "<group>"; };
 		574CB70E82D7EAEA538E4135 /* ResolveVerifiedUserSendFailureScreenViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ResolveVerifiedUserSendFailureScreenViewModel.swift; sourceTree = "<group>"; };
 		578AF9CE60816069536C0953 /* RoomRole.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomRole.swift; sourceTree = "<group>"; };
@@ -2930,6 +2933,7 @@
 		CC8E9ECC1118A92FAD5191CD /* SpaceAddRoomsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaceAddRoomsScreen.swift; sourceTree = "<group>"; };
 		CCAA1B97A17A750AC706B112 /* SpaceServiceRoom.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpaceServiceRoom.swift; sourceTree = "<group>"; };
 		CCE06F4A71FD46C9D8CD432E /* RoomThreadListServiceProxy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomThreadListServiceProxy.swift; sourceTree = "<group>"; };
+		CCF6C0AAB5798B336BD0725B /* JunchatBadgeServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JunchatBadgeServiceTests.swift; sourceTree = "<group>"; };
 		CCF71646898A2F720C5BFDF5 /* RoomDirectorySearchScreenViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoomDirectorySearchScreenViewModel.swift; sourceTree = "<group>"; };
 		CD469F7513574341181F7EAA /* ServerSelectionScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerSelectionScreen.swift; sourceTree = "<group>"; };
 		CD6613DE16AD26B3A74DA1F5 /* LocationRoomTimelineItemContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationRoomTimelineItemContent.swift; sourceTree = "<group>"; };
@@ -5084,6 +5088,7 @@
 		6DE13A7AE6587B079F4049D7 /* Notification */ = {
 			isa = PBXGroup;
 			children = (
+				56F2E8E66F0FF09511599C0F /* JunchatBadgeService.swift */,
 				C830A64609CBD152F06E0457 /* NotificationConstants.swift */,
 				6EE5E2BBFBC7947CFE789B4D /* Manager */,
 			);
@@ -5223,6 +5228,7 @@
 				ECBBCD7444C2B515D02EC0E8 /* IdentityConfirmationScreenViewModelTests.swift */,
 				845DDBDE5A0887E73D38B826 /* InviteUsersViewModelTests.swift */,
 				DE5127D6EA05B2E45D0A7D59 /* JoinRoomScreenViewModelTests.swift */,
+				CCF6C0AAB5798B336BD0725B /* JunchatBadgeServiceTests.swift */,
 				EFE6A09C3ECFE368D186A67D /* JunchatContactsServiceTests.swift */,
 				ED4B44FF4B25FF7D085FA23A /* JunchatDiagnosticsUploaderTests.swift */,
 				3AAE1C11B9EF94C753448D42 /* JunchatMapProviderTests.swift */,
@@ -8324,6 +8330,7 @@
 				A23B8B27A1436A1049EEF68E /* InfoPlistReader.swift in Sources */,
 				A216C83ADCF32BA5EF8A6FBC /* InviteUsersViewModelTests.swift in Sources */,
 				7C0E29E0279866C62EC67A28 /* JoinRoomScreenViewModelTests.swift in Sources */,
+				22EABAA4E4DABB6A85304953 /* JunchatBadgeServiceTests.swift in Sources */,
 				C4DA99DD9C4C5ABE7A23FA64 /* JunchatContactsServiceTests.swift in Sources */,
 				FD897770ED28BDB6D85157AE /* JunchatDiagnosticsUploaderTests.swift in Sources */,
 				C16A16C9D6733131B8505FAE /* JunchatMapProviderTests.swift in Sources */,
@@ -8896,6 +8903,7 @@
 				261261778DEFAEFC042B875E /* JoinedRoomProxy.swift in Sources */,
 				7D249465ED00988EEEC14E05 /* JoinedRoomProxyMock.swift in Sources */,
 				E3CA565A4B9704F191B191F0 /* JoinedRoomSize+MemberCount.swift in Sources */,
+				0579DA67B143951F4FD089BE /* JunchatBadgeService.swift in Sources */,
 				0BA9F76219FABBA3C4A21651 /* JunchatContactsService.swift in Sources */,
 				2B0193EE8C838C4312497ECB /* JunchatDiagnosticsUploader.swift in Sources */,
 				10A0FA624207F37122EB0EF8 /* JunchatLinkPresentation.swift in Sources */,

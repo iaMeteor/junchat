@@ -59,6 +59,49 @@ final class NotificationManagerTests {
         _ = await notificationManager.register(with: Data())
         
         #expect(clientProxy.setPusherWithCalled)
+        #expect(!clientProxy.junchatBadgeSnapshotCalled)
+    }
+
+    @Test
+    func orderedBackgroundBadgesRejectOldClearsWithoutRequiringRestoredSession() async throws {
+        notificationManager = NotificationManager(notificationCenter: notificationCenter,
+                                                  appSettings: appSettings, orderedBadgeSnapshotsEnabled: true)
+        let userID = clientProxy.userID
+        let ledger = appSettings.notificationBadgeRoomLedger
+        ledger.prepare(for: userID)
+        let state: [String: Any] = ["user_id": userID,
+                                    "generation": "16a85460-6ed5-4cf9-ae72-f53689a2f831", "revision": "1"]
+        let initial = try #require(NotificationBadgeServerSnapshot(payload: ["badge_total": 1, "junchat_badge_state": state]))
+        _ = ledger.reconcileServerSnapshot(initial, expectedGeneration: nil)
+        var newer = state
+        newer["revision"] = "3"
+        #expect(await notificationManager.handleBackgroundBadgeSnapshot(["badge_total": 4, "junchat_badge_state": newer]))
+        #expect(notificationCenter.setBadgeCountReceivedCount == 4)
+        #expect(await notificationManager.handleBackgroundBadgeSnapshot(["badge_total": 0, "junchat_badge_state": state]))
+        #expect(notificationCenter.setBadgeCountReceivedCount == 4)
+        ledger.reset()
+        #expect(await notificationManager.handleBackgroundBadgeSnapshot(["badge_total": 4, "junchat_badge_state": newer]) == false)
+    }
+
+    @Test
+    func registrationOnlyOptsInAfterAuthenticatedSnapshot() async throws {
+        notificationManager = NotificationManager(notificationCenter: notificationCenter,
+                                                  appSettings: appSettings, orderedBadgeSnapshotsEnabled: true)
+        clientProxy.junchatBadgeSnapshotReturnValue = try #require(NotificationBadgeServerSnapshot(payload: [
+            "badge_total": 4, "junchat_badge_state": ["user_id": clientProxy.userID,
+                                                      "generation": "16a85460-6ed5-4cf9-ae72-f53689a2f831", "revision": "1"]
+        ]))
+        notificationManager.setUserSession(mockUserSession)
+        #expect(await notificationManager.register(with: Data()))
+        let configuration = try #require(clientProxy.setPusherWithReceivedInvocations.last)
+        guard case .http(let data) = configuration.kind else {
+            Issue.record("Expected HTTP pusher")
+            return
+        }
+        let url = try #require(URL(string: data.url))
+        let query = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+        #expect(query.contains(.init(name: "junchat-badge-order", value: "state-v1")))
+        #expect(appSettings.notificationBadgeRoomLedger.snapshot(for: clientProxy.userID)?.count == 4)
     }
     
     @Test

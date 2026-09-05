@@ -30,7 +30,8 @@ protocol NotificationManagerProtocol: AnyObject {
     func unregisterPusher(for userSession: UserSessionProtocol) async
     func registrationFailed(with error: Error)
     func showLocalNotification(with title: String, subtitle: String?) async
-    func setUserSession(_ userSession: UserSessionProtocol?)
+    @MainActor func setUserSession(_ userSession: UserSessionProtocol?)
+    func handleBackgroundBadgeSnapshot(_ payload: [AnyHashable: Any]) async -> Bool
     
     func requestAuthorization()
     

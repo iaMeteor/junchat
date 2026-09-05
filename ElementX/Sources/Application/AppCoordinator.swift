@@ -141,6 +141,9 @@ class AppCoordinator: AppCoordinatorProtocol, AuthenticationFlowCoordinatorDeleg
         windowManager.delegate = self
         
         notificationManager.delegate = self
+        appDelegate.backgroundNotificationHandler = { [weak self] payload in
+            await self?.notificationManager.handleBackgroundBadgeSnapshot(payload) ?? false
+        }
         notificationManager.start()
         
         let rawCurrentVersion = InfoPlistReader(bundle: .main).bundleShortVersionString

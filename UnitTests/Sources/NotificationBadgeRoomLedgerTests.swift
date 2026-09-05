@@ -709,6 +709,77 @@ private struct LegacyNotificationBadgeRoomLedgerState: Codable {
     let recentReadDates: [String: Date]
 }
 
+extension NotificationBadgeRoomLedgerTests {
+    private func serverSnapshot(total: Int, revision: String,
+                                generation: String = "16a85460-6ed5-4cf9-ae72-f53689a2f831",
+                                userID: String = "@alice:example.org") throws -> NotificationBadgeServerSnapshot {
+        try #require(NotificationBadgeServerSnapshot(payload: [
+            "badge_total": total,
+            "junchat_badge_state": ["user_id": userID, "generation": generation, "revision": revision]
+        ]))
+    }
+
+    @Test
+    func orderedBadgeRejectsDelayedZeroAndUnversionedRoomEstimates() throws {
+        let fixture = try makeLedger()
+        let ledger = fixture.ledger
+        let userID = "@alice:example.org"
+        ledger.prepare(for: userID)
+        let first = try serverSnapshot(total: 1, revision: "2")
+        #expect(ledger.reconcileServerSnapshot(first, expectedGeneration: nil)?.count == 1)
+        let badge = try ledger.applyNotification(userID: userID, roomID: nil,
+                                                 contributesToBadge: nil, isAuthoritative: true,
+                                                 serverSnapshot: serverSnapshot(total: 0, revision: "1"), fallback: 0)
+        #expect(badge == 1)
+        #expect(ledger.reconcile(userID: userID, unreadCountsByRoom: [:])?.count == 1)
+        #expect(ledger.applyNotification(userID: userID, roomID: nil,
+                                         contributesToBadge: nil, isAuthoritative: true, fallback: 0) == 1)
+        #expect(try ledger.reconcileServerSnapshot(serverSnapshot(total: 0, revision: "3"),
+                                                   expectedGeneration: first.generation)?.count == 0)
+    }
+
+    @Test
+    func orderedBadgeSurvivesRestartAndDoesNotExpireIntoOldCounts() throws {
+        let clock = NotificationBadgeLedgerTestClock(now: Date(timeIntervalSince1970: 1000))
+        let fixture = try makeLedger(now: { clock.now })
+        let ledger = fixture.ledger
+        ledger.prepare(for: "@alice:example.org")
+        _ = try ledger.reconcileServerSnapshot(serverSnapshot(total: 4, revision: "9007199254740992"), expectedGeneration: nil)
+        clock.advance(by: 3600)
+        let reloaded = NotificationBadgeRoomLedger(userDefaults: fixture.userDefaults, lockFileURL: fixture.lockFileURL, now: { clock.now })
+        #expect(reloaded.serverSnapshot(for: "@alice:example.org")?.revision == 9_007_199_254_740_992)
+        #expect(reloaded.reconcile(userID: "@alice:example.org", unreadCountsByRoom: [:])?.count == 4)
+        reloaded.reset()
+        reloaded.prepare(for: "@bob:example.org")
+        #expect(reloaded.serverSnapshot(for: "@bob:example.org") == nil)
+    }
+
+    @Test
+    func differentGenerationNeedsCurrentAuthenticatedRequestAndCorrectAccount() throws {
+        let fixture = try makeLedger()
+        let ledger = fixture.ledger
+        ledger.prepare(for: "@alice:example.org")
+        let first = try serverSnapshot(total: 1, revision: "9")
+        _ = ledger.reconcileServerSnapshot(first, expectedGeneration: nil)
+        let next = try serverSnapshot(total: 4, revision: "1", generation: "0699601a-c63e-4c0e-a2d8-0ad5d8963502")
+        #expect(ledger.applyNotification(userID: first.userID, roomID: nil, contributesToBadge: nil,
+                                         isAuthoritative: true, serverSnapshot: next, fallback: 4) == 1)
+        #expect(ledger.reconcileServerSnapshot(next, expectedGeneration: first.generation)?.count == 4)
+        #expect(ledger.reconcileServerSnapshot(first, expectedGeneration: first.generation)?.count == 4)
+        #expect(try ledger.reconcileServerSnapshot(serverSnapshot(total: 0, revision: "99", userID: "@bob:example.org"),
+                                                   expectedGeneration: next.generation) == nil)
+    }
+
+    @Test(arguments: ["0", "01", "-1", "1.0", "1\n", "9223372036854775808"])
+    func invalidServerRevisionIsNotCoerced(_ revision: String) {
+        #expect(NotificationBadgeServerSnapshot(payload: [
+            "badge_total": 1,
+            "junchat_badge_state": ["user_id": "@alice:example.org",
+                                    "generation": "16a85460-6ed5-4cf9-ae72-f53689a2f831", "revision": revision]
+        ]) == nil)
+    }
+}
+
 private final class NotificationBadgeLedgerTestClock: @unchecked Sendable {
     private let lock = NSLock()
     private var storedNow: Date

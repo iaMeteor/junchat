@@ -374,6 +374,7 @@ enum NSEBadgeDeliveryNormalizer {
                                                        eventID: content.eventID,
                                                        contributesToBadge: content.badgeContribution,
                                                        isAuthoritative: content.hasAuthoritativeBadgeForDelivery,
+                                                       serverSnapshot: content.orderedBadgeSnapshot,
                                                        fallback: mutableContent.badgeForDelivery)
         mutableContent.overrideBadgeForDelivery(reconciledBadge)
         return mutableContent

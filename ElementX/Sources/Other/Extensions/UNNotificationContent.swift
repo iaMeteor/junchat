@@ -67,6 +67,11 @@ extension UNNotificationContent {
         return number.boolValue
     }
 
+    var orderedBadgeSnapshot: NotificationBadgeServerSnapshot? {
+        guard hasAuthoritativeBadgeForDelivery else { return nil }
+        return .init(payload: userInfo)
+    }
+
     func normalizedMutableContentForBadgeDelivery() -> UNMutableNotificationContent? {
         guard let content = mutableCopy() as? UNMutableNotificationContent else {
             return nil
@@ -90,8 +95,12 @@ extension UNNotificationContent {
             return [:]
         }
 
-        return [NotificationConstants.UserInfoKey.badgeContract: NotificationConstants.BadgeContract.identifier,
-                NotificationConstants.UserInfoKey.badgeTotal: badgeTotal]
+        var metadata: [AnyHashable: Any] = [NotificationConstants.UserInfoKey.badgeContract: NotificationConstants.BadgeContract.identifier,
+                                            NotificationConstants.UserInfoKey.badgeTotal: badgeTotal]
+        if let snapshot = orderedBadgeSnapshot {
+            metadata["junchat_badge_state"] = snapshot.metadata
+        }
+        return metadata
     }
 
     private static func validBadgeNumber(_ value: Any?, maximum: Int64? = nil) -> NSNumber? {
@@ -117,6 +126,9 @@ extension UNNotificationContent {
 
 extension UNMutableNotificationContent {
     func overrideBadgeForDelivery(_ badge: NSNumber?) {
+        if let snapshot = orderedBadgeSnapshot, badge?.intValue != snapshot.total {
+            userInfo["junchat_badge_state"] = nil
+        }
         self.badge = badge
 
         if userInfo[NotificationConstants.UserInfoKey.unreadCount] != nil {

@@ -173,6 +173,7 @@ protocol ClientProxyProtocol: AnyObject {
     func stopSync(completion: (() -> Void)?) // Hopefully this will become async once we get SE-0371.
     
     func expireSyncSessions() async
+    func junchatBadgeSnapshot() async -> NotificationBadgeServerSnapshot?
         
     func accountURL(action: AccountManagementAction) async -> URL?
     

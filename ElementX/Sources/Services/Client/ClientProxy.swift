@@ -809,6 +809,10 @@ class ClientProxy: ClientProxyProtocol {
                                    lang: configuration.lang)
     }
 
+    func junchatBadgeSnapshot() async -> NotificationBadgeServerSnapshot? {
+        await JunchatBadgeService(sessionProvider: { [client] in try client.session() }).snapshot()
+    }
+
     func deletePusher(identifiers: PusherIdentifiers) async throws {
         try await client.deletePusher(identifiers: identifiers)
     }

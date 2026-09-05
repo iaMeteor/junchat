@@ -5,8 +5,41 @@
 // Please see LICENSE files in the repository root for full details.
 //
 
+import CoreFoundation
 import Darwin
 import Foundation
+
+struct NotificationBadgeServerSnapshot: Codable, Equatable, Sendable {
+    let userID: String
+    let generation: String
+    let revision: UInt64
+    let total: Int
+
+    init?(payload: [AnyHashable: Any]) {
+        guard let state = payload["junchat_badge_state"] as? [String: Any],
+              Set(state.keys) == ["user_id", "generation", "revision"],
+              let userID = state["user_id"] as? String,
+              userID.range(of: #"^@[^:\s]+:\S+\z"#, options: .regularExpression) != nil,
+              let generation = state["generation"] as? String,
+              UUID(uuidString: generation)?.uuidString.lowercased() == generation,
+              let revisionString = state["revision"] as? String,
+              revisionString.range(of: #"^[1-9][0-9]{0,18}\z"#, options: .regularExpression) != nil,
+              let revision = UInt64(revisionString), revision <= UInt64(Int64.max),
+              let total = payload["badge_total"] as? NSNumber,
+              CFGetTypeID(total) != CFBooleanGetTypeID(),
+              total.doubleValue.isFinite, total.int64Value >= 0,
+              total.int64Value <= 9_007_199_254_740_991,
+              total.compare(NSNumber(value: total.int64Value)) == .orderedSame else { return nil }
+        self.userID = userID
+        self.generation = generation
+        self.revision = revision
+        self.total = total.intValue
+    }
+
+    var metadata: [String: String] {
+        ["user_id": userID, "generation": generation, "revision": String(revision)]
+    }
+}
 
 struct NotificationBadgeSnapshot: Equatable {
     let userID: String
@@ -42,6 +75,7 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
         var provisionalNotificationEvents: [String: RecentEvent]
         var recentSeenEventDates: [String: Date]
         var recentReadDates: [String: Date]
+        var serverSnapshot: NotificationBadgeServerSnapshot?
 
         var confirmedBadgeRoomCounts: [String: Int] {
             var counts = unreadCountsByRoom.filter { roomID, count in
@@ -89,6 +123,11 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
         }
 
         var snapshot: NotificationBadgeSnapshot {
+            if let serverSnapshot {
+                return .init(userID: userID, count: serverSnapshot.total,
+                             isReconciled: true, recentAuthoritativeCount: serverSnapshot.total,
+                             revision: revision)
+            }
             let count: Int
             if !isReconciled {
                 count = recentAuthoritativeCount ?? badgeCount
@@ -188,7 +227,8 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
                                         recentNotificationEvents: recentNotificationEvents,
                                         provisionalNotificationEvents: provisionalNotificationEvents,
                                         recentSeenEventDates: currentState.recentSeenEventDates,
-                                        recentReadDates: recentReadDates)
+                                        recentReadDates: recentReadDates,
+                                        serverSnapshot: currentState.serverSnapshot)
             if reconciledState.authoritativeCountIsReconciled {
                 reconciledState.recentAuthoritativeCount = nil
                 reconciledState.recentAuthoritativeDate = nil
@@ -205,6 +245,7 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
                            eventID: String? = nil,
                            contributesToBadge: Bool?,
                            isAuthoritative: Bool = false,
+                           serverSnapshot: NotificationBadgeServerSnapshot? = nil,
                            fallback: NSNumber?) -> NSNumber? {
         withExclusiveLock(fallback: fallback) {
             guard var state = loadStatePruningExpiredProvisionalEntries() else { return fallback }
@@ -218,6 +259,15 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
             }
 
             let previousState = state
+            if state.serverSnapshot != nil {
+                if isAuthoritative, let serverSnapshot,
+                   serverSnapshot.userID == userID,
+                   serverSnapshot.generation == state.serverSnapshot?.generation,
+                   serverSnapshot.revision > (state.serverSnapshot?.revision ?? 0) {
+                    state.serverSnapshot = serverSnapshot
+                }
+                return NSNumber(value: persistIfChanged(state, currentState: previousState).snapshot.count)
+            }
             let wasKnownStableEvent = roomID.flatMap { roomID in
                 guard let eventID, !eventID.isEmpty else { return nil }
                 return state.recentSeenEventDates[eventKey(eventID: eventID, roomID: roomID)] != nil
@@ -244,6 +294,30 @@ final class NotificationBadgeRoomLedger: @unchecked Sendable {
 
             state = persistIfChanged(state, currentState: previousState)
             return NSNumber(value: state.snapshot.count)
+        }
+    }
+
+    func serverSnapshot(for userID: String) -> NotificationBadgeServerSnapshot? {
+        withExclusiveLock(fallback: nil) {
+            guard let state = loadState(), state.userID == userID else { return nil }
+            return state.serverSnapshot
+        }
+    }
+
+    /// Only authenticated responses may establish or replace a generation.
+    /// The caller captures the generation before starting its network request.
+    func reconcileServerSnapshot(_ snapshot: NotificationBadgeServerSnapshot,
+                                 expectedGeneration: String?) -> NotificationBadgeSnapshot? {
+        withExclusiveLock(fallback: nil) {
+            guard var state = loadState(), state.userID == snapshot.userID else { return nil }
+            let previousState = state
+            if let current = state.serverSnapshot, current.generation == snapshot.generation {
+                guard snapshot.revision > current.revision else { return state.snapshot }
+            } else {
+                guard state.serverSnapshot?.generation == expectedGeneration else { return state.snapshot }
+            }
+            state.serverSnapshot = snapshot
+            return persistIfChanged(state, currentState: previousState).snapshot
         }
     }
 

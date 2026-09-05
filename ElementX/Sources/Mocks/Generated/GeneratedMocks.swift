@@ -2992,6 +2992,70 @@ class ClientProxyMock: ClientProxyProtocol, @unchecked Sendable {
     var underlyingMaxMediaUploadSize: Result<UInt, ClientProxyError>!
     var maxMediaUploadSizeClosure: (() async -> Result<UInt, ClientProxyError>)?
 
+    //MARK: - junchatBadgeSnapshot
+
+    var junchatBadgeSnapshotUnderlyingCallsCount = 0
+    var junchatBadgeSnapshotCallsCount: Int {
+        get {
+            if Thread.isMainThread {
+                return junchatBadgeSnapshotUnderlyingCallsCount
+            } else {
+                var returnValue: Int? = nil
+                DispatchQueue.main.sync {
+                    returnValue = junchatBadgeSnapshotUnderlyingCallsCount
+                }
+
+                return returnValue!
+            }
+        }
+        set {
+            if Thread.isMainThread {
+                junchatBadgeSnapshotUnderlyingCallsCount = newValue
+            } else {
+                DispatchQueue.main.sync {
+                    junchatBadgeSnapshotUnderlyingCallsCount = newValue
+                }
+            }
+        }
+    }
+    var junchatBadgeSnapshotCalled: Bool {
+        return junchatBadgeSnapshotCallsCount > 0
+    }
+
+    var junchatBadgeSnapshotUnderlyingReturnValue: NotificationBadgeServerSnapshot?
+    var junchatBadgeSnapshotReturnValue: NotificationBadgeServerSnapshot? {
+        get {
+            if Thread.isMainThread {
+                return junchatBadgeSnapshotUnderlyingReturnValue
+            } else {
+                var returnValue: NotificationBadgeServerSnapshot?? = nil
+                DispatchQueue.main.sync {
+                    returnValue = junchatBadgeSnapshotUnderlyingReturnValue
+                }
+
+                return returnValue!
+            }
+        }
+        set {
+            if Thread.isMainThread {
+                junchatBadgeSnapshotUnderlyingReturnValue = newValue
+            } else {
+                DispatchQueue.main.sync {
+                    junchatBadgeSnapshotUnderlyingReturnValue = newValue
+                }
+            }
+        }
+    }
+    var junchatBadgeSnapshotClosure: (() async -> NotificationBadgeServerSnapshot?)?
+
+    func junchatBadgeSnapshot() async -> NotificationBadgeServerSnapshot? {
+        junchatBadgeSnapshotCallsCount += 1
+        if let junchatBadgeSnapshotClosure = junchatBadgeSnapshotClosure {
+            return await junchatBadgeSnapshotClosure()
+        } else {
+            return junchatBadgeSnapshotReturnValue
+        }
+    }
     //MARK: - isOnlyDeviceLeft
 
     var isOnlyDeviceLeftUnderlyingCallsCount = 0
@@ -14247,6 +14311,76 @@ class NotificationItemProxyMock: NotificationItemProxyProtocol, @unchecked Senda
 class NotificationManagerMock: NotificationManagerProtocol, @unchecked Sendable {
     weak var delegate: NotificationManagerDelegate?
 
+    //MARK: - handleBackgroundBadgeSnapshot
+
+    var handleBackgroundBadgeSnapshotUnderlyingCallsCount = 0
+    var handleBackgroundBadgeSnapshotCallsCount: Int {
+        get {
+            if Thread.isMainThread {
+                return handleBackgroundBadgeSnapshotUnderlyingCallsCount
+            } else {
+                var returnValue: Int? = nil
+                DispatchQueue.main.sync {
+                    returnValue = handleBackgroundBadgeSnapshotUnderlyingCallsCount
+                }
+
+                return returnValue!
+            }
+        }
+        set {
+            if Thread.isMainThread {
+                handleBackgroundBadgeSnapshotUnderlyingCallsCount = newValue
+            } else {
+                DispatchQueue.main.sync {
+                    handleBackgroundBadgeSnapshotUnderlyingCallsCount = newValue
+                }
+            }
+        }
+    }
+    var handleBackgroundBadgeSnapshotCalled: Bool {
+        return handleBackgroundBadgeSnapshotCallsCount > 0
+    }
+    var handleBackgroundBadgeSnapshotReceivedPayload: [AnyHashable: Any]?
+    var handleBackgroundBadgeSnapshotReceivedInvocations: [[AnyHashable: Any]] = []
+
+    var handleBackgroundBadgeSnapshotUnderlyingReturnValue: Bool!
+    var handleBackgroundBadgeSnapshotReturnValue: Bool! {
+        get {
+            if Thread.isMainThread {
+                return handleBackgroundBadgeSnapshotUnderlyingReturnValue
+            } else {
+                var returnValue: Bool? = nil
+                DispatchQueue.main.sync {
+                    returnValue = handleBackgroundBadgeSnapshotUnderlyingReturnValue
+                }
+
+                return returnValue!
+            }
+        }
+        set {
+            if Thread.isMainThread {
+                handleBackgroundBadgeSnapshotUnderlyingReturnValue = newValue
+            } else {
+                DispatchQueue.main.sync {
+                    handleBackgroundBadgeSnapshotUnderlyingReturnValue = newValue
+                }
+            }
+        }
+    }
+    var handleBackgroundBadgeSnapshotClosure: (([AnyHashable: Any]) async -> Bool)?
+
+    func handleBackgroundBadgeSnapshot(_ payload: [AnyHashable: Any]) async -> Bool {
+        handleBackgroundBadgeSnapshotCallsCount += 1
+        handleBackgroundBadgeSnapshotReceivedPayload = payload
+        DispatchQueue.main.async {
+            self.handleBackgroundBadgeSnapshotReceivedInvocations.append(payload)
+        }
+        if let handleBackgroundBadgeSnapshotClosure = handleBackgroundBadgeSnapshotClosure {
+            return await handleBackgroundBadgeSnapshotClosure(payload)
+        } else {
+            return handleBackgroundBadgeSnapshotReturnValue
+        }
+    }
     //MARK: - start
 
     var startUnderlyingCallsCount = 0
