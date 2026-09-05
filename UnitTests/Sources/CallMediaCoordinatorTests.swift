@@ -47,6 +47,31 @@ struct CallMediaCoordinatorTests {
         #expect(proximityValues.last == true)
     }
 
+    @Test(arguments: [false, true])
+    func preparingAnAlreadyConnectedCallDoesNotRestartRingback(prepareBeforeConnection: Bool) {
+        let ringbackTonePlayer = TestCallRingbackTonePlayer()
+        var connectedToneCount = 0
+        let setProximityMonitoringEnabled: (Bool) -> Void = { _ in }
+        let coordinator = CallMediaCoordinator(voiceOnly: true,
+                                               playConnectedTone: true,
+                                               audioSessionController: .init(audioSession: AudioSessionMock()),
+                                               connectedTonePlayer: { connectedToneCount += 1 },
+                                               ringbackTonePlayer: ringbackTonePlayer,
+                                               setProximityMonitoringEnabled: setProximityMonitoringEnabled)
+        if prepareBeforeConnection {
+            coordinator.prepareForCall()
+        }
+        coordinator.remoteMediaConnected()
+        let startsBeforePreparation = ringbackTonePlayer.startCallCount
+
+        coordinator.prepareForCall()
+        coordinator.remoteMediaConnected()
+
+        #expect(ringbackTonePlayer.startCallCount == startsBeforePreparation)
+        #expect(connectedToneCount == 1)
+        coordinator.stop()
+    }
+
     @Test
     func lifecycleRecoveryPreservesTheSelectedSpeakerAndMuteState() {
         let audioSession = AudioSessionMock()

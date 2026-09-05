@@ -249,7 +249,7 @@ final class CallMediaCoordinator: CallMediaCoordinatorProtocol {
         guard !hasStopped, ownsSharedMediaState else { return }
 
         audioSessionController.activateForCall(voiceOnly: voiceOnly)
-        if playConnectedTone {
+        if playConnectedTone, !hasRemoteMediaConnected {
             ringbackTonePlayer.start()
         }
         restoreSelectedOutput()
