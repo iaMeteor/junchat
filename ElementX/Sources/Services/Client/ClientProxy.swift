@@ -1442,7 +1442,8 @@ class ClientProxy: ClientProxyProtocol {
                                                           appSettings: appSettings,
                                                           analyticsService: analyticsService,
                                                           eventStringBuilder: eventStringBuilder)
-                
+                guard await !roomMembershipService.excludedRoomIDs.contains(roomID) else { return nil }
+
                 return .joined(roomProxy)
             case .left:
                 return .left
