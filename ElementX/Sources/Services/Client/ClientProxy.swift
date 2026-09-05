@@ -11,6 +11,7 @@ import CryptoKit
 import Foundation
 import MatrixRustSDK
 import OrderedCollections
+import UIKit
 
 // swiftlint:disable:next type_body_length
 class ClientProxy: ClientProxyProtocol {
@@ -19,6 +20,7 @@ class ClientProxy: ClientProxyProtocol {
     private let appSettings: AppSettings
     private let analyticsService: AnalyticsService
     private let junchatContactsService: JunchatContactsService
+    private let roomMembershipService: JunchatRoomMembershipService
     
     let mediaLoader: MediaLoaderProtocol
     private let clientQueue: DispatchQueue
@@ -200,12 +202,16 @@ class ClientProxy: ClientProxyProtocol {
     init(client: ClientProtocol,
          networkMonitor: NetworkMonitorProtocol,
          appSettings: AppSettings,
-         analyticsService: AnalyticsService) async throws {
+         analyticsService: AnalyticsService,
+         roomMembershipReconciliationEnabled: Bool = false) async throws {
         self.client = client
         self.networkMonitor = networkMonitor
         self.appSettings = appSettings
         self.analyticsService = analyticsService
         junchatContactsService = .init(client: client)
+        roomMembershipService = try await .init(userID: client.userId(),
+                                                reader: .init { try client.session() },
+                                                isEnabled: roomMembershipReconciliationEnabled)
         
         if appSettings.automaticBackPaginationEnabled {
             // Must be called before creating the sync service, timelines etc.
@@ -227,7 +233,8 @@ class ClientProxy: ClientProxyProtocol {
         let configuredAppService = try await ClientProxyServices(client: client,
                                                                  actionsSubject: actionsSubject,
                                                                  notificationSettings: notificationSettings,
-                                                                 appSettings: appSettings)
+                                                                 appSettings: appSettings,
+                                                                 excludedRoomIDsPublisher: roomMembershipService.excludedRoomIDsPublisher)
         
         syncService = configuredAppService.syncService
         roomListService = configuredAppService.roomListService
@@ -242,6 +249,9 @@ class ClientProxy: ClientProxyProtocol {
                 
         delegateHandle = try client.setDelegate(delegate: ClientDelegateWrapper { [weak self] isSoftLogout in
             self?.hasEncounteredAuthError = true
+            if !isSoftLogout {
+                Task { await self?.roomMembershipService.stopAndClear() }
+            }
             self?.actionsSubject.send(.receivedAuthError(isSoftLogout: isSoftLogout))
         } backgroundTaskErrorCallback: { error in
             switch error {
@@ -546,7 +556,8 @@ class ClientProxy: ClientProxyProtocol {
     
     func joinRoom(_ roomID: String, via: [String]) async -> Result<Void, ClientProxyError> {
         do {
-            let _ = try await client.joinRoomByIdOrAlias(roomIdOrAlias: roomID, serverNames: via)
+            let room = try await client.joinRoomByIdOrAlias(roomIdOrAlias: roomID, serverNames: via)
+            await roomMembershipService.didJoin(room.id())
                         
             await waitForRoomToSync(roomID: roomID, timeout: .seconds(30))
             
@@ -566,6 +577,7 @@ class ClientProxy: ClientProxyProtocol {
     func joinRoomAlias(_ roomAlias: String) async -> Result<Void, ClientProxyError> {
         do {
             let room = try await client.joinRoomByIdOrAlias(roomIdOrAlias: roomAlias, serverNames: [])
+            await roomMembershipService.didJoin(room.id())
             
             await waitForRoomToSync(roomID: room.id(), timeout: .seconds(30))
             
@@ -635,6 +647,9 @@ class ClientProxy: ClientProxyProtocol {
     }
         
     func roomForIdentifier(_ identifier: String) async -> RoomProxyType? {
+        if networkMonitor.reachabilityPublisher.value == .reachable {
+            await roomMembershipService.refresh([identifier])
+        }
         let shouldAwait = roomsToAwait.remove(identifier) != nil
         
         // Try fetching the room from the cold cache (if available) first
@@ -793,6 +808,7 @@ class ClientProxy: ClientProxyProtocol {
     }
     
     func logout() async {
+        await roomMembershipService.stopAndClear()
         do {
             try await client.logout()
         } catch {
@@ -810,7 +826,7 @@ class ClientProxy: ClientProxyProtocol {
     }
 
     func junchatBadgeSnapshot() async -> NotificationBadgeServerSnapshot? {
-        await JunchatBadgeService(sessionProvider: { [client] in try client.session() }).snapshot()
+        await JunchatBadgeService { [client] in try client.session() }.snapshot()
     }
 
     func deletePusher(identifiers: PusherIdentifiers) async throws {
@@ -1203,12 +1219,23 @@ class ClientProxy: ClientProxyProtocol {
     // MARK: - Private
     
     private func setupSubscriptions() async {
+        await roomMembershipService.excludedRoomIDsPublisher
+            .sink { [weak self] ids in
+                self?.actionsSubject.send(.roomMembershipInvalidated(ids))
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)
+            .sink { [weak self] _ in self?.refreshRoomMemberships() }
+            .store(in: &cancellables)
+
         networkMonitor.reachabilityPublisher
             .removeDuplicates()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] reachability in
                 if reachability == .reachable {
                     self?.startSync()
+                    self?.refreshRoomMemberships()
                 }
             }
             .store(in: &cancellables)
@@ -1321,6 +1348,9 @@ class ClientProxy: ClientProxyProtocol {
             switch state {
             case .running, .terminated, .idle:
                 homeserverReachabilitySubject.send(.reachable)
+                if case .running = state {
+                    refreshRoomMemberships()
+                }
             case .offline:
                 homeserverReachabilitySubject.send(.unreachable)
             case .error:
@@ -1329,6 +1359,11 @@ class ClientProxy: ClientProxyProtocol {
         })
     }
     
+    private func refreshRoomMemberships() {
+        let ids = Set(client.rooms().map { $0.id() })
+        Task { await roomMembershipService.refresh(ids) }
+    }
+
     private func createMediaPreviewConfigObserver() async -> TaskHandle? {
         do {
             return try await client.subscribeToMediaPreviewConfig(listener: SDKListener { [weak self] config in
@@ -1401,6 +1436,7 @@ class ClientProxy: ClientProxyProtocol {
                 
                 return try await .knocked(KnockedRoomProxy(room: room))
             case .joined:
+                guard await !roomMembershipService.excludedRoomIDs.contains(roomID) else { return nil }
                 let roomProxy = try await JoinedRoomProxy(roomListService: roomListService,
                                                           room: room,
                                                           appSettings: appSettings,
@@ -1575,7 +1611,8 @@ private struct ClientProxyServices {
     init(client: ClientProtocol,
          actionsSubject: PassthroughSubject<ClientProxyAction, Never>,
          notificationSettings: NotificationSettingsProxyProtocol,
-         appSettings: AppSettings) async throws {
+         appSettings: AppSettings,
+         excludedRoomIDsPublisher: CurrentValuePublisher<Set<String>, Never>) async throws {
         let syncService = try await client
             .syncService()
             .withOfflineMode()
@@ -1597,14 +1634,16 @@ private struct ClientProxyServices {
                                                   name: "AllRooms",
                                                   shouldUpdateVisibleRange: true,
                                                   notificationSettings: notificationSettings,
-                                                  appSettings: appSettings)
+                                                  appSettings: appSettings,
+                                                  excludedRoomIDsPublisher: excludedRoomIDsPublisher)
         try await roomSummaryProvider.setRoomList(roomListService.allRooms())
         
         alternateRoomSummaryProvider = RoomSummaryProvider(roomListService: roomListService,
                                                            eventStringBuilder: eventStringBuilder,
                                                            name: "AlternateAllRooms",
                                                            notificationSettings: notificationSettings,
-                                                           appSettings: appSettings)
+                                                           appSettings: appSettings,
+                                                           excludedRoomIDsPublisher: excludedRoomIDsPublisher)
         try await alternateRoomSummaryProvider.setRoomList(roomListService.allRooms())
         
         staticRoomSummaryProvider = RoomSummaryProvider(roomListService: roomListService,
@@ -1612,7 +1651,8 @@ private struct ClientProxyServices {
                                                         name: "StaticAllRooms",
                                                         roomListPageSize: .max,
                                                         notificationSettings: notificationSettings,
-                                                        appSettings: appSettings)
+                                                        appSettings: appSettings,
+                                                        excludedRoomIDsPublisher: excludedRoomIDsPublisher)
         try await staticRoomSummaryProvider.setRoomList(roomListService.allRooms())
         
         self.syncService = syncService

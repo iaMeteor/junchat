@@ -39,6 +39,8 @@ class RoomSummaryProvider: RoomSummaryProviderProtocol {
     
     private let roomListSubject = CurrentValueSubject<[RoomSummary], Never>([])
     private let stateSubject = CurrentValueSubject<RoomSummaryProviderState, Never>(.notLoaded)
+    private var rawState = RoomSummaryProviderState.notLoaded
+    private var excludedRoomIDs = Set<String>()
     
     private let diffsPublisher = PassthroughSubject<[RoomListEntriesUpdate], Never>()
     
@@ -52,7 +54,7 @@ class RoomSummaryProvider: RoomSummaryProviderProtocol {
     
     private var rooms: [RoomSummary] = [] {
         didSet {
-            roomListSubject.send(rooms)
+            publishVisibleRooms()
         }
     }
     
@@ -68,7 +70,8 @@ class RoomSummaryProvider: RoomSummaryProviderProtocol {
          roomListPageSize: UInt32 = 100,
          notificationSettings: NotificationSettingsProxyProtocol,
          appSettings: AppSettings,
-         roomDetailsTimeout: Duration = .seconds(10)) {
+         roomDetailsTimeout: Duration = .seconds(10),
+         excludedRoomIDsPublisher: CurrentValuePublisher<Set<String>, Never>? = nil) {
         self.roomListService = roomListService
         serialDispatchQueue = DispatchQueue(label: "io.element.elementx.room_summary_provider", qos: .default)
         self.eventStringBuilder = eventStringBuilder
@@ -78,6 +81,17 @@ class RoomSummaryProvider: RoomSummaryProviderProtocol {
         self.appSettings = appSettings
         self.roomListPageSize = roomListPageSize
         self.roomDetailsTimeout = roomDetailsTimeout
+        excludedRoomIDs = excludedRoomIDsPublisher?.value ?? []
+
+        excludedRoomIDsPublisher?
+            .receive(on: serialDispatchQueue)
+            .sink { [weak self] ids in
+                self?.enqueueUpdate { provider in
+                    provider.excludedRoomIDs = ids
+                    provider.publishVisibleRooms()
+                }
+            }
+            .store(in: &cancellables)
         
         diffsPublisher
             .receive(on: serialDispatchQueue)
@@ -117,12 +131,18 @@ class RoomSummaryProvider: RoomSummaryProviderProtocol {
             let stateUpdatesSubscriptionResult = try roomList.loadingState(listener: SDKListener { [weak self] state in
                 guard let self else { return }
                 MXLog.info("\(name): Received state update: \(state)")
-                stateSubject.send(RoomSummaryProviderState(roomListState: state))
+                serialDispatchQueue.async { [weak self] in
+                    self?.enqueueUpdate { provider in
+                        provider.rawState = RoomSummaryProviderState(roomListState: state)
+                        provider.publishVisibleRooms()
+                    }
+                }
             })
             
             stateUpdatesTaskHandle = stateUpdatesSubscriptionResult.stateStream
             
-            stateSubject.send(RoomSummaryProviderState(roomListState: stateUpdatesSubscriptionResult.state))
+            rawState = RoomSummaryProviderState(roomListState: stateUpdatesSubscriptionResult.state)
+            publishVisibleRooms()
         } catch {
             MXLog.error("Failed setting up room list entry listener with error: \(error)")
         }
@@ -267,6 +287,17 @@ class RoomSummaryProvider: RoomSummaryProviderProtocol {
             .store(in: &cancellables)
     }
     
+    private func publishVisibleRooms() {
+        let visible = rooms.filter { !excludedRoomIDs.contains($0.id) || $0.joinRequestType != nil }
+        roomListSubject.send(visible)
+        if case .loaded(let count) = rawState {
+            let removed = UInt(rooms.count - visible.count)
+            stateSubject.send(.loaded(totalNumberOfRooms: count.map { $0 >= removed ? $0 - removed : 0 }))
+        } else {
+            stateSubject.send(rawState)
+        }
+    }
+
     private func updateRoomsWithDiffs(_ diffs: [RoomListEntriesUpdate]) async {
         let span = MXLog.createSpan("\(name).process_room_list_diffs")
         span.enter()

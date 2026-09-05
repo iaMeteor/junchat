@@ -6,6 +6,7 @@
 // Please see LICENSE files in the repository root for full details.
 //
 
+import Combine
 @testable import ElementX
 import Foundation
 import MatrixRustSDK
@@ -164,7 +165,26 @@ final class RoomSummaryProviderTests {
         try await recovered.fulfill()
     }
 
-    private func room(id: String) -> RoomSDKMock {
+    @Test
+    func excludedJoinedRoomsDoNotChangeSDKDiffIndicesAndInvitesRemainVisible() async throws {
+        let excluded = CurrentValueSubject<Set<String>, Never>(["!gone:example.org", "!invite:example.org"])
+        setup(excluded: excluded.asCurrentValuePublisher())
+        let gone = room(id: "!gone:example.org")
+        let kept = room(id: "!kept:example.org")
+        let invite = room(id: "!invite:example.org", membership: .invited)
+        let listener = try #require(roomList.entriesWithDynamicAdaptersPageSizeListenerReceivedArguments?.listener)
+        let updated = deferFulfillment(roomSummaryProvider.roomListPublisher) { $0.map(\.id) == [kept.id(), invite.id()] }
+        listener.onUpdate(roomEntriesUpdate: [.reset(values: [gone, kept, invite])])
+        try await updated.fulfill()
+        let removed = deferFulfillment(roomSummaryProvider.roomListPublisher) { $0.map(\.id) == [invite.id()] }
+        listener.onUpdate(roomEntriesUpdate: [.remove(index: 1)])
+        try await removed.fulfill()
+        let restored = deferFulfillment(roomSummaryProvider.roomListPublisher) { $0.map(\.id) == [gone.id(), invite.id()] }
+        excluded.send([])
+        try await restored.fulfill()
+    }
+
+    private func room(id: String, membership: Membership = .joined) -> RoomSDKMock {
         let room = RoomSDKMock()
         room.idReturnValue = id
         room.latestEventReturnValue = .some(.none)
@@ -172,7 +192,7 @@ final class RoomSummaryProviderTests {
                                             displayName: "Room", rawName: nil, topic: nil, avatarUrl: nil,
                                             isDirect: true, isPublic: nil, isSpace: false, successorRoom: nil,
                                             isFavourite: false, isLowPriority: false, canonicalAlias: nil, alternativeAliases: [],
-                                            membership: .joined, inviter: nil, heroes: [], activeMembersCount: 2,
+                                            membership: membership, inviter: nil, heroes: [], activeMembersCount: 2,
                                             invitedMembersCount: 0, joinedMembersCount: 2, activeServiceMembersCount: 0,
                                             serviceMembers: [], highlightCount: 0, notificationCount: 0,
                                             cachedUserDefinedNotificationMode: nil, hasRoomCall: false,
@@ -183,7 +203,8 @@ final class RoomSummaryProviderTests {
         return room
     }
     
-    private func setup(isLowPriorityFilterEnabled: Bool = false, roomDetailsTimeout: Duration = .seconds(10)) {
+    private func setup(isLowPriorityFilterEnabled: Bool = false, roomDetailsTimeout: Duration = .seconds(10),
+                       excluded: CurrentValuePublisher<Set<String>, Never>? = nil) {
         AppSettings.resetAllSettings()
         appSettings = AppSettings()
         appSettings.lowPriorityFilterEnabled = isLowPriorityFilterEnabled
@@ -200,7 +221,8 @@ final class RoomSummaryProviderTests {
                                                   name: "Test",
                                                   notificationSettings: NotificationSettingsProxyMock(with: .init()),
                                                   appSettings: appSettings,
-                                                  roomDetailsTimeout: roomDetailsTimeout)
+                                                  roomDetailsTimeout: roomDetailsTimeout,
+                                                  excludedRoomIDsPublisher: excluded)
 
         dynamicEntriesController = RoomListDynamicEntriesControllerSDKMock()
         dynamicEntriesController.setFilterKindReturnValue = true

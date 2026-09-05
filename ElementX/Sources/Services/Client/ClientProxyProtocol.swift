@@ -14,6 +14,7 @@ enum ClientProxyAction {
     case receivedSyncUpdate
     case receivedAuthError(isSoftLogout: Bool)
     case receivedDecryptionError(UnableToDecryptInfo)
+    case roomMembershipInvalidated(Set<String>)
     
     var isSyncUpdate: Bool {
         if case .receivedSyncUpdate = self {

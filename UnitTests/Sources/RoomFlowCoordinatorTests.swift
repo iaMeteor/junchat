@@ -7,6 +7,7 @@
 //
 
 import Combine
+import Dispatch
 @testable import ElementX
 import MatrixRustSDKMocks
 import SwiftState
@@ -19,6 +20,7 @@ final class RoomFlowCoordinatorTests {
     var roomFlowCoordinator: RoomFlowCoordinator!
     var navigationStackCoordinator: NavigationStackCoordinator!
     var cancellables = Set<AnyCancellable>()
+    private let clientActions = PassthroughSubject<ClientProxyAction, Never>()
     
     deinit {
         AppSettings.resetAllSettings()
@@ -32,6 +34,35 @@ final class RoomFlowCoordinatorTests {
         #expect(navigationStackCoordinator.rootCoordinator is RoomScreenCoordinator)
         
         try await clearRoute(expectedActions: [.finished])
+        #expect(navigationStackCoordinator.rootCoordinator == nil)
+    }
+
+    @Test
+    func confirmedMembershipRemovalDismissesOnlyTheMatchingOpenRoom() async throws {
+        setupRoomFlowCoordinator()
+        try await process(route: .room(roomID: "1", via: []))
+        clientActions.send(.roomMembershipInvalidated(["other"]))
+        await Task.yield()
+        #expect(navigationStackCoordinator.rootCoordinator is RoomScreenCoordinator)
+        let dismissed = deferFulfillment(roomFlowCoordinator.actions) { $0 == .finished }
+        clientActions.send(.roomMembershipInvalidated(["1"]))
+        try await dismissed.fulfill()
+        #expect(navigationStackCoordinator.rootCoordinator == nil)
+    }
+
+    @Test
+    func membershipRemovalDuringRoomLookupCannotOpenCachedTimeline() async throws {
+        setupRoomFlowCoordinator()
+        let roomProxy = JoinedRoomProxyMock(.init())
+        clientProxy.roomForIdentifierClosure = { [clientActions] _ in
+            let delivered = deferFulfillment(clientActions.receive(on: DispatchQueue.main)) { _ in true }
+            clientActions.send(.roomMembershipInvalidated(["1"]))
+            try? await delivered.fulfill()
+            return .joined(roomProxy)
+        }
+        let dismissed = deferFulfillment(roomFlowCoordinator.actions) { $0 == .finished }
+        roomFlowCoordinator.handleAppRoute(.room(roomID: "1", via: []), animated: false)
+        try await dismissed.fulfill()
         #expect(navigationStackCoordinator.rootCoordinator == nil)
     }
 
@@ -474,6 +505,7 @@ final class RoomFlowCoordinatorTests {
         clientProxy = ClientProxyMock(.init(userID: "hi@bob",
                                             roomSummaryProvider: RoomSummaryProviderMock(.init(state: .loaded(.mockRooms))),
                                             spaceServiceConfiguration: .populated))
+        clientProxy.actionsPublisher = clientActions.eraseToAnyPublisher()
         timelineControllerFactory = TimelineControllerFactoryMock(.init())
         
         clientProxy.roomPreviewForIdentifierViaClosure = { [roomType] roomID, _ in

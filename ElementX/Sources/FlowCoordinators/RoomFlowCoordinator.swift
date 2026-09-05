@@ -100,6 +100,7 @@ class RoomFlowCoordinator: FlowCoordinatorProtocol {
     }
     
     private var timelineController: TimelineControllerProtocol?
+    private var membershipInvalidated = false
     
     init(roomID: String,
          isChildFlow: Bool,
@@ -111,6 +112,15 @@ class RoomFlowCoordinator: FlowCoordinatorProtocol {
         self.flowParameters = flowParameters
         
         setupStateMachine()
+        userSession.clientProxy.actionsPublisher
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] action in
+                guard let self, case .roomMembershipInvalidated(let ids) = action else { return }
+                membershipInvalidated = ids.contains(roomID)
+                guard membershipInvalidated, roomProxy != nil, stateMachine.state != .complete else { return }
+                stateMachine.tryEvent(.dismissFlow)
+            }
+            .store(in: &cancellables)
     }
         
     // MARK: - FlowCoordinatorProtocol
@@ -150,7 +160,7 @@ class RoomFlowCoordinator: FlowCoordinatorProtocol {
                         return
                     }
                     
-                    await storeAndSubscribeToRoomProxy(roomProxy)
+                    guard await storeAndSubscribeToRoomProxy(roomProxy) else { return }
                 }
                 
                 stateMachine.tryEvent(.presentRoomDetails, userInfo: EventUserInfo(animated: animated))
@@ -210,7 +220,7 @@ class RoomFlowCoordinator: FlowCoordinatorProtocol {
                         return
                     }
                     
-                    await storeAndSubscribeToRoomProxy(roomProxy)
+                    guard await storeAndSubscribeToRoomProxy(roomProxy) else { return }
                 }
                 
                 stateMachine.tryEvent(.presentTransferOwnershipScreen)
@@ -291,8 +301,11 @@ class RoomFlowCoordinator: FlowCoordinatorProtocol {
         
         switch room {
         case .joined(let roomProxy):
+            guard canPresentJoinedRoom() else { return }
             if roomProxy.infoPublisher.value.isSpace {
-                switch await userSession.clientProxy.spaceService.spaceRoomList(spaceID: roomProxy.id) {
+                let result = await userSession.clientProxy.spaceService.spaceRoomList(spaceID: roomProxy.id)
+                guard canPresentJoinedRoom() else { return }
+                switch result {
                 case .success(let spaceRoomListProxy):
                     actionsSubject.send(.continueWithSpaceFlow(spaceRoomListProxy))
                 case .failure:
@@ -300,7 +313,7 @@ class RoomFlowCoordinator: FlowCoordinatorProtocol {
                     stateMachine.tryEvent(.dismissFlow)
                 }
             } else {
-                await storeAndSubscribeToRoomProxy(roomProxy)
+                guard await storeAndSubscribeToRoomProxy(roomProxy) else { return }
                 
                 guard case let .eventFocus(focusEvent) = presentationAction else {
                     // If is not a focus event just handle the presentation action directly in `presentRoom`
@@ -309,7 +322,9 @@ class RoomFlowCoordinator: FlowCoordinatorProtocol {
                 }
                 
                 // Otherwise check if the focussed event exists to handle a possible error or theaded event.
-                switch await roomProxy.loadOrFetchEventDetails(for: focusEvent.eventID) {
+                let result = await roomProxy.loadOrFetchEventDetails(for: focusEvent.eventID)
+                guard canPresentJoinedRoom() else { return }
+                switch result {
                 case .success(let event):
                     if flowParameters.appSettings.threadsEnabled, let threadRootEventID = event.threadRootEventId() {
                         stateMachine.tryEvent(.presentRoom(presentationAction: .thread(rootEventID: threadRootEventID,
@@ -339,17 +354,28 @@ class RoomFlowCoordinator: FlowCoordinatorProtocol {
     
     // MARK: - Private
     
-    private func storeAndSubscribeToRoomProxy(_ roomProxy: JoinedRoomProxyProtocol) async {
+    private func canPresentJoinedRoom() -> Bool {
+        guard stateMachine.state != .complete else { return false }
+        guard !membershipInvalidated else {
+            stateMachine.tryEvent(.dismissFlow)
+            return false
+        }
+        return true
+    }
+
+    private func storeAndSubscribeToRoomProxy(_ roomProxy: JoinedRoomProxyProtocol) async -> Bool {
+        guard canPresentJoinedRoom() else { return false }
         if let oldRoomProxy = self.roomProxy {
             if oldRoomProxy.id != roomProxy.id {
                 fatalError("Trying to create different room proxies for the same flow coordinator")
             }
             
             MXLog.warning("Found an existing proxy, returning.")
-            return
+            return true
         }
                 
         await roomProxy.subscribeForUpdates()
+        guard canPresentJoinedRoom() else { return false }
         
         // Make sure not to set this until after the subscription has succeeded, otherwise the
         // early return above could result in trying to access the room's timeline provider
@@ -368,6 +394,7 @@ class RoomFlowCoordinator: FlowCoordinatorProtocol {
                 }
             }
             .store(in: &cancellables)
+        return true
     }
     
     // swiftlint:disable:next function_body_length cyclomatic_complexity
@@ -571,6 +598,7 @@ class RoomFlowCoordinator: FlowCoordinatorProtocol {
     private func presentRoom(fromState: State,
                              presentationAction: PresentationAction?,
                              animated: Bool) async {
+        guard canPresentJoinedRoom() else { return }
         // If any sheets are presented dismiss them, rely on their dismissal callbacks to transition the state machine
         // through the correct states before presenting the room
         navigationStackCoordinator.setSheetCoordinator(nil)
@@ -867,7 +895,7 @@ class RoomFlowCoordinator: FlowCoordinatorProtocol {
                         guard let self else { return }
                         
                         if case let .joined(roomProxy) = await userSession.clientProxy.roomForIdentifier(roomID) {
-                            await storeAndSubscribeToRoomProxy(roomProxy)
+                            guard await storeAndSubscribeToRoomProxy(roomProxy) else { return }
                             stateMachine.tryEvent(.presentRoom(presentationAction: nil), userInfo: EventUserInfo(animated: animated))
                             
                             flowParameters.analytics.trackJoinedRoom(isDM: roomProxy.infoPublisher.value.isDirect,
