@@ -28,6 +28,7 @@ struct JunchatBadgeService {
             guard !Task.isCancelled,
                   currentSession.userId == session.userId,
                   currentSession.deviceId == session.deviceId,
+                  currentSession.accessToken == session.accessToken,
                   currentSession.homeserverUrl == session.homeserverUrl,
                   let response = response as? HTTPURLResponse,
                   response.statusCode == 200, response.url == url,

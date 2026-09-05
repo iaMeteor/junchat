@@ -10,8 +10,8 @@ import MatrixRustSDK
 import Testing
 
 struct JunchatBadgeServiceTests {
-    private func session(userID: String = "@alice:example.org") -> Session {
-        Session(accessToken: "test-token", refreshToken: nil, userId: userID, deviceId: "DEVICE",
+    private func session(userID: String = "@alice:example.org", token: String = "test-token") -> Session {
+        Session(accessToken: token, refreshToken: nil, userId: userID, deviceId: "DEVICE",
                 homeserverUrl: "https://matrix.example.org/prefix/", oauthData: nil, slidingSyncVersion: .native)
     }
 
@@ -70,5 +70,32 @@ struct JunchatBadgeServiceTests {
             return try (data, #require(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)))
         })
         #expect(await service.snapshot() == nil)
+    }
+
+    @Test
+    func replacedCredentialsDiscardTheOldAuthenticatedResponse() async {
+        let sessions = BadgeSessionSequence([session(), session(token: "replacement-token")])
+        let payload = payload()
+        let service = JunchatBadgeService(sessionProvider: { try sessions.next() }, send: { request in
+            let url = try #require(request.url)
+            return try (payload, #require(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)))
+        })
+        #expect(await service.snapshot() == nil)
+    }
+}
+
+private final class BadgeSessionSequence: @unchecked Sendable {
+    private let lock = NSLock()
+    private var sessions: [Session]
+
+    init(_ sessions: [Session]) {
+        self.sessions = sessions
+    }
+
+    func next() throws -> Session {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !sessions.isEmpty else { throw URLError(.userAuthenticationRequired) }
+        return sessions.removeFirst()
     }
 }
