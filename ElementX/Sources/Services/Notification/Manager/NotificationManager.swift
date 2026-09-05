@@ -17,6 +17,10 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
     private let orderedBadgeSnapshotsEnabled: Bool
     @MainActor private var badgeSessionGeneration = UUID()
     @MainActor private var badgeRefreshTask: Task<Void, Never>?
+    @MainActor private var pusherDeviceToken: Data?
+    @MainActor private var registeredPusher: (deviceToken: Data, endpoint: URL)?
+    @MainActor private var pusherRegistrationTask: Task<Bool, Never>?
+    @MainActor private var pusherRegistrationID = UUID()
     
     private var userSession: UserSessionProtocol?
     
@@ -94,14 +98,14 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
         }
     }
 
-    func register(with deviceToken: Data) async -> Bool {
-        guard let userSession else {
-            return false
-        }
-        let generation = await MainActor.run { badgeSessionGeneration }
+    @MainActor func register(with deviceToken: Data) async -> Bool {
+        guard userSession != nil else { return false }
+        let generation = badgeSessionGeneration
+        pusherDeviceToken = deviceToken
+        registeredPusher = nil
         await refreshServerBadgeSnapshot()
-        guard await MainActor.run(body: { generation == badgeSessionGeneration }) else { return false }
-        return await setPusher(with: deviceToken, clientProxy: userSession.clientProxy)
+        guard isCurrentRegistration(deviceToken: deviceToken, generation: generation) else { return false }
+        return await synchronizePusherRegistration()
     }
 
     func unregisterPusher(for userSession: UserSessionProtocol) async {
@@ -123,6 +127,11 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
         badgeRefreshTask?.cancel()
         badgeRefreshTask = nil
         badgeSessionGeneration = UUID()
+        pusherRegistrationTask?.cancel()
+        pusherRegistrationTask = nil
+        pusherRegistrationID = UUID()
+        pusherDeviceToken = nil
+        registeredPusher = nil
         let previousUserID = self.userSession?.clientProxy.userID
         self.userSession = userSession
         let userID = userSession?.clientProxy.userID
@@ -143,6 +152,7 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
         // If notification permissions were given previously then attempt re-registering
         // for remote notifications on startup. Otherwise let the onboarding flow handle it
         let expectedUserID = userID
+        let expectedGeneration = badgeSessionGeneration
         Task { [weak self] in
             guard let self else { return }
 
@@ -152,7 +162,8 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
                    authorizationStatus == .authorized,
                    appSettings.enableNotifications {
                     await MainActor.run { [weak self] in
-                        guard self?.userSession?.clientProxy.userID == expectedUserID else { return }
+                        guard self?.badgeSessionGeneration == expectedGeneration,
+                              self?.userSession?.clientProxy.userID == expectedUserID else { return }
                         self?.delegate?.registerForRemoteNotifications()
                     }
                 }
@@ -261,6 +272,7 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
 
     private func synchronizeBadgeCountWithActiveSession(shouldClearUnreconciledBadge: Bool = false) async {
         await refreshServerBadgeSnapshot()
+        await synchronizeOrderedPusherRegistration()
         guard userSession?.clientProxy.userID != nil else {
             if shouldClearUnreconciledBadge {
                 do {
@@ -329,7 +341,8 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
     }
 
     @MainActor private func refreshServerBadgeSnapshot() async {
-        guard orderedBadgeSnapshotsEnabled, let clientProxy = userSession?.clientProxy else { return }
+        guard let clientProxy = userSession?.clientProxy,
+              orderedBadgeSnapshotsEnabled || appSettings.notificationBadgeRoomLedger.serverSnapshot(for: clientProxy.userID) != nil else { return }
         if let badgeRefreshTask {
             await badgeRefreshTask.value
             return
@@ -351,8 +364,7 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
 
     func handleBackgroundBadgeSnapshot(_ payload: [AnyHashable: Any]) async -> Bool {
         let ledger = appSettings.notificationBadgeRoomLedger
-        guard orderedBadgeSnapshotsEnabled,
-              let snapshot = NotificationBadgeServerSnapshot(payload: payload),
+        guard let snapshot = NotificationBadgeServerSnapshot(payload: payload),
               ledger.serverSnapshot(for: snapshot.userID) != nil else { return false }
         _ = ledger.applyNotification(userID: snapshot.userID, roomID: nil, contributesToBadge: nil,
                                      isAuthoritative: true, serverSnapshot: snapshot, fallback: nil)
@@ -383,8 +395,50 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
         notificationCenter.removeDeliveredNotifications(withIdentifiers: [NotificationServiceExtension.receivedWhileOfflineNotificationID])
     }
 
-    private func setPusher(with deviceToken: Data, clientProxy: ClientProxyProtocol) async -> Bool {
+    @MainActor private func synchronizeOrderedPusherRegistration() async {
+        guard appSettings.enableNotifications,
+              let userID = userSession?.clientProxy.userID,
+              appSettings.notificationBadgeRoomLedger.serverSnapshot(for: userID) != nil else { return }
+        _ = await synchronizePusherRegistration()
+    }
+
+    @MainActor private func synchronizePusherRegistration() async -> Bool {
+        guard let deviceToken = pusherDeviceToken, let clientProxy = userSession?.clientProxy else { return false }
+        let generation = badgeSessionGeneration
+        // Token rotations and a late bootstrap must not finish in reverse order.
+        while let pusherRegistrationTask {
+            _ = await pusherRegistrationTask.value
+            guard isCurrentRegistration(deviceToken: deviceToken, generation: generation) else { return false }
+        }
+        let endpoint = pushGatewayEndpoint(for: clientProxy.userID)
+        if registeredPusher?.deviceToken == deviceToken, registeredPusher?.endpoint == endpoint {
+            return true
+        }
+        let requestID = UUID()
+        let task = Task {
+            let success = await setPusher(with: deviceToken, clientProxy: clientProxy, endpoint: endpoint, sessionGeneration: generation)
+            if badgeSessionGeneration == generation, pusherRegistrationID == requestID {
+                pusherRegistrationTask = nil
+                if success {
+                    registeredPusher = (deviceToken, endpoint)
+                }
+            }
+            return success
+        }
+        pusherRegistrationID = requestID
+        pusherRegistrationTask = task
+        let success = await task.value
+        return success && isCurrentRegistration(deviceToken: deviceToken, generation: generation)
+    }
+
+    @MainActor private func isCurrentRegistration(deviceToken: Data, generation: UUID) -> Bool {
+        !Task.isCancelled && badgeSessionGeneration == generation && pusherDeviceToken == deviceToken
+    }
+
+    @MainActor private func setPusher(with deviceToken: Data, clientProxy: ClientProxyProtocol,
+                                      endpoint: URL, sessionGeneration: UUID) async -> Bool {
         do {
+            guard isCurrentRegistration(deviceToken: deviceToken, generation: sessionGeneration) else { return false }
             let pushKey = deviceToken.base64EncodedString()
             let profileTag = pusherProfileTag()
             let previousPushKey = appSettings.pusherPushKey
@@ -397,14 +451,16 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
 
             let configuration = try await PusherConfiguration(identifiers: .init(pushkey: pushKey,
                                                                                  appId: appSettings.pusherAppID),
-                                                              kind: .http(data: .init(url: pushGatewayEndpoint(for: clientProxy.userID).absoluteString,
+                                                              kind: .http(data: .init(url: endpoint.absoluteString,
                                                                                       format: .eventIdOnly,
                                                                                       defaultPayload: defaultPayload.toJsonString())),
                                                               appDisplayName: "\(InfoPlistReader.main.bundleDisplayName) (iOS)",
                                                               deviceDisplayName: UIDevice.current.name,
                                                               profileTag: profileTag,
                                                               lang: Bundle.junchatPreferredLocalizations.first ?? Bundle.junchatSimplifiedChineseLocalization)
+            guard isCurrentRegistration(deviceToken: deviceToken, generation: sessionGeneration) else { return false }
             try await clientProxy.setPusher(with: configuration)
+            guard isCurrentRegistration(deviceToken: deviceToken, generation: sessionGeneration) else { return false }
             appSettings.pusherPushKey = pushKey
 
             if let previousPushKey,
@@ -418,6 +474,7 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
                 }
             }
 
+            guard isCurrentRegistration(deviceToken: deviceToken, generation: sessionGeneration) else { return false }
             do {
                 try await clientProxy.deleteSupersededPushers(appID: appSettings.pusherAppID,
                                                               pushKey: pushKey,
@@ -426,6 +483,7 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
                 MXLog.error("Failed deleting superseded installation pushers: \(error)")
             }
 
+            guard isCurrentRegistration(deviceToken: deviceToken, generation: sessionGeneration) else { return false }
             MXLog.info("Set pusher succeeded")
             return true
         } catch {
@@ -450,10 +508,10 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
 
     private func pushGatewayEndpoint(for userID: String) -> URL {
         let url = appSettings.pushGatewayNotifyEndpoint
-        guard orderedBadgeSnapshotsEnabled,
-              appSettings.notificationBadgeRoomLedger.serverSnapshot(for: userID) != nil,
+        guard appSettings.notificationBadgeRoomLedger.serverSnapshot(for: userID) != nil,
               var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
-        var query = (components.queryItems ?? []).filter { $0.name != "junchat-badge-order" }
+        var query = (components.queryItems ?? []).filter { !["junchat-badge", "junchat-badge-order"].contains($0.name) }
+        query.append(.init(name: "junchat-badge", value: "messages-v1"))
         query.append(.init(name: "junchat-badge-order", value: "state-v1"))
         components.queryItems = query
         return components.url ?? url

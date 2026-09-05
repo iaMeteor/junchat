@@ -103,6 +103,144 @@ final class NotificationManagerTests {
         #expect(query.contains(.init(name: "junchat-badge-order", value: "state-v1")))
         #expect(appSettings.notificationBadgeRoomLedger.snapshot(for: clientProxy.userID)?.count == 4)
     }
+
+    @Test
+    func foregroundRefreshUpgradesLegacyRegistrationAfterBootstrapFailure() async throws {
+        await configureOrderedManager()
+        #expect(await notificationManager.register(with: Data("device-token".utf8)))
+        #expect(try lastRegisteredGateway() == appSettings.pushGatewayNotifyEndpoint.absoluteString)
+
+        clientProxy.junchatBadgeSnapshotReturnValue = try serverSnapshot()
+        await notificationManager.synchronizeBadgeCount()
+        #expect(try lastRegisteredGateway().contains("junchat-badge-order=state-v1"))
+        #expect(clientProxy.setPusherWithCallsCount == 2)
+
+        await notificationManager.synchronizeBadgeCount()
+        #expect(clientProxy.setPusherWithCallsCount == 2)
+    }
+
+    @Test
+    func failedOrderedRegistrationRetriesWithoutResettingTheBadgePin() async throws {
+        enum Failure: Error { case unavailable }
+        await configureOrderedManager()
+        #expect(await notificationManager.register(with: Data("device-token".utf8)))
+        clientProxy.junchatBadgeSnapshotReturnValue = try serverSnapshot()
+        clientProxy.setPusherWithClosure = { _ in throw Failure.unavailable }
+        await notificationManager.synchronizeBadgeCount()
+        #expect(clientProxy.setPusherWithCallsCount == 2)
+        #expect(appSettings.notificationBadgeRoomLedger.serverSnapshot(for: clientProxy.userID)?.total == 4)
+
+        clientProxy.setPusherWithClosure = nil
+        clientProxy.junchatBadgeSnapshotReturnValue = nil
+        await notificationManager.synchronizeBadgeCount()
+        #expect(clientProxy.setPusherWithCallsCount == 3)
+        #expect(try lastRegisteredGateway().contains("junchat-badge-order=state-v1"))
+        #expect(notificationCenter.setBadgeCountReceivedCount == 4)
+    }
+
+    @Test
+    func persistedPinKeepsOrderedTransportAndRefreshWhenRolloutFlagIsOff() async throws {
+        let ledger = appSettings.notificationBadgeRoomLedger
+        _ = try ledger.reconcileServerSnapshot(serverSnapshot(), expectedGeneration: nil)
+        clientProxy.junchatBadgeSnapshotReturnValue = try serverSnapshot(revision: "2", total: 3)
+        #expect(await notificationManager.register(with: Data("device-token".utf8)))
+        #expect(clientProxy.junchatBadgeSnapshotCalled)
+        #expect(try lastRegisteredGateway().contains("junchat-badge-order=state-v1"))
+        #expect(ledger.serverSnapshot(for: clientProxy.userID)?.total == 3)
+    }
+
+    @Test
+    func oldPusherCompletionDoesNotOverwriteReplacementSessionOrCleanItsPushers() async throws {
+        var releaseRegistration: CheckedContinuation<Void, Never>?
+        let manager = try #require(notificationManager)
+        let registration = Task { await manager.register(with: Data("old-token".utf8)) }
+        await waitForConfirmation("old registration should start", timeout: .seconds(10)) { confirm in
+            clientProxy.setPusherWithClosure = { _ in
+                confirm()
+                await withCheckedContinuation { releaseRegistration = $0 }
+            }
+        }
+        let newClient = ClientProxyMock(.init(userID: clientProxy.userID))
+        notificationManager.setUserSession(UserSessionMock(.init(clientProxy: newClient)))
+        #expect(await notificationManager.register(with: Data("new-token".utf8)))
+        releaseRegistration?.resume()
+        #expect(await registration.value == false)
+        #expect(appSettings.pusherPushKey == Data("new-token".utf8).base64EncodedString())
+        #expect(!clientProxy.deletePusherIdentifiersCalled)
+        #expect(clientProxy.deleteSupersededPushersAppIDPushKeyProfileTagCallsCount == 0)
+    }
+
+    @Test
+    func foregroundRefreshDoesNotReuseDeviceTokenFromPreviousSession() async throws {
+        await configureOrderedManager()
+        #expect(await notificationManager.register(with: Data("old-token".utf8)))
+        let newClient = ClientProxyMock(.init(userID: "@replacement:user.net"))
+        newClient.junchatBadgeSnapshotReturnValue = try serverSnapshot(userID: newClient.userID)
+        notificationManager.setUserSession(UserSessionMock(.init(clientProxy: newClient)))
+        await notificationManager.synchronizeBadgeCount()
+        #expect(!newClient.setPusherWithCalled)
+    }
+
+    @Test
+    func overlappingTokenRotationSerializesRequestsAndKeepsTheNewestKey() async throws {
+        await configureOrderedManager()
+        var releaseRegistration: CheckedContinuation<Void, Never>?
+        let manager = try #require(notificationManager)
+        let first = Task { await manager.register(with: Data("old-token".utf8)) }
+        await waitForConfirmation("first registration should start", timeout: .seconds(10)) { confirm in
+            clientProxy.setPusherWithClosure = { _ in
+                confirm()
+                await withCheckedContinuation { releaseRegistration = $0 }
+            }
+        }
+        var second: Task<Bool, Never>?
+        await waitForConfirmation("second registration should refresh", timeout: .seconds(10)) { confirm in
+            clientProxy.junchatBadgeSnapshotClosure = {
+                confirm()
+                return nil
+            }
+            second = Task { await manager.register(with: Data("new-token".utf8)) }
+        }
+        #expect(clientProxy.setPusherWithCallsCount == 1)
+        clientProxy.setPusherWithClosure = nil
+        releaseRegistration?.resume()
+        #expect(await first.value == false)
+        #expect(await second?.value == true)
+        #expect(clientProxy.setPusherWithCallsCount == 2)
+        #expect(appSettings.pusherPushKey == Data("new-token".utf8).base64EncodedString())
+    }
+
+    @Test
+    func persistedPinAcceptsBackgroundUpdatesWhenRolloutFlagIsOff() async throws {
+        _ = try appSettings.notificationBadgeRoomLedger.reconcileServerSnapshot(serverSnapshot(), expectedGeneration: nil)
+        #expect(await notificationManager.handleBackgroundBadgeSnapshot([
+            "badge_total": 2, "junchat_badge_state": ["user_id": clientProxy.userID,
+                                                      "generation": "16a85460-6ed5-4cf9-ae72-f53689a2f831", "revision": "2"]
+        ]))
+        #expect(notificationCenter.setBadgeCountReceivedCount == 2)
+    }
+
+    private func configureOrderedManager() async {
+        notificationManager = NotificationManager(notificationCenter: notificationCenter,
+                                                  appSettings: appSettings, orderedBadgeSnapshotsEnabled: true)
+        notificationManager.setUserSession(mockUserSession)
+        await notificationManager.synchronizeBadgeCount()
+    }
+
+    private func serverSnapshot(userID: String? = nil, revision: String = "1", total: Int = 4) throws -> NotificationBadgeServerSnapshot {
+        try #require(NotificationBadgeServerSnapshot(payload: [
+            "badge_total": total, "junchat_badge_state": ["user_id": userID ?? clientProxy.userID,
+                                                          "generation": "16a85460-6ed5-4cf9-ae72-f53689a2f831", "revision": revision]
+        ]))
+    }
+
+    private func lastRegisteredGateway() throws -> String {
+        let configuration = try #require(clientProxy.setPusherWithReceivedConfiguration)
+        guard case .http(let data) = configuration.kind else {
+            throw NSError(domain: "NotificationManagerTests", code: 1)
+        }
+        return data.url
+    }
     
     @Test
     func whenRegisteredSuccess_completionSuccessIsCalled() async {
