@@ -2,6 +2,13 @@
 
 JunChat fork release notes are recorded here. Upstream history remains in `CHANGES.md`.
 
+## 2.0.0 (2026-09-05)
+
+- Keeps the outgoing waiting tone stopped after the call connects.
+- Applies ringtone changes after the current call ends without interrupting audio.
+- Recovers missing conversation summaries without crashing or clearing unread state.
+- Adds guarded badge and room-membership reconciliation support. New server-dependent activation remains disabled until deployment and device acceptance pass.
+
 ## 1.9.9 (2026-08-31)
 
 - Starts group calls with audio only and lets each participant enable video when needed.
