@@ -87,7 +87,12 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
     private var incomingCallGeneration = UUID()
     private var reportedIncomingCallKitIDs = Set<UUID>()
     private var callRingtoneCancellable: AnyCancellable?
-    private var acceptedIncomingCallID: CallID?
+    private var pendingRingtoneSoundName: String?
+    private var ringtoneUpdateTask: Task<Void, Never>?
+    private var acceptedIncomingCallID: CallID? {
+        didSet { schedulePendingRingtoneUpdate() }
+    }
+
     private var incomingCallID: CallID? {
         didSet {
             if let oldValue,
@@ -111,6 +116,7 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
             incomingCallRoomIDSubject.send(incomingCallID?.roomID)
             incomingCallIdentitySubject.send(incomingCallID?.incomingCallIdentity)
             restartIncomingCallObservation()
+            schedulePendingRingtoneUpdate()
         }
     }
 
@@ -119,8 +125,14 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
     private var answerCallHandoffIdentity: IncomingCallIdentity?
     private var callProviderAudioSessionDeactivationGeneration = UUID()
     private var callProviderAudioSessionDeactivationWaiter: CallProviderAudioSessionDeactivationWaiter?
-    private var activeCallKitIDs = Set<UUID>()
-    private var locallyEndingCallKitIDs = Set<UUID>()
+    private var activeCallKitIDs = Set<UUID>() {
+        didSet { schedulePendingRingtoneUpdate() }
+    }
+
+    private var locallyEndingCallKitIDs = Set<UUID>() {
+        didSet { schedulePendingRingtoneUpdate() }
+    }
+
     private var latestCallSessionGeneration: ElementCallSessionGeneration?
     private var ongoingCallSessionGeneration: ElementCallSessionGeneration?
 
@@ -128,6 +140,7 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
         didSet {
             MXLog.info("[JunchatCall] ongoingCallID changed present=\(ongoingCallID != nil) voice=\(ongoingCallID?.isVoiceCall.description ?? "nil")")
             ongoingCallRoomIDSubject.send(ongoingCallID?.roomID)
+            schedulePendingRingtoneUpdate()
         }
     }
 
@@ -189,14 +202,12 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
 
         self.callProvider.setDelegate(self, queue: nil)
 
-        if callProvider == nil {
-            callRingtoneCancellable = appSettings?.$callRingtoneSoundName
-                .removeDuplicates()
-                .dropFirst()
-                .sink { [weak self] ringtoneSoundName in
-                    self?.updateCallProvider(ringtoneSoundName: ringtoneSoundName)
-                }
-        }
+        callRingtoneCancellable = appSettings?.$callRingtoneSoundName
+            .removeDuplicates()
+            .dropFirst()
+            .sink { [weak self] ringtoneSoundName in
+                self?.updateCallProvider(ringtoneSoundName: ringtoneSoundName)
+            }
     }
 
     static func makeProviderConfiguration(ringtoneSoundName: String) -> CXProviderConfiguration {
@@ -573,6 +584,7 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
         answerCallTask = nil
         task?.cancel()
         resumeCallProviderAudioSessionDeactivationWaiter(result: false)
+        schedulePendingRingtoneUpdate()
     }
 
     private func waitForCallProviderAudioSessionDeactivation(after generation: UUID) async -> Bool {
@@ -614,6 +626,7 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
         callProviderAudioSessionDeactivationWaiter = nil
         waiter.timeoutTask.cancel()
         waiter.continuation.resume(returning: result)
+        schedulePendingRingtoneUpdate()
     }
 
     func provider(_ provider: CXProvider, perform action: CXSetMutedCallAction) {
@@ -805,13 +818,31 @@ class ElementCallService: NSObject, ElementCallServiceProtocol, @preconcurrency 
     }
 
     private func updateCallProvider(ringtoneSoundName: String) {
-        guard incomingCallID == nil, ongoingCallID == nil else {
-            MXLog.info("Delaying CallKit ringtone update until calls are idle.")
-            return
-        }
+        pendingRingtoneSoundName = ringtoneSoundName
+        applyPendingRingtoneUpdate()
+    }
 
-        callProvider = CXProvider(configuration: Self.makeProviderConfiguration(ringtoneSoundName: ringtoneSoundName))
-        callProvider.setDelegate(self, queue: nil)
+    private func schedulePendingRingtoneUpdate() {
+        guard pendingRingtoneSoundName != nil, ringtoneUpdateTask == nil else { return }
+        // Observe the settled state, not the temporary gap during an answer handoff.
+        ringtoneUpdateTask = Task { [weak self] in
+            guard let self else { return }
+            ringtoneUpdateTask = nil
+            applyPendingRingtoneUpdate()
+        }
+    }
+
+    private func applyPendingRingtoneUpdate() {
+        guard let pendingRingtoneSoundName,
+              incomingCallID == nil,
+              ongoingCallID == nil,
+              acceptedIncomingCallID == nil,
+              activeCallKitIDs.isEmpty,
+              locallyEndingCallKitIDs.isEmpty,
+              !hasPendingAnswerCallHandoff else { return }
+
+        callProvider.configuration = Self.makeProviderConfiguration(ringtoneSoundName: pendingRingtoneSoundName)
+        self.pendingRingtoneSoundName = nil
     }
 
     private func observeIncomingCall(incomingCallIdentity: IncomingCallIdentity, requestID: UUID) async {

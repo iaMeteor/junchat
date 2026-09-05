@@ -2377,6 +2377,11 @@ class CLLocationManagerMock: CLLocationManagerProtocol, @unchecked Sendable {
     }
 }
 class CXProviderMock: CXProviderProtocol, @unchecked Sendable {
+    var configuration: CXProviderConfiguration {
+        get { return underlyingConfiguration }
+        set(value) { underlyingConfiguration = value }
+    }
+    var underlyingConfiguration: CXProviderConfiguration!
 
     //MARK: - setDelegate
 

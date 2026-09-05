@@ -9,6 +9,7 @@ import CallKit
 
 // sourcery: AutoMockable
 protocol CXProviderProtocol {
+    var configuration: CXProviderConfiguration { get set }
     func setDelegate(_ delegate: CXProviderDelegate?, queue: DispatchQueue?)
     func reportNewIncomingCall(with uuid: UUID, update: CXCallUpdate, completion: @escaping @Sendable (Error?) -> Void)
     func reportOutgoingCall(with uuid: UUID, startedConnectingAt dateStartedConnecting: Date?)

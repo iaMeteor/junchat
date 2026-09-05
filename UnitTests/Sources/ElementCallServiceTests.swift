@@ -1105,6 +1105,104 @@ final class ElementCallServiceTests {
     }
 }
 
+extension ElementCallServiceTests {
+    @Test
+    func idleRingtoneChangeUpdatesTheExistingProvider() {
+        let settings = configureRingtoneSettings()
+        defer { AppSettings.resetAllSettings() }
+
+        settings.callRingtoneSoundName = JunchatCallRingtone.brightChime.rawValue
+
+        #expect(callProvider.configuration.ringtoneSound == JunchatCallRingtone.brightChime.soundName)
+        #expect(callProvider.setDelegateQueueCallsCount == 2)
+    }
+
+    @Test
+    func activeCallKeepsItsRingtoneAndAppliesTheLatestChoiceWhenEnded() async {
+        let settings = configureRingtoneSettings()
+        defer { AppSettings.resetAllSettings() }
+        let generation = ElementCallSessionGeneration()
+        service.registerCallSession(generation: generation)
+        await service.setupCallSession(roomID: "!outgoing:example.com",
+                                       roomDisplayName: "Call",
+                                       isVoiceCall: true,
+                                       incomingCallIdentity: nil,
+                                       generation: generation)
+
+        settings.callRingtoneSoundName = JunchatCallRingtone.brightChime.rawValue
+        settings.callRingtoneSoundName = JunchatCallRingtone.softBell.rawValue
+        #expect(callProvider.configuration.ringtoneSound == JunchatCallRingtone.classic.soundName)
+
+        service.tearDownCallSession(generation: generation)
+        await waitUntil { callProvider.configuration.ringtoneSound == JunchatCallRingtone.softBell.soundName }
+        #expect(callProvider.setDelegateQueueCallsCount == 2)
+    }
+
+    @Test
+    func acceptedIncomingHandoffKeepsRingtonePendingUntilCancelled() async throws {
+        let settings = configureRingtoneSettings()
+        defer { AppSettings.resetAllSettings() }
+        let identity = try #require(await service.acceptIncomingCall(roomID: "!incoming:example.com",
+                                                                     isVoiceCall: true,
+                                                                     incomingCallIdentity: nil))
+
+        settings.callRingtoneSoundName = JunchatCallRingtone.softBell.rawValue
+        #expect(callProvider.configuration.ringtoneSound == JunchatCallRingtone.classic.soundName)
+
+        service.clearAcceptedIncomingCall(incomingCallIdentity: identity)
+        await waitUntil { callProvider.configuration.ringtoneSound == JunchatCallRingtone.softBell.soundName }
+    }
+
+    private func configureRingtoneSettings() -> AppSettings {
+        AppSettings.resetAllSettings()
+        let settings = AppSettings()
+        let dateProvider: () -> Date = { self.currentDate }
+        service = ElementCallService(callProvider: callProvider,
+                                     callController: callController,
+                                     timeProvider: TimeProvider(clock: testClock, now: dateProvider),
+                                     appSettings: settings,
+                                     ignoresCallKitEndActions: false,
+                                     fulfillCallKitAction: callKitActionRecorder.fulfill)
+        return settings
+    }
+
+    @Test
+    func ringingCallDefersSystemRingtoneUntilDeclined() async {
+        let settings = configureRingtoneSettings()
+        defer { AppSettings.resetAllSettings() }
+        await receiveIncomingPush(PKPushPayloadMock().updatingExpiration(currentDate, lifetime: 30))
+
+        settings.callRingtoneSoundName = JunchatCallRingtone.systemDefault.rawValue
+        #expect(callProvider.configuration.ringtoneSound == JunchatCallRingtone.classic.soundName)
+
+        await service.declineIncomingCall(roomID: "!room:example.com")
+        await waitUntil { callProvider.configuration.ringtoneSound == nil }
+        #expect(callProvider.setDelegateQueueCallsCount == 2)
+    }
+
+    @Test
+    func acceptedHandoffToOngoingCallDoesNotApplyRingtoneInBetween() async throws {
+        let settings = configureRingtoneSettings()
+        defer { AppSettings.resetAllSettings() }
+        let identity = try #require(await service.acceptIncomingCall(roomID: "!incoming:example.com",
+                                                                     isVoiceCall: true,
+                                                                     incomingCallIdentity: nil))
+        settings.callRingtoneSoundName = JunchatCallRingtone.softBell.rawValue
+        let generation = ElementCallSessionGeneration()
+        service.registerCallSession(generation: generation)
+        await service.setupCallSession(roomID: identity.roomID,
+                                       roomDisplayName: "Incoming",
+                                       isVoiceCall: true,
+                                       incomingCallIdentity: identity,
+                                       generation: generation)
+        await Task.yield()
+        #expect(callProvider.configuration.ringtoneSound == JunchatCallRingtone.classic.soundName)
+
+        service.tearDownCallSession(generation: generation)
+        await waitUntil { callProvider.configuration.ringtoneSound == JunchatCallRingtone.softBell.soundName }
+    }
+}
+
 private class PKPushPayloadMock: PKPushPayload {
     var dict: [AnyHashable: Any] = [:]
     
