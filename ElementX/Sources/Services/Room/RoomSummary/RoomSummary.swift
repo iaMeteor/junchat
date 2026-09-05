@@ -63,6 +63,7 @@ struct RoomSummary {
     let isMarkedUnread: Bool
     let isFavourite: Bool
     let isTombstoned: Bool
+    var hasLoadedDetails = true
 
     init(room: Room,
          id: String,
@@ -170,6 +171,37 @@ extension RoomSummary: CustomStringConvertible {
 }
 
 extension RoomSummary {
+    static func unavailable(room: Room, previous: RoomSummary?) -> RoomSummary {
+        // Retain known metadata and SDK position, but never show a possibly
+        // destroyed cached preview or treat an unknown unread count as zero.
+        var summary = RoomSummary(room: room,
+                                  id: room.id(),
+                                  joinRequestType: previous?.joinRequestType,
+                                  name: previous?.name ?? room.id(),
+                                  isDirect: previous?.isDirect ?? false,
+                                  isSpace: previous?.isSpace ?? false,
+                                  avatarURL: previous?.avatarURL,
+                                  heroes: previous?.heroes ?? [],
+                                  activeMembersCount: previous?.activeMembersCount ?? 0,
+                                  lastMessage: nil,
+                                  lastMessageDate: nil,
+                                  lastMessageState: nil,
+                                  unreadMessagesCount: previous?.unreadMessagesCount ?? 0,
+                                  unreadMentionsCount: previous?.unreadMentionsCount ?? 0,
+                                  unreadNotificationsCount: previous?.unreadNotificationsCount ?? 0,
+                                  notificationMode: previous?.notificationMode,
+                                  canonicalAlias: previous?.canonicalAlias,
+                                  alternativeAliases: previous?.alternativeAliases ?? [],
+                                  hasOngoingCall: previous?.hasOngoingCall ?? false,
+                                  activeCallIntent: previous?.activeCallIntent,
+                                  activeRoomCallParticipants: previous?.activeRoomCallParticipants ?? [],
+                                  isMarkedUnread: previous?.isMarkedUnread ?? false,
+                                  isFavourite: previous?.isFavourite ?? false,
+                                  isTombstoned: previous?.isTombstoned ?? false)
+        summary.hasLoadedDetails = false
+        return summary
+    }
+
     init(room: Room, id: String, settingsMode: RoomNotificationModeProxy, hasUnreadMessages: Bool, hasUnreadMentions: Bool, hasUnreadNotifications: Bool) {
         self.room = room
         self.id = id

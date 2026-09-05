@@ -269,6 +269,19 @@ final class NotificationManagerTests {
     }
 
     @Test
+    func unavailableRoomDetailsCannotClearBadgeOrDeliveredNotifications() async {
+        await notificationManager.removeDeliveredNotificationsForFullyReadRooms([
+            roomSummary(id: "1", hasUnreadMessages: true, unreadNotificationsCount: 4)
+        ], userID: clientProxy.userID)
+        let removals = notificationCenter.removeDeliveredNotificationsWithIdentifiersCallsCount
+        var unavailable = roomSummary(id: "1", hasUnreadMessages: false)
+        unavailable.hasLoadedDetails = false
+        await notificationManager.removeDeliveredNotificationsForFullyReadRooms([unavailable], userID: clientProxy.userID)
+        #expect(notificationCenter.setBadgeCountReceivedCount == 4)
+        #expect(notificationCenter.removeDeliveredNotificationsWithIdentifiersCallsCount == removals)
+    }
+
+    @Test
     func whenRemovingNotificationsForFullyReadRoomsAndAnInviteIsPending_badgeIncludesTheInvite() async {
         await notificationManager.removeDeliveredNotificationsForFullyReadRooms([
             roomSummary(id: "1", hasUnreadMessages: false),

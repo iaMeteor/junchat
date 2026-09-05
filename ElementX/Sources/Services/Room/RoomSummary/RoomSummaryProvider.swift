@@ -20,8 +20,12 @@ class RoomSummaryProvider: RoomSummaryProviderProtocol {
     private let appSettings: AppSettings
 
     private let roomListPageSize: UInt32
+    private let roomDetailsTimeout: Duration
     
     private let serialDispatchQueue: DispatchQueue
+    private var updateTask: Task<Void, Never>?
+    private var retryWorkItem: DispatchWorkItem?
+    private var retryCount = 0
     
     private let visibleItemRangePublisher = CurrentValueSubject<Range<Int>, Never>(0..<0)
     
@@ -63,7 +67,8 @@ class RoomSummaryProvider: RoomSummaryProviderProtocol {
          shouldUpdateVisibleRange: Bool = false,
          roomListPageSize: UInt32 = 100,
          notificationSettings: NotificationSettingsProxyProtocol,
-         appSettings: AppSettings) {
+         appSettings: AppSettings,
+         roomDetailsTimeout: Duration = .seconds(10)) {
         self.roomListService = roomListService
         serialDispatchQueue = DispatchQueue(label: "io.element.elementx.room_summary_provider", qos: .default)
         self.eventStringBuilder = eventStringBuilder
@@ -72,10 +77,13 @@ class RoomSummaryProvider: RoomSummaryProviderProtocol {
         self.notificationSettings = notificationSettings
         self.appSettings = appSettings
         self.roomListPageSize = roomListPageSize
+        self.roomDetailsTimeout = roomDetailsTimeout
         
         diffsPublisher
             .receive(on: serialDispatchQueue)
-            .sink { [weak self] in self?.updateRoomsWithDiffs($0) }
+            .sink { [weak self] diffs in
+                self?.enqueueUpdate { await $0.updateRoomsWithDiffs(diffs) }
+            }
             .store(in: &cancellables)
         
         setupVisibleRangeObservers()
@@ -126,7 +134,11 @@ class RoomSummaryProvider: RoomSummaryProviderProtocol {
 
     func refreshRoomSummaries() {
         serialDispatchQueue.async { [weak self] in
-            self?.rebuildRoomSummaries()
+            guard let self else { return }
+            retryWorkItem?.cancel()
+            retryWorkItem = nil
+            retryCount = 0
+            enqueueUpdate { await $0.rebuildRoomSummaries() }
         }
     }
     
@@ -167,6 +179,39 @@ class RoomSummaryProvider: RoomSummaryProviderProtocol {
     }
     
     // MARK: - Private
+
+    /// Enqueued on serialDispatchQueue; async SDK work remains ordered without
+    /// blocking a thread or dropping slots when one room cannot be read.
+    private func enqueueUpdate(_ operation: @escaping (RoomSummaryProvider) async -> Void) {
+        let previousTask = updateTask
+        updateTask = Task { [weak self] in
+            await previousTask?.value
+            guard !Task.isCancelled, let self else { return }
+            await operation(self)
+        }
+    }
+
+    private func scheduleRetryIfNeeded() {
+        let needsRetry = rooms.contains { !$0.hasLoadedDetails }
+        serialDispatchQueue.async { [weak self] in
+            guard let self else { return }
+            guard needsRetry else {
+                retryWorkItem?.cancel()
+                retryWorkItem = nil
+                retryCount = 0
+                return
+            }
+            guard retryWorkItem == nil, retryCount < 3 else { return }
+            retryCount += 1
+            let retry = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                retryWorkItem = nil
+                enqueueUpdate { await $0.rebuildRoomSummaries() }
+            }
+            retryWorkItem = retry
+            serialDispatchQueue.asyncAfter(deadline: .now() + pow(2, Double(retryCount)), execute: retry)
+        }
+    }
     
     private func setupVisibleRangeObservers() {
         visibleItemRangePublisher
@@ -177,7 +222,7 @@ class RoomSummaryProvider: RoomSummaryProviderProtocol {
                 
                 MXLog.info("\(self.name): Updating visible range: \(range)")
                 
-                if range.upperBound >= rooms.count {
+                if range.upperBound >= roomListPublisher.value.count {
                     listUpdatesSubscriptionResult?.controller().addOnePage()
                 } else if range.lowerBound == 0 {
                     listUpdatesSubscriptionResult?.controller().resetToOnePage()
@@ -202,9 +247,10 @@ class RoomSummaryProvider: RoomSummaryProviderProtocol {
                     range = range.lowerBound..<upperBound
                 }
                 
+                let currentRooms = roomListPublisher.value
                 return range
-                    .filter { $0 < self.rooms.count }
-                    .map { self.rooms[$0].id }
+                    .filter { currentRooms.indices.contains($0) }
+                    .map { currentRooms[$0].id }
             }
             .removeDuplicates()
             .sink { [weak self] roomIDs in
@@ -221,96 +267,87 @@ class RoomSummaryProvider: RoomSummaryProviderProtocol {
             .store(in: &cancellables)
     }
     
-    fileprivate func updateRoomsWithDiffs(_ diffs: [RoomListEntriesUpdate]) {
+    private func updateRoomsWithDiffs(_ diffs: [RoomListEntriesUpdate]) async {
         let span = MXLog.createSpan("\(name).process_room_list_diffs")
         span.enter()
         defer {
             span.exit()
         }
         
-        rooms = diffs.reduce(rooms) { currentItems, diff in
-            processDiff(diff, on: currentItems)
+        var updatedRooms = rooms
+        for diff in diffs {
+            updatedRooms = await processDiff(diff, on: updatedRooms)
         }
+        rooms = updatedRooms
+        scheduleRetryIfNeeded()
     }
     
-    private func processDiff(_ diff: RoomListEntriesUpdate, on currentItems: [RoomSummary]) -> [RoomSummary] {
-        guard let collectionDiff = buildDiff(from: diff, on: currentItems) else {
-            MXLog.error("\(name): Failed building CollectionDifference from \(diff)")
+    private func processDiff(_ diff: RoomListEntriesUpdate, on currentItems: [RoomSummary]) async -> [RoomSummary] {
+        guard let collectionDiff = await buildDiff(from: diff, on: currentItems) else {
+            MXLog.error("\(name): Invalid room list diff; preserving existing summaries")
             return currentItems
         }
         
         guard let updatedItems = currentItems.applying(collectionDiff) else {
-            MXLog.error("\(name): Failed applying diff: \(collectionDiff)")
+            MXLog.error("\(name): Failed applying room list diff; preserving existing summaries")
             return currentItems
         }
         
         return updatedItems
     }
 
-    private func fetchRoomDetails(from room: Room) -> (roomInfo: RoomInfo?, latestEvent: LatestEventValue?) {
-        class FetchResult {
-            var roomInfo: RoomInfo?
-            var latestEvent: LatestEventValue?
+    private func fetchRoomDetails(from room: Room) async -> (roomInfo: RoomInfo, latestEvent: LatestEventValue)? {
+        let runner = ExpiringTaskRunner {
+            let latestEvent = await room.latestEvent()
+            return try await (room.roomInfo(), latestEvent)
         }
-        
-        let semaphore = DispatchSemaphore(value: 0)
-        let result = FetchResult()
-        
-        Task {
-            do {
-                result.latestEvent = await room.latestEvent()
-                result.roomInfo = try await room.roomInfo()
-            } catch {
-                MXLog.error("Failed fetching room info with error: \(error)")
-            }
-            semaphore.signal()
+        do {
+            return try await runner.run(timeout: roomDetailsTimeout)
+        } catch {
+            MXLog.error("\(name): Room details unavailable for \(room.id()); retry on the next refresh")
+            return nil
         }
-        semaphore.wait()
-        return (result.roomInfo, result.latestEvent)
     }
     
-    private func buildRoomSummary(from room: Room) -> RoomSummary {
-        let roomDetails = fetchRoomDetails(from: room)
-        
-        guard let roomInfo = roomDetails.roomInfo else {
-            fatalError("Missing room info for \(room.id())")
+    private func buildRoomSummary(from room: Room, previous: RoomSummary? = nil) async -> RoomSummary {
+        guard let roomDetails = await fetchRoomDetails(from: room) else {
+            return .unavailable(room: room, previous: previous)
         }
+        let roomInfo = roomDetails.roomInfo
         
         var attributedLastMessage: AttributedString?
         var lastMessageDate: Date?
         var lastMessageState: RoomSummary.LastMessageState?
         
-        if let latestRoomMessage = roomDetails.latestEvent {
-            switch latestRoomMessage {
-            case .local(let timestamp, let senderID, let profile, let content, let state):
-                let sender = TimelineItemSender(senderID: senderID, senderProfile: profile)
-                attributedLastMessage = eventStringBuilder.buildAttributedString(for: content, sender: sender, isOutgoing: true)
-                lastMessageDate = Date(timeIntervalSince1970: TimeInterval(timestamp / 1000))
+        switch roomDetails.latestEvent {
+        case .local(let timestamp, let senderID, let profile, let content, let state):
+            let sender = TimelineItemSender(senderID: senderID, senderProfile: profile)
+            attributedLastMessage = eventStringBuilder.buildAttributedString(for: content, sender: sender, isOutgoing: true)
+            lastMessageDate = Date(timeIntervalSince1970: TimeInterval(timestamp / 1000))
                 
-                switch state {
-                case .isSending:
-                    lastMessageState = .sending
-                case .cannotBeSent:
-                    lastMessageState = .failed
-                case .hasBeenSent:
-                    lastMessageState = nil
-                }
-            case .remote(let timestamp, let senderID, let isOwn, let profile, let content):
-                let sender = TimelineItemSender(senderID: senderID, senderProfile: profile)
-                attributedLastMessage = eventStringBuilder.buildAttributedString(for: content, sender: sender, isOutgoing: isOwn)
-                lastMessageDate = Date(timeIntervalSince1970: TimeInterval(timestamp / 1000))
-            case .remoteInvite(let timestamp, let senderID, let profile):
-                lastMessageDate = Date(timeIntervalSince1970: TimeInterval(timestamp / 1000))
-                
-                if let senderID {
-                    let sender = TimelineItemSender(senderID: senderID, senderProfile: profile)
-                    let senderDisplayName = sender.displayName ?? sender.id
-                    let invitedYouString = eventStringBuilder.stateEventStringBuilder.buildInvitedYouString(senderDisplayName)
-                    attributedLastMessage = AttributedString(invitedYouString)
-                }
-            case .none:
-                break
+            switch state {
+            case .isSending:
+                lastMessageState = .sending
+            case .cannotBeSent:
+                lastMessageState = .failed
+            case .hasBeenSent:
+                lastMessageState = nil
             }
+        case .remote(let timestamp, let senderID, let isOwn, let profile, let content):
+            let sender = TimelineItemSender(senderID: senderID, senderProfile: profile)
+            attributedLastMessage = eventStringBuilder.buildAttributedString(for: content, sender: sender, isOutgoing: isOwn)
+            lastMessageDate = Date(timeIntervalSince1970: TimeInterval(timestamp / 1000))
+        case .remoteInvite(let timestamp, let senderID, let profile):
+            lastMessageDate = Date(timeIntervalSince1970: TimeInterval(timestamp / 1000))
+                
+            if let senderID {
+                let sender = TimelineItemSender(senderID: senderID, senderProfile: profile)
+                let senderDisplayName = sender.displayName ?? sender.id
+                let invitedYouString = eventStringBuilder.stateEventStringBuilder.buildInvitedYouString(senderDisplayName)
+                attributedLastMessage = AttributedString(invitedYouString)
+            }
+        case .none:
+            break
         }
         
         var inviterProxy: RoomMemberProxyProtocol?
@@ -361,13 +398,14 @@ class RoomSummaryProvider: RoomSummaryProviderProtocol {
                            isTombstoned: roomInfo.successorRoom != nil)
     }
     
-    private func buildDiff(from diff: RoomListEntriesUpdate, on rooms: [RoomSummary]) -> CollectionDifference<RoomSummary>? {
+    private func buildDiff(from diff: RoomListEntriesUpdate, on rooms: [RoomSummary]) async -> CollectionDifference<RoomSummary>? {
+        guard isValid(diff, for: rooms) else { return nil }
         var changes = [CollectionDifference<RoomSummary>.Change]()
         
         switch diff {
         case .append(let values):
             for (index, value) in values.enumerated() {
-                let summary = buildRoomSummary(from: value)
+                let summary = await buildRoomSummary(from: value)
                 changes.append(.insert(offset: rooms.count + index, element: summary, associatedWith: nil))
             }
         case .clear:
@@ -375,22 +413,20 @@ class RoomSummaryProvider: RoomSummaryProviderProtocol {
                 changes.append(.remove(offset: index, element: value, associatedWith: nil))
             }
         case .insert(let index, let value):
-            let summary = buildRoomSummary(from: value)
+            let summary = await buildRoomSummary(from: value)
             changes.append(.insert(offset: Int(index), element: summary, associatedWith: nil))
         case .popBack:
-            guard let value = rooms.last else {
-                fatalError()
-            }
+            let value = rooms[rooms.count - 1]
             
             changes.append(.remove(offset: rooms.count - 1, element: value, associatedWith: nil))
         case .popFront:
             let summary = rooms[0]
             changes.append(.remove(offset: 0, element: summary, associatedWith: nil))
         case .pushBack(let value):
-            let summary = buildRoomSummary(from: value)
+            let summary = await buildRoomSummary(from: value)
             changes.append(.insert(offset: rooms.count, element: summary, associatedWith: nil))
         case .pushFront(let value):
-            let summary = buildRoomSummary(from: value)
+            let summary = await buildRoomSummary(from: value)
             changes.append(.insert(offset: 0, element: summary, associatedWith: nil))
         case .remove(let index):
             let summary = rooms[Int(index)]
@@ -401,11 +437,14 @@ class RoomSummaryProvider: RoomSummaryProviderProtocol {
             }
             
             for (index, value) in values.enumerated() {
-                changes.append(.insert(offset: index, element: buildRoomSummary(from: value), associatedWith: nil))
+                let previous = rooms.first { $0.id == value.id() }
+                let summary = await buildRoomSummary(from: value, previous: previous)
+                changes.append(.insert(offset: index, element: summary, associatedWith: nil))
             }
         case .set(let index, let value):
-            let summary = buildRoomSummary(from: value)
-            changes.append(.remove(offset: Int(index), element: summary, associatedWith: nil))
+            let previous = rooms[Int(index)]
+            let summary = await buildRoomSummary(from: value, previous: previous.id == value.id() ? previous : nil)
+            changes.append(.remove(offset: Int(index), element: previous, associatedWith: nil))
             changes.append(.insert(offset: Int(index), element: summary, associatedWith: nil))
         case .truncate(let length):
             for (index, value) in rooms.enumerated() {
@@ -418,6 +457,15 @@ class RoomSummaryProvider: RoomSummaryProviderProtocol {
         }
         
         return CollectionDifference(changes)
+    }
+
+    private func isValid(_ diff: RoomListEntriesUpdate, for rooms: [RoomSummary]) -> Bool {
+        switch diff {
+        case .insert(let index, _): Int(index) <= rooms.count
+        case .set(let index, _), .remove(let index): rooms.indices.contains(Int(index))
+        case .popFront, .popBack: !rooms.isEmpty
+        default: true
+        }
     }
     
     private func setupNotificationSettingsSubscription() {
@@ -434,7 +482,7 @@ class RoomSummaryProvider: RoomSummaryProviderProtocol {
             .store(in: &cancellables)
     }
     
-    private func rebuildRoomSummaries() {
+    private func rebuildRoomSummaries() async {
         let span = MXLog.createSpan("\(name).rebuild_room_summaries")
         span.enter()
         defer {
@@ -443,9 +491,12 @@ class RoomSummaryProvider: RoomSummaryProviderProtocol {
         
         MXLog.info("\(name): Rebuilding room summaries for \(rooms.count) rooms")
         
-        rooms = rooms.map {
-            self.buildRoomSummary(from: $0.room)
+        var updatedRooms = [RoomSummary]()
+        for room in rooms {
+            await updatedRooms.append(buildRoomSummary(from: room.room, previous: room))
         }
+        rooms = updatedRooms
+        scheduleRetryIfNeeded()
         
         MXLog.info("\(name): Finished rebuilding room summaries (\(rooms.count) rooms)")
     }

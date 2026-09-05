@@ -7,6 +7,7 @@
 //
 
 @testable import ElementX
+import Foundation
 import MatrixRustSDK
 import MatrixRustSDKMocks
 import Testing
@@ -92,8 +93,97 @@ final class RoomSummaryProviderTests {
     }
     
     // MARK: - Helpers
+
+    @Test
+    func unavailableRoomDetailsDoNotCrashOrLoseTheSDKListSlot() async throws {
+        setup()
+        let room = RoomSDKMock()
+        room.idReturnValue = "!unavailable:example.org"
+        room.latestEventReturnValue = .some(.none)
+        room.roomInfoClosure = { throw SummaryTestError.unavailable }
+        let listener = try #require(roomList.entriesWithDynamicAdaptersPageSizeListenerReceivedArguments?.listener)
+        let updated = deferFulfillment(roomSummaryProvider.roomListPublisher) { $0.map(\.id) == ["!unavailable:example.org"] }
+        listener.onUpdate(roomEntriesUpdate: [.append(values: [room])])
+        try await updated.fulfill()
+        #expect(roomSummaryProvider.roomListPublisher.value.first?.lastMessage == nil)
+        #expect(roomSummaryProvider.roomListPublisher.value.first?.hasLoadedDetails == false)
+        let cleared = deferFulfillment(roomSummaryProvider.roomListPublisher) { $0.isEmpty }
+        listener.onUpdate(roomEntriesUpdate: [.remove(index: 0)])
+        try await cleared.fulfill()
+    }
+
+    @Test
+    func timedOutRefreshKeepsIndicesAndCanRecoverWithoutALateOverwrite() async throws {
+        setup(roomDetailsTimeout: .milliseconds(20))
+        let slow = room(id: "!slow:example.org")
+        slow.latestEventClosure = {
+            try? await Task.sleep(for: .milliseconds(150))
+            return .none
+        }
+        let second = room(id: "!second:example.org")
+        let listener = try #require(roomList.entriesWithDynamicAdaptersPageSizeListenerReceivedArguments?.listener)
+        let both = deferFulfillment(roomSummaryProvider.roomListPublisher) { $0.count == 2 }
+        listener.onUpdate(roomEntriesUpdate: [.append(values: [slow])])
+        listener.onUpdate(roomEntriesUpdate: [.pushBack(value: second)])
+        try await both.fulfill()
+        #expect(roomSummaryProvider.roomListPublisher.value.map(\.id) == [slow.id(), second.id()])
+        #expect(roomSummaryProvider.roomListPublisher.value.map(\.hasLoadedDetails) == [false, true])
+        let replaced = deferFulfillment(roomSummaryProvider.roomListPublisher) { $0.count == 1 && $0.first?.id == second.id() }
+        listener.onUpdate(roomEntriesUpdate: [.remove(index: 0)])
+        try await replaced.fulfill()
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(roomSummaryProvider.roomListPublisher.value.map(\.id) == [second.id()])
+        let refreshed = deferFulfillment(roomSummaryProvider.roomListPublisher) { $0.first?.name == "Recovered" }
+        var info = try #require(second.roomInfoReturnValue)
+        info.displayName = "Recovered"
+        second.roomInfoReturnValue = info
+        roomSummaryProvider.refreshRoomSummaries()
+        try await refreshed.fulfill()
+    }
+
+    @Test
+    func unavailableSummaryRetainsUnreadMetadataButDropsPreview() {
+        let room = room(id: "!room:example.org")
+        let previous = RoomSummary(room: room, id: room.id(), settingsMode: .allMessages,
+                                   hasUnreadMessages: true, hasUnreadMentions: true, hasUnreadNotifications: true)
+        let summary = RoomSummary.unavailable(room: room, previous: previous)
+        #expect(summary.name == previous.name)
+        #expect(summary.hasUnreadNotifications)
+        #expect(summary.lastMessage == nil)
+        #expect(!summary.hasLoadedDetails)
+    }
+
+    @Test
+    func invalidIndicesDoNotCrashAndFollowingResetRecovers() async throws {
+        setup()
+        let listener = try #require(roomList.entriesWithDynamicAdaptersPageSizeListenerReceivedArguments?.listener)
+        let room = room(id: "!room:example.org")
+        let recovered = deferFulfillment(roomSummaryProvider.roomListPublisher) { $0.map(\.id) == [room.id()] }
+        listener.onUpdate(roomEntriesUpdate: [.popFront, .popBack, .remove(index: 3), .set(index: 4, value: room),
+                                              .insert(index: 8, value: room), .reset(values: [room])])
+        try await recovered.fulfill()
+    }
+
+    private func room(id: String) -> RoomSDKMock {
+        let room = RoomSDKMock()
+        room.idReturnValue = id
+        room.latestEventReturnValue = .some(.none)
+        room.roomInfoReturnValue = RoomInfo(id: id, encryptionState: .encrypted, creators: nil,
+                                            displayName: "Room", rawName: nil, topic: nil, avatarUrl: nil,
+                                            isDirect: true, isPublic: nil, isSpace: false, successorRoom: nil,
+                                            isFavourite: false, isLowPriority: false, canonicalAlias: nil, alternativeAliases: [],
+                                            membership: .joined, inviter: nil, heroes: [], activeMembersCount: 2,
+                                            invitedMembersCount: 0, joinedMembersCount: 2, activeServiceMembersCount: 0,
+                                            serviceMembers: [], highlightCount: 0, notificationCount: 0,
+                                            cachedUserDefinedNotificationMode: nil, hasRoomCall: false,
+                                            activeRoomCallParticipants: [], activeRoomCallConsensusIntent: .none,
+                                            isMarkedUnread: false, numUnreadMessages: 0, numUnreadNotifications: 0,
+                                            numUnreadMentions: 0, pinnedEventIds: [], joinRule: nil,
+                                            historyVisibility: .shared, powerLevels: nil, roomVersion: nil, privilegedCreatorsRole: false)
+        return room
+    }
     
-    private func setup(isLowPriorityFilterEnabled: Bool = false) {
+    private func setup(isLowPriorityFilterEnabled: Bool = false, roomDetailsTimeout: Duration = .seconds(10)) {
         AppSettings.resetAllSettings()
         appSettings = AppSettings()
         appSettings.lowPriorityFilterEnabled = isLowPriorityFilterEnabled
@@ -109,7 +199,8 @@ final class RoomSummaryProviderTests {
                                                   eventStringBuilder: eventStringBuilder,
                                                   name: "Test",
                                                   notificationSettings: NotificationSettingsProxyMock(with: .init()),
-                                                  appSettings: appSettings)
+                                                  appSettings: appSettings,
+                                                  roomDetailsTimeout: roomDetailsTimeout)
 
         dynamicEntriesController = RoomListDynamicEntriesControllerSDKMock()
         dynamicEntriesController.setFilterKindReturnValue = true
@@ -120,4 +211,8 @@ final class RoomSummaryProviderTests {
         roomList.loadingStateListenerReturnValue = .some(.init(state: .notLoaded, stateStream: .init(noHandle: .init())))
         roomSummaryProvider.setRoomList(roomList)
     }
+}
+
+private enum SummaryTestError: Error {
+    case unavailable
 }

@@ -208,6 +208,11 @@ final class NotificationManager: NSObject, NotificationManagerProtocol {
     
     func removeDeliveredNotificationsForFullyReadRooms(_ rooms: [RoomSummary], userID: String) async {
         guard userSession?.clientProxy.userID == userID else { return }
+        guard rooms.allSatisfy(\.hasLoadedDetails) else {
+            // An incomplete SDK list cannot authorize clearing notifications.
+            await synchronizeBadgeCountWithActiveSession()
+            return
+        }
 
         let roomsToLastMessageDates = rooms
             .filter { $0.hasUnreadMessages == false && $0.joinRequestType?.isInvite != true }
