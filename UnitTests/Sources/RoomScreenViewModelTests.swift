@@ -497,34 +497,9 @@ final class RoomScreenViewModelTests {
         }
     }
 
-    @Test
-    func roomFullyRead() async {
-        await waitForConfirmation("Wait for fully read") { confirm in
-            let roomProxyMock = JoinedRoomProxyMock(.init(id: "MyRoomID"))
-            roomProxyMock.markAsReadReceiptTypeClosure = { readReceiptType in
-                if readReceiptType == .fullyRead {
-                    confirm()
-                }
-                return .success(())
-            }
-            let viewModel = RoomScreenViewModel(userSession: UserSessionMock(.init()),
-                                                roomProxy: roomProxyMock,
-                                                initialSelectedPinnedEventID: nil,
-                                                ongoingCallRoomIDPublisher: .init(.init(nil)),
-                                                appSettings: ServiceLocator.shared.settings,
-                                                appHooks: AppHooks(),
-                                                analyticsService: ServiceLocator.shared.analytics,
-                                                userIndicatorController: ServiceLocator.shared.userIndicatorController)
-            self.viewModel = viewModel
-            viewModel.stop()
-        }
-    }
-
-    @Test
-    func roomExitSendsServerVisibleReadReceipt() async throws {
-        // Synapse only clears a room's notification count for m.read/m.read.private
-        // receipts, so the fully read marker alone leaves the room counted forever.
-        ServiceLocator.shared.settings.sharePresence = true
+    @Test(arguments: [true, false])
+    func roomExitDoesNotMarkUnseenEventsAsRead(sharePresence: Bool) async throws {
+        ServiceLocator.shared.settings.sharePresence = sharePresence
 
         let roomProxyMock = JoinedRoomProxyMock(.init(id: "MyRoomID"))
         roomProxyMock.markAsReadReceiptTypeReturnValue = .success(())
@@ -542,32 +517,7 @@ final class RoomScreenViewModelTests {
 
         try await Task.sleep(for: .milliseconds(100))
 
-        #expect(roomProxyMock.markAsReadReceiptTypeReceivedInvocations.contains(.read))
-        #expect(roomProxyMock.markAsReadReceiptTypeReceivedInvocations.contains(.fullyRead))
-    }
-
-    @Test
-    func roomExitSendsPrivateReadReceiptWhenNotSharingPresence() async throws {
-        ServiceLocator.shared.settings.sharePresence = false
-
-        let roomProxyMock = JoinedRoomProxyMock(.init(id: "MyRoomID"))
-        roomProxyMock.markAsReadReceiptTypeReturnValue = .success(())
-        let viewModel = RoomScreenViewModel(userSession: UserSessionMock(.init()),
-                                            roomProxy: roomProxyMock,
-                                            initialSelectedPinnedEventID: nil,
-                                            ongoingCallRoomIDPublisher: .init(.init(nil)),
-                                            appSettings: ServiceLocator.shared.settings,
-                                            appHooks: AppHooks(),
-                                            analyticsService: ServiceLocator.shared.analytics,
-                                            userIndicatorController: ServiceLocator.shared.userIndicatorController)
-        self.viewModel = viewModel
-
-        viewModel.stop()
-
-        try await Task.sleep(for: .milliseconds(100))
-
-        #expect(roomProxyMock.markAsReadReceiptTypeReceivedInvocations.contains(.readPrivate))
-        #expect(!roomProxyMock.markAsReadReceiptTypeReceivedInvocations.contains(.read))
+        #expect(roomProxyMock.markAsReadReceiptTypeReceivedInvocations.isEmpty)
     }
 
     @Test

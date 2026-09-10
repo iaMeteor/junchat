@@ -456,6 +456,8 @@ final class TimelineViewModelTests {
         ServiceLocator.shared.settings.sharePresence = sharePresence
         let roomProxy = JoinedRoomProxyMock(.init(name: ""))
         let timelineProxy = TimelineProxyMock(.init())
+        let recorder = ReadReceiptRecorder()
+        timelineProxy.sendReadReceiptForTypeClosure = { await recorder.send(eventID: $0, type: $1) }
         let timelineItemProvider = try #require(timelineProxy.timelineItemProvider as? TimelineItemProviderMock)
         timelineItemProvider.kind = .live
         timelineItemProvider.underlyingUpdatePublisher = Empty().eraseToAnyPublisher()
@@ -469,9 +471,8 @@ final class TimelineViewModelTests {
 
         await timelineController.sendReadReceipt(for: .event(uniqueID: .init("remote"), eventOrTransactionID: .eventID("event")))
 
-        let arguments = try #require(timelineProxy.sendReadReceiptForTypeReceivedArguments)
-        #expect(arguments.eventID == "event")
-        #expect(arguments.type == expectedReceiptType)
+        #expect(await recorder.eventIDs == ["event", "event"])
+        #expect(await recorder.types == [expectedReceiptType, .fullyRead])
     }
 
     @Test

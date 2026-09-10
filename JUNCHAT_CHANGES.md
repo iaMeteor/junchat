@@ -9,6 +9,12 @@ JunChat fork release notes are recorded here. Upstream history remains in `CHANG
 - Recovers missing conversation summaries without crashing or clearing unread state.
 - Adds guarded badge and room-membership reconciliation support. New server-dependent activation remains disabled until deployment and device acceptance pass.
 
+### Build 57 candidate (2026-09-10)
+
+- Sends read and fully-read markers only for messages actually observed, not unseen messages at room exit.
+- Retries transient read-receipt failures without changing the observed event or marking a replacement timeline as read.
+- Requires the coordinated Synapse privacy compatibility repair for server-owned green indicators and recipient-read plus 180-second expiry. Local tests are complete; deployment and physical-device acceptance are still required before publication.
+
 ## 1.9.9 (2026-08-31)
 
 - Starts group calls with audio only and lets each participant enable video when needed.

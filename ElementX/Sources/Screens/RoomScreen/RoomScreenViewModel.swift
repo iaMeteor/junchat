@@ -140,16 +140,6 @@ class RoomScreenViewModel: RoomScreenViewModelType, RoomScreenViewModelProtocol 
     }
 
     func stop() {
-        // When navigating away from the room, we need to mark the room as read. The fully read
-        // marker moves the unread line but the homeserver only clears a room's notification count
-        // for m.read/m.read.private receipts, so send one of those too or the room keeps counting
-        // towards the app icon badge forever. Messages that arrive while the timeline isn't
-        // visible (during a call, in the background, or scrolled away) never reach the visible
-        // item receipt in TimelineViewModel, which is what leaves rooms permanently unread.
-        Task {
-            _ = await roomProxy.markAsRead(receiptType: appSettings.sharePresence ? .read : .readPrivate)
-            _ = await roomProxy.markAsRead(receiptType: .fullyRead)
-        }
         cancelMediaPreviewForwardingHandoff()
         // Work around QLPreviewController dismissal issues, see the InteractiveQuickLookModifier.
         state.bindings.mediaPreviewViewModel = nil

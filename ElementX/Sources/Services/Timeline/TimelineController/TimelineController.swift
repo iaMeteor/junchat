@@ -18,6 +18,15 @@ class TimelineController: TimelineControllerProtocol {
     private let timelineItemFactory: RoomTimelineItemFactoryProtocol
     private let mediaProvider: MediaProviderProtocol
     private let appSettings: AppSettings
+    private let readReceiptRetryClock: any Clock<Duration>
+
+    private struct ReadReceiptRequest: Hashable {
+        let providerGeneration: UInt
+        let eventID: String
+        let isPublic: Bool
+    }
+
+    private var pendingReadReceipts = Set<ReadReceiptRequest>()
     
     let callbacks = PassthroughSubject<TimelineControllerCallback, Never>()
     
@@ -62,12 +71,14 @@ class TimelineController: TimelineControllerProtocol {
          initialFocussedEventID: String?,
          timelineItemFactory: RoomTimelineItemFactoryProtocol,
          mediaProvider: MediaProviderProtocol,
-         appSettings: AppSettings) {
+         appSettings: AppSettings,
+         readReceiptRetryClock: any Clock<Duration> = ContinuousClock()) {
         self.roomProxy = roomProxy
         liveTimelineItemProvider = timelineProxy.timelineItemProvider
         self.timelineItemFactory = timelineItemFactory
         self.mediaProvider = mediaProvider
         self.appSettings = appSettings
+        self.readReceiptRetryClock = readReceiptRetryClock
         
         activeTimeline = timelineProxy
         activeTimelineItemProvider = liveTimelineItemProvider
@@ -209,13 +220,37 @@ class TimelineController: TimelineControllerProtocol {
     }
     
     func sendReadReceipt(for itemID: TimelineItemIdentifier) async {
-        let receiptType: MatrixRustSDK.ReceiptType = appSettings.sharePresence ? .read : .readPrivate
-        
-        guard let eventID = itemID.eventID else {
-            return
+        guard !Task.isCancelled, let eventID = itemID.eventID else { return }
+
+        let request = ReadReceiptRequest(providerGeneration: activeProviderGeneration,
+                                         eventID: eventID,
+                                         isPublic: appSettings.sharePresence)
+        guard pendingReadReceipts.insert(request).inserted else { return }
+        defer { pendingReadReceipts.remove(request) }
+
+        // Retry only the observed event on its original timeline, even if the user navigates away.
+        let timeline = activeTimeline
+        let receiptType: MatrixRustSDK.ReceiptType = request.isPublic ? .read : .readPrivate
+        // Advance the unread divider only after the read receipt succeeds, never to the room tip.
+        for type in [receiptType, .fullyRead] {
+            var didSend = false
+            for attempt in 0..<3 {
+                guard !Task.isCancelled else { return }
+                if attempt > 0 {
+                    do {
+                        try await readReceiptRetryClock.sleep(for: .seconds(attempt))
+                    } catch {
+                        return
+                    }
+                }
+                guard !Task.isCancelled else { return }
+                if case .success = await timeline.sendReadReceipt(for: eventID, type: type) {
+                    didSend = true
+                    break
+                }
+            }
+            guard didSend else { return }
         }
-            
-        _ = await activeTimeline.sendReadReceipt(for: eventID, type: receiptType)
     }
     
     func processItemAppearance(_ itemID: TimelineItemIdentifier) async {
