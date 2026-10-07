@@ -2,6 +2,13 @@
 
 JunChat fork release notes are recorded here. Upstream history remains in `CHANGES.md`.
 
+## 2.0.1 (2026-10-07)
+
+- Recovers incomplete microphone and camera publications without leaving stale server registrations; cancellation and recovery remain bounded.
+- Adds private, account-bound call diagnostics for permissions, capture, connection, publication, encryption, playback, and background transitions.
+- Batches diagnostic uploads with short-lived authorization reuse, retry backoff, and explicit indexing receipts. Chat content, media, and credentials are excluded from the call event schema.
+- Requires the verified shared Element Call candidate from `1c9ccd6ddac5468d24d375b56693ed043f9f181e` and the independent diagnostics-v2 rollout. Physical call acceptance and actual store status are recorded separately from local build results.
+
 ## 2.0.0 (2026-09-05)
 
 - Keeps the outgoing waiting tone stopped after the call connects.
