@@ -49,8 +49,10 @@ struct JunchatDiagnosticsUploaderTests {
         #expect(requests[0].httpMethod == "POST")
         #expect(requests[0].httpBody == nil)
         #expect(requests[0].value(forHTTPHeaderField: "Authorization") == "Bearer matrix-access-token")
+        #expect(requests[0].value(forHTTPHeaderField: "X-JunChat-Diagnostics-Purpose") == nil)
         #expect(requests[1].url == uploadsURL)
         #expect(requests[1].value(forHTTPHeaderField: "Authorization") == "Bearer short-lived-token")
+        #expect(requests[1].value(forHTTPHeaderField: "X-JunChat-Diagnostics-Purpose") == nil)
         #expect(requests[1].value(forHTTPHeaderField: "Authorization")?.contains("matrix-access-token") == false)
         #expect(requests[1].value(forHTTPHeaderField: "Content-Type")?.hasPrefix("multipart/form-data; boundary=") == true)
         let body = try #require(snapshot.requestBodies[1])
@@ -60,6 +62,345 @@ struct JunchatDiagnosticsUploaderTests {
         #expect(bodyString.contains(#"{"message":"diagnostic"}"#))
         #expect(!bodyString.contains("matrix-access-token"))
         #expect(!bodyString.contains("short-lived-token"))
+    }
+
+    @Test
+    func reusesCallSessionUntilThirtySecondExpiryMargin() async throws {
+        let clock = JunchatDiagnosticsTestTime(now)
+        let uploader = makeUploader(clock: clock)
+        recorder.setResults([
+            .response(statusCode: 201, data: uploadSessionJSON(token: "cached-call-token", expiresAt: now.addingTimeInterval(300))),
+            .response(statusCode: 200, data: callReceipt),
+            .response(statusCode: 200, data: callReceipt),
+            .response(statusCode: 201, data: uploadSessionJSON(token: "refreshed-call-token", expiresAt: now.addingTimeInterval(600))),
+            .response(statusCode: 200, data: callReceipt)
+        ])
+        let payload = try callPayload()
+        try await uploader.upload(payload).get()
+        clock.advance(269)
+        try await uploader.upload(payload).get()
+        #expect(recorder.snapshot.requestCount == 3)
+        clock.advance(1)
+        try await uploader.upload(payload).get()
+        let requests = recorder.snapshot.requests
+        #expect(requests.map { $0.url?.lastPathComponent } == ["upload-sessions", "uploads", "uploads", "upload-sessions", "uploads"])
+        #expect(requests[1].value(forHTTPHeaderField: "Authorization") == "Bearer cached-call-token")
+        #expect(requests[2].value(forHTTPHeaderField: "Authorization") == "Bearer cached-call-token")
+        #expect(requests[4].value(forHTTPHeaderField: "Authorization") == "Bearer refreshed-call-token")
+    }
+
+    @Test
+    func changingMatrixTokenInvalidatesCachedCallAuthorization() async throws {
+        let credentials = JunchatDiagnosticsTestCredentials("matrix-alice")
+        let uploader = makeUploader { try credentials.read() }
+        let payload = try callPayload()
+        recorder.setResults(successfulUploadResults(at: now))
+        try await uploader.upload(payload).get()
+        credentials.replace(with: "matrix-bob")
+        recorder.setResults([
+            .response(statusCode: 201, data: uploadSessionJSON(token: "bob-call-token", expiresAt: now.addingTimeInterval(300))),
+            .response(statusCode: 200, data: callReceipt)
+        ])
+        try await uploader.upload(payload).get()
+        let requests = recorder.snapshot.requests
+        #expect(requests.count == 4)
+        #expect(requests[2].url?.lastPathComponent == "upload-sessions")
+        #expect(requests[2].value(forHTTPHeaderField: "Authorization") == "Bearer matrix-bob")
+        #expect(requests[3].value(forHTTPHeaderField: "Authorization") == "Bearer bob-call-token")
+    }
+
+    @Test
+    func logoutMakesCachedAuthorizationUnusableAndClearsIt() async throws {
+        let credentials = JunchatDiagnosticsTestCredentials("matrix-alice")
+        let uploader = makeUploader { try credentials.read() }
+        let payload = try callPayload()
+        recorder.setResults(successfulUploadResults(at: now))
+        try await uploader.upload(payload).get()
+        credentials.replace(with: nil)
+        #expect(await failure(from: uploader.upload(payload)) == .sessionUnavailable)
+        #expect(recorder.snapshot.requestCount == 2)
+        credentials.replace(with: "matrix-alice")
+        recorder.setResults(successfulUploadResults(at: now))
+        try await uploader.upload(payload).get()
+        #expect(recorder.snapshot.requests.map { $0.url?.lastPathComponent } == ["upload-sessions", "uploads", "upload-sessions", "uploads"])
+    }
+
+    @Test(arguments: [200, 401])
+    func cached401RefreshesWithMatrixAuthAtMostOnce(_ refreshedUploadStatus: Int) async throws {
+        let uploader = makeUploader()
+        let payload = try callPayload()
+        recorder.setResults(successfulUploadResults(at: now))
+        try await uploader.upload(payload).get()
+        recorder.setResults([
+            .response(statusCode: 401, data: Data(repeating: 0x20, count: 5000)),
+            .response(statusCode: 201, data: uploadSessionJSON(token: "replacement-call-token", expiresAt: now.addingTimeInterval(300))),
+            .response(statusCode: refreshedUploadStatus, data: callReceipt)
+        ])
+        let result = await uploader.upload(payload)
+        #expect(failure(from: result) == (refreshedUploadStatus == 200 ? nil : .unauthorized))
+        let requests = recorder.snapshot.requests
+        try #require(requests.count == 5)
+        #expect(requests.map { $0.url?.lastPathComponent } == ["upload-sessions", "uploads", "uploads", "upload-sessions", "uploads"])
+        #expect(requests[3].value(forHTTPHeaderField: "Authorization") == "Bearer matrix-access-token")
+        #expect(requests[3].value(forHTTPHeaderField: "X-JunChat-Diagnostics-Purpose") == "call")
+        #expect(requests[4].value(forHTTPHeaderField: "Authorization") == "Bearer replacement-call-token")
+    }
+
+    @Test
+    func accountChangeDuringSessionIssuanceDoesNotUploadOldBatch() async throws {
+        let credentials = JunchatDiagnosticsTestCredentials("matrix-alice")
+        let uploader = makeUploader { try credentials.read() }
+        recorder.setResults(successfulUploadResults(at: now))
+        recorder.setRequestHandler { request in
+            if request.url?.lastPathComponent == "upload-sessions" { credentials.replace(with: "matrix-bob") }
+        }
+        #expect(try await failure(from: uploader.upload(callPayload())) == .sessionUnavailable)
+        #expect(recorder.snapshot.requestCount == 1)
+    }
+
+    @Test
+    func accountChangeDuringCached401CannotRefreshUnderNewAccount() async throws {
+        let credentials = JunchatDiagnosticsTestCredentials("matrix-alice")
+        let uploader = makeUploader { try credentials.read() }
+        let payload = try callPayload()
+        recorder.setResults(successfulUploadResults(at: now))
+        try await uploader.upload(payload).get()
+        recorder.setResponse(statusCode: 401, data: Data())
+        recorder.setRequestHandler { _ in credentials.replace(with: "matrix-bob") }
+        #expect(await failure(from: uploader.upload(payload)) == .sessionUnavailable)
+        #expect(recorder.snapshot.requestCount == 3)
+        #expect(recorder.snapshot.requests.last?.url?.lastPathComponent == "uploads")
+    }
+
+    @Test
+    func genericUploadsNeverReuseOrReplaceCallSession() async throws {
+        let uploader = makeUploader()
+        let payload = try callPayload()
+        recorder.setResults(successfulUploadResults(at: now))
+        try await uploader.upload(payload).get()
+        recorder.setResults([
+            .response(statusCode: 201, data: uploadSessionJSON(token: "generic-one", expiresAt: now.addingTimeInterval(300))),
+            .response(statusCode: 200, data: Data()),
+            .response(statusCode: 201, data: uploadSessionJSON(token: "generic-two", expiresAt: now.addingTimeInterval(300))),
+            .response(statusCode: 200, data: Data()),
+            .response(statusCode: 200, data: callReceipt)
+        ])
+        try await uploader.upload(Data("generic one".utf8)).get()
+        try await uploader.upload(Data("generic two".utf8)).get()
+        try await uploader.upload(payload).get()
+        let requests = recorder.snapshot.requests
+        try #require(requests.count == 7)
+        #expect(requests[2].value(forHTTPHeaderField: "X-JunChat-Diagnostics-Purpose") == nil)
+        #expect(requests[4].value(forHTTPHeaderField: "X-JunChat-Diagnostics-Purpose") == nil)
+        #expect(requests[3].value(forHTTPHeaderField: "Authorization") == "Bearer generic-one")
+        #expect(requests[5].value(forHTTPHeaderField: "Authorization") == "Bearer generic-two")
+        #expect(requests[6].value(forHTTPHeaderField: "Authorization") == "Bearer opaque-token")
+    }
+
+    @Test
+    func cached403DoesNotRefresh() async throws {
+        let first = makeUploader()
+        let payload = try callPayload()
+        recorder.setResults(successfulUploadResults(at: now))
+        try await first.upload(payload).get()
+        recorder.setResponse(statusCode: 403, data: Data())
+        #expect(await failure(from: first.upload(payload)) == .unauthorized)
+        #expect(recorder.snapshot.requestCount == 3)
+    }
+
+    @Test
+    func separateLoginDoesNotReuseCachedCallAuthorization() async throws {
+        let first = makeUploader()
+        let payload = try callPayload()
+        recorder.setResults(successfulUploadResults(at: now))
+        try await first.upload(payload).get()
+        let second = makeUploader()
+        recorder.setResults(successfulUploadResults(at: now))
+        try await second.upload(payload).get()
+        #expect(recorder.snapshot.requests.map { $0.url?.lastPathComponent } == ["upload-sessions", "uploads"])
+    }
+
+    @Test
+    func cancelledCallUploadCannotUseCachedAuthorization() async throws {
+        let uploader = makeUploader()
+        let payload = try callPayload()
+        recorder.setResults(successfulUploadResults(at: now))
+        try await uploader.upload(payload).get()
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return await uploader.upload(payload)
+        }
+        #expect(await failure(from: task.value) == .cancelled)
+        #expect(recorder.snapshot.requestCount == 2)
+    }
+
+    @Test
+    func requestsCallPurposeOnlyForTheSessionAndPreservesOpaqueUploadTokenAndPayload() async throws {
+        let uploader = makeUploader()
+        let payload = try callPayload()
+        recorder.setResults([
+            .response(statusCode: 201,
+                      data: uploadSessionJSON(token: "opaque-call-upload-token", expiresAt: now.addingTimeInterval(300))),
+            .response(statusCode: 200, data: Data(#"{"ok":true,"call_diagnostics":{"accepted":1,"duplicates":0}}"#.utf8))
+        ])
+
+        try await uploader.upload(payload).get()
+
+        let snapshot = recorder.snapshot
+        #expect(snapshot.requests.count == 2)
+        #expect(snapshot.requests[0].url?.path == "/junchat-errors/api/v2/upload-sessions")
+        #expect(snapshot.requests[0].httpBody == nil)
+        #expect(snapshot.requests[0].value(forHTTPHeaderField: "X-JunChat-Diagnostics-Purpose") == "call")
+        #expect(snapshot.requests[0].value(forHTTPHeaderField: "Authorization") == "Bearer matrix-access-token")
+        #expect(snapshot.requests[1].url == uploadsURL)
+        #expect(snapshot.requests[1].value(forHTTPHeaderField: "X-JunChat-Diagnostics-Purpose") == nil)
+        #expect(snapshot.requests[1].value(forHTTPHeaderField: "Authorization") == "Bearer opaque-call-upload-token")
+        let body = try #require(snapshot.requestBodies[1])
+        #expect(body.range(of: payload) != nil)
+    }
+
+    @Test(arguments: [
+        #"{"ok":true}"#,
+        #"{}"#,
+        #"{"ok":false,"call_diagnostics":{"accepted":1,"duplicates":0}}"#,
+        #"{"ok":1,"call_diagnostics":{"accepted":1,"duplicates":0}}"#,
+        #"{"ok":true,"call_diagnostics":{"accepted":1}}"#,
+        #"{"ok":true,"call_diagnostics":{"accepted":0,"duplicates":0}}"#,
+        #"{"ok":true,"call_diagnostics":{"accepted":2,"duplicates":0}}"#,
+        #"{"ok":true,"call_diagnostics":{"accepted":-1,"duplicates":2}}"#,
+        #"{"ok":true,"call_diagnostics":{"accepted":0.5,"duplicates":0.5}}"#,
+        #"{"ok":true,"call_diagnostics":{"accepted":true,"duplicates":0}}"#,
+        #"{"ok":true,"call_diagnostics":{"accepted":9223372036854775807,"duplicates":1}}"#,
+        "not JSON"
+    ])
+    func requiresMatchingTypedIndexingReceiptForCallPayload(_ response: String) async throws {
+        let uploader = makeUploader()
+        recorder.setResults([
+            .response(statusCode: 201,
+                      data: uploadSessionJSON(token: "call-token", expiresAt: now.addingTimeInterval(300))),
+            .response(statusCode: 200, data: Data(response.utf8))
+        ])
+        let result = try await uploader.upload(callPayload())
+        #expect(failure(from: result) == .invalidResponse)
+        #expect(recorder.snapshot.requestCount == 2)
+    }
+
+    @Test(arguments: [0, 1, 2])
+    func acceptsIndexedAndDuplicateCallReceiptCounts(_ accepted: Int) async throws {
+        let uploader = makeUploader()
+        let receipt = "{\"ok\":true,\"call_diagnostics\":{\"accepted\":\(accepted),\"duplicates\":\(2 - accepted)}}"
+        recorder.setResults([
+            .response(statusCode: 201,
+                      data: uploadSessionJSON(token: "call-token", expiresAt: now.addingTimeInterval(300))),
+            .response(statusCode: 200, data: Data(receipt.utf8))
+        ])
+        try await uploader.upload(callPayload(eventCount: 2)).get()
+        #expect(recorder.snapshot.requestCount == 2)
+    }
+
+    @Test(arguments: [
+        #"{"message":"generic","context":{"schema":"junchat.call-diagnostics.v1"}}"#,
+        #"[{"schema":"junchat.call-diagnostics.v1"}]"#,
+        #"{"schema":"junchat.call-diagnostics.v2"}"#,
+        #"{"schema":"junchat.call-diagnostics.v1 "}"#,
+        #"{"schema":true}"#,
+        #"{"schema":null}"#,
+        #"{"schema":"junchat.call-diagnostics.v1""#,
+        "opaque generic payload"
+    ])
+    func doesNotRequestCallPurposeForGenericOrNonmatchingSchema(_ payload: String) async throws {
+        let uploader = makeUploader()
+        recorder.setResults([
+            .response(statusCode: 201,
+                      data: uploadSessionJSON(token: "generic-upload-token", expiresAt: now.addingTimeInterval(300))),
+            .response(statusCode: 200, data: Data())
+        ])
+
+        try await uploader.upload(Data(payload.utf8)).get()
+
+        let requests = recorder.snapshot.requests
+        #expect(requests.count == 2)
+        #expect(requests.allSatisfy { $0.value(forHTTPHeaderField: "X-JunChat-Diagnostics-Purpose") == nil })
+    }
+
+    @Test
+    func callUpload429DoesNotRetryForAnHourAndDoesNotBlockGenericReports() async throws {
+        let clock = JunchatDiagnosticsTestTime(now)
+        let uploader = makeUploader(clock: clock)
+        recorder.setResults([
+            .response(statusCode: 201,
+                      data: uploadSessionJSON(token: "call-token", expiresAt: clock.now.addingTimeInterval(300))),
+            .response(statusCode: 429, data: Data(), headers: ["Retry-After": "3600"])
+        ])
+        let payload = try callPayload()
+        #expect(await failure(from: uploader.upload(payload)) == .rateLimited)
+        #expect(recorder.snapshot.requestCount == 2)
+
+        recorder.setResults(successfulUploadResults(at: clock.now))
+        try await uploader.upload(Data(#"{"message":"generic"}"#.utf8)).get()
+        #expect(recorder.snapshot.requestCount == 4)
+        clock.advance(3599)
+        #expect(await failure(from: uploader.upload(payload)) == .rateLimited)
+        #expect(recorder.snapshot.requestCount == 4)
+        clock.advance(1)
+        recorder.setResults(successfulUploadResults(at: clock.now))
+        try await uploader.upload(payload).get()
+        #expect(recorder.snapshot.requestCount == 6)
+    }
+
+    @Test(arguments: [429, 503])
+    func honorsSessionRetryAfterAndBoundsExcessiveDelays(_ statusCode: Int) async throws {
+        let clock = JunchatDiagnosticsTestTime(now)
+        let uploader = makeUploader(clock: clock)
+        recorder.setResponse(statusCode: statusCode, data: Data(), headers: ["Retry-After": "99999999"])
+        let payload = try callPayload()
+        #expect(await failure(from: uploader.upload(payload)) != nil)
+        clock.advance(3599)
+        #expect(await failure(from: uploader.upload(payload)) == .rateLimited)
+        #expect(recorder.snapshot.requestCount == 1)
+        clock.advance(1)
+        recorder.setResults(successfulUploadResults(at: clock.now))
+        try await uploader.upload(payload).get()
+        #expect(recorder.snapshot.requestCount == 3)
+    }
+
+    @Test
+    func honorsHTTPDateRetryAfterEvenWhenErrorResponseBodyIsTooLarge() async throws {
+        let clock = JunchatDiagnosticsTestTime(now)
+        let uploader = makeUploader(clock: clock)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss 'GMT'"
+        recorder.setResponse(statusCode: 503, data: Data(repeating: 0x20, count: 5000),
+                             headers: ["Retry-After": formatter.string(from: clock.now.addingTimeInterval(120))])
+        let payload = try callPayload()
+        #expect(await failure(from: uploader.upload(payload)) == .responseTooLarge)
+        clock.advance(119)
+        #expect(await failure(from: uploader.upload(payload)) == .rateLimited)
+        #expect(recorder.snapshot.requestCount == 1)
+        clock.advance(1)
+        recorder.setResults(successfulUploadResults(at: clock.now))
+        try await uploader.upload(payload).get()
+        #expect(recorder.snapshot.requestCount == 3)
+    }
+
+    @Test(arguments: ["-1", "not a date", "NaN", "", "0"])
+    func invalidRetryAfterCannotPermanentlySuppressReports(_ header: String) async throws {
+        let uploader = makeUploader()
+        recorder.setResponse(statusCode: 429, data: Data(), headers: ["Retry-After": header])
+        let payload = try callPayload()
+        #expect(await failure(from: uploader.upload(payload)) == .rateLimited)
+        recorder.setResults(successfulUploadResults(at: now))
+        try await uploader.upload(payload).get()
+        #expect(recorder.snapshot.requestCount == 3)
+    }
+
+    @Test(arguments: [0, 65])
+    func rejectsInvalidCallBatchCountsBeforeIssuingTokens(_ count: Int) async throws {
+        let uploader = makeUploader()
+        #expect(try await failure(from: uploader.upload(callPayload(eventCount: count))) == .invalidResponse)
+        #expect(recorder.snapshot.requestCount == 0)
     }
 
     @Test
@@ -106,6 +447,27 @@ struct JunchatDiagnosticsUploaderTests {
         #expect(failure(from: rateLimited) == .rateLimited)
         #expect(recorder.snapshot.requestCount == 1)
         #expect(!String(describing: rateLimited).contains(matrixToken))
+    }
+
+    @Test
+    func distinguishesMissingV2EndpointsWithoutForwardingResponseContents() async {
+        let uploader = makeUploader()
+        recorder.setResponse(statusCode: 404, data: Data("private-endpoint-details".utf8))
+        let missingSessionEndpoint = await uploader.upload(Data("payload".utf8))
+        #expect(failure(from: missingSessionEndpoint) == .endpointNotFound)
+        #expect(recorder.snapshot.requestCount == 1)
+        #expect(!String(describing: missingSessionEndpoint).contains("private-endpoint-details"))
+
+        recorder.reset()
+        recorder.setResults([
+            .response(statusCode: 201,
+                      data: uploadSessionJSON(token: "short-lived-token", expiresAt: now.addingTimeInterval(300))),
+            .response(statusCode: 404, data: Data("private-upload-details".utf8))
+        ])
+        let missingUploadEndpoint = await uploader.upload(Data("payload".utf8))
+        #expect(failure(from: missingUploadEndpoint) == .endpointNotFound)
+        #expect(recorder.snapshot.requestCount == 2)
+        #expect(!String(describing: missingUploadEndpoint).contains("private-upload-details"))
     }
 
     @Test
@@ -169,6 +531,7 @@ struct JunchatDiagnosticsUploaderTests {
     }
 
     private func makeUploader(maximumResponseSize: Int = 4096,
+                              clock: JunchatDiagnosticsTestTime? = nil,
                               accessTokenProvider: @escaping @Sendable () throws -> String = { "matrix-access-token" }) -> JunchatDiagnosticsUploader {
         recorder.reset()
         let configuration = URLSessionConfiguration.ephemeral
@@ -177,8 +540,28 @@ struct JunchatDiagnosticsUploaderTests {
                                           accessTokenProvider: accessTokenProvider,
                                           urlSession: URLSession(configuration: configuration),
                                           maximumResponseSize: maximumResponseSize) {
-            now
+            clock?.now ?? now
         }
+    }
+
+    private func successfulUploadResults(at date: Date) -> [JunchatDiagnosticsURLProtocolRecorder.Result] {
+        [.response(statusCode: 201,
+                   data: uploadSessionJSON(token: "opaque-token", expiresAt: date.addingTimeInterval(300))),
+         .response(statusCode: 200, data: Data(#"{"ok":true,"call_diagnostics":{"accepted":1,"duplicates":0}}"#.utf8))]
+    }
+
+    private var callReceipt: Data {
+        Data(#"{"ok":true,"call_diagnostics":{"accepted":1,"duplicates":0}}"#.utf8)
+    }
+
+    private func callPayload(eventCount: Int = 1) throws -> Data {
+        let events: [[String: Any]] = (0..<eventCount).map { index in
+            ["session_id": "ade7a7ad-a151-4b1e-9368-58c0d6a0c862", "sequence": index + 1,
+             "occurred_at": "2026-10-07T12:00:00Z", "component": "ios", "stage": "capture",
+             "status": "failed", "code": "capture_failed", "source": "microphone"]
+        }
+        return try JSONSerialization.data(withJSONObject: ["schema": "junchat.call-diagnostics.v1", "platform": "ios",
+                                                           "app_version": "2.0.1", "build": "58", "events": events])
     }
 
     private func uploadSessionJSON(token: String,
@@ -223,7 +606,7 @@ private final class JunchatDiagnosticsTokenSequence: @unchecked Sendable {
 
 private final class JunchatDiagnosticsURLProtocolRecorder: @unchecked Sendable {
     enum Result {
-        case response(statusCode: Int, data: Data)
+        case response(statusCode: Int, data: Data, headers: [String: String] = [:])
     }
 
     struct Snapshot {
@@ -234,11 +617,18 @@ private final class JunchatDiagnosticsURLProtocolRecorder: @unchecked Sendable {
         }
     }
 
+    struct Response {
+        let statusCode: Int
+        let data: Data
+        var headers: [String: String] = [:]
+    }
+
     private let lock = NSLock()
-    private var response = (statusCode: 200, data: Data())
+    private var response = Response(statusCode: 200, data: Data())
     private var results = [Result]()
     private var requests = [URLRequest]()
     private var requestBodies = [Data?]()
+    private var requestHandler: (@Sendable (URLRequest) -> Void)?
 
     var snapshot: Snapshot {
         lock.lock()
@@ -249,16 +639,21 @@ private final class JunchatDiagnosticsURLProtocolRecorder: @unchecked Sendable {
     func reset() {
         lock.lock()
         defer { lock.unlock() }
-        response = (200, Data())
+        response = Response(statusCode: 200, data: Data())
         results.removeAll()
         requests.removeAll()
         requestBodies.removeAll()
+        requestHandler = nil
     }
 
-    func setResponse(statusCode: Int, data: Data) {
+    func setRequestHandler(_ handler: @escaping @Sendable (URLRequest) -> Void) {
+        lock.withLock { requestHandler = handler }
+    }
+
+    func setResponse(statusCode: Int, data: Data, headers: [String: String] = [:]) {
         lock.lock()
         defer { lock.unlock() }
-        response = (statusCode, data)
+        response = Response(statusCode: statusCode, data: data, headers: headers)
     }
 
     func setResults(_ results: [Result]) {
@@ -267,15 +662,19 @@ private final class JunchatDiagnosticsURLProtocolRecorder: @unchecked Sendable {
         self.results = results
     }
 
-    func record(_ request: URLRequest) -> (statusCode: Int, data: Data) {
+    func record(_ request: URLRequest) -> Response {
         lock.lock()
-        defer { lock.unlock() }
+        let handler = requestHandler
+        defer {
+            lock.unlock()
+            handler?(request)
+        }
         requests.append(request)
         requestBodies.append(Self.body(from: request))
         if !results.isEmpty {
             switch results.removeFirst() {
-            case .response(let statusCode, let data):
-                return (statusCode, data)
+            case .response(let statusCode, let data, let headers):
+                return Response(statusCode: statusCode, data: data, headers: headers)
             }
         }
         return response
@@ -320,7 +719,7 @@ private final class JunchatDiagnosticsURLProtocol: URLProtocol {
               let response = HTTPURLResponse(url: url,
                                              statusCode: recorded.statusCode,
                                              httpVersion: nil,
-                                             headerFields: nil) else {
+                                             headerFields: recorded.headers) else {
             client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
             return
         }
@@ -330,4 +729,41 @@ private final class JunchatDiagnosticsURLProtocol: URLProtocol {
     }
 
     override func stopLoading() { }
+}
+
+private final class JunchatDiagnosticsTestTime: @unchecked Sendable {
+    private let lock = NSLock()
+    private var date: Date
+
+    init(_ date: Date) {
+        self.date = date
+    }
+
+    var now: Date {
+        lock.withLock { date }
+    }
+
+    func advance(_ seconds: TimeInterval) {
+        lock.withLock { date = date.addingTimeInterval(seconds) }
+    }
+}
+
+private final class JunchatDiagnosticsTestCredentials: @unchecked Sendable {
+    private let lock = NSLock()
+    private var token: String?
+
+    init(_ token: String) {
+        self.token = token
+    }
+
+    func read() throws -> String {
+        try lock.withLock {
+            guard let token else { throw URLError(.userAuthenticationRequired) }
+            return token
+        }
+    }
+
+    func replace(with token: String?) {
+        lock.withLock { self.token = token }
+    }
 }

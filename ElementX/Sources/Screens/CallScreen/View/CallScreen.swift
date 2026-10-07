@@ -887,6 +887,10 @@ private struct CallView: UIViewRepresentable {
                 guard let body = message.body as? [String: String],
                       let level = body["level"],
                       let logMessage = body["message"] else { return }
+                if logMessage.hasPrefix(CallDiagnosticEvent.consolePrefix) {
+                    viewModelContext?.viewState.diagnostics?.consumeConsole(logMessage, level: level)
+                    return
+                }
                 let summary = CallDiagnostics.textSummary(logMessage)
 
                 switch level {
@@ -923,11 +927,13 @@ private struct CallView: UIViewRepresentable {
                                                                                     host: origin.host,
                                                                                     port: origin.port))
             guard CallWebViewMessageTrustPolicy.isMediaCaptureTrusted(source, callURL: url) else {
+                recordCapturePermission(type, granted: false)
                 MXLog.warning("[JunchatCallWebView] deny media capture type=\(String(describing: type)) main=\(frame.isMainFrame)")
                 return .deny
             }
 
             MXLog.info("[JunchatCallWebView] grant media capture type=\(String(describing: type)) main=true")
+            recordCapturePermission(type, granted: true)
             viewModelContext?.send(viewAction: .mediaCapturePermissionGranted)
             return .grant
         }
@@ -967,9 +973,24 @@ private struct CallView: UIViewRepresentable {
             viewModelContext?.send(viewAction: .pictureInPictureReadinessChanged)
         }
 
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            recordNavigationFailure(error)
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            recordNavigationFailure(error)
+        }
+
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            guard !isInvalidated else { return }
+            viewModelContext?.viewState.diagnostics?.record(stage: .lifecycle, status: .failed, code: .unknown, state: .ended)
+            viewModelContext?.viewState.diagnostics?.flush()
+        }
+
         // MARK: - Picture in Picture
 
         @objc private func applicationWillResignActive() {
+            viewModelContext?.viewState.diagnostics?.record(stage: .lifecycle, status: .stateChanged, state: .inactive)
             MXLog.info("[JunchatCallMicrophone] application will resign active state=\(microphoneCaptureStateDescription(webView.microphoneCaptureState)) audioEnabled=\(viewModelContext?.isAudioEnabled?() ?? false)")
             confirmMicrophoneCaptureForBackgrounding(reason: "application will resign active")
 
@@ -988,6 +1009,8 @@ private struct CallView: UIViewRepresentable {
         }
 
         @objc private func applicationDidEnterBackground() {
+            viewModelContext?.viewState.diagnostics?.record(stage: .lifecycle, status: .stateChanged, state: .background)
+            viewModelContext?.viewState.diagnostics?.flush()
             confirmMicrophoneCaptureForBackgrounding(reason: "application did enter background")
         }
 
@@ -1140,6 +1163,13 @@ private struct CallView: UIViewRepresentable {
         }
 
         private func microphoneCaptureStateChanged(_ captureState: WKMediaCaptureState) {
+            let state: CallDiagnosticEvent.State = switch captureState {
+            case .none: .inactive
+            case .active: .active
+            case .muted: .muted
+            @unknown default: .unknown
+            }
+            viewModelContext?.viewState.diagnostics?.record(stage: .capture, status: .stateChanged, source: .microphone, state: state)
             MXLog.info("[JunchatCallMicrophone] capture state changed state=\(microphoneCaptureStateDescription(captureState)) audioEnabled=\(viewModelContext?.isAudioEnabled?() ?? false) \(pictureInPictureStateDescription())")
 
             guard captureState == .muted else { return }
@@ -1192,9 +1222,16 @@ private struct CallView: UIViewRepresentable {
                     }
 
                     microphoneCaptureRecoveryInFlight = true
+                    viewModelContext?.viewState.diagnostics?.record(stage: .capture, status: .retrying, code: .unknown, source: .microphone, attempt: attempt)
                     MXLog.info("[JunchatCallMicrophone] reactivating capture reason=\(reason) attempt=\(attempt)")
                     await webView.setMicrophoneCaptureState(.active)
                     microphoneCaptureRecoveryInFlight = false
+                    let recovered = webView.microphoneCaptureState == .active
+                    viewModelContext?.viewState.diagnostics?.record(stage: .capture,
+                                                                    status: recovered ? .succeeded : .failed,
+                                                                    code: recovered ? .none : .captureFailed,
+                                                                    source: .microphone,
+                                                                    attempt: attempt)
                     MXLog.info("[JunchatCallMicrophone] reactivation completed state=\(microphoneCaptureStateDescription(webView.microphoneCaptureState))")
 
                     guard webView.microphoneCaptureState != .active else { return }
@@ -1253,6 +1290,35 @@ private struct CallView: UIViewRepresentable {
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             coordinator?.userContentController(userContentController, didReceive: message)
         }
+    }
+}
+
+private extension CallView.Coordinator {
+    func recordCapturePermission(_ type: WKMediaCaptureType, granted: Bool) {
+        let sources: [(CallDiagnosticEvent.Source, AVMediaType)]
+        switch type {
+        case .microphone: sources = [(.microphone, .audio)]
+        case .camera: sources = [(.camera, .video)]
+        case .cameraAndMicrophone: sources = [(.microphone, .audio), (.camera, .video)]
+        @unknown default: sources = []
+        }
+        for (source, mediaType) in sources {
+            let permission = AVCaptureDevice.authorizationStatus(for: mediaType)
+            let denied = !granted || permission == .denied || permission == .restricted
+            viewModelContext?.viewState.diagnostics?.record(stage: .permission,
+                                                            status: denied ? .failed : permission == .authorized ? .succeeded : .started,
+                                                            code: denied ? .permissionDenied : .none,
+                                                            source: source)
+        }
+    }
+
+    func recordNavigationFailure(_ error: Error) {
+        guard !isInvalidated else { return }
+        let cancelled = (error as? URLError)?.code == .cancelled
+        viewModelContext?.viewState.diagnostics?.record(stage: .signaling,
+                                                        status: cancelled ? .ended : .failed,
+                                                        code: cancelled ? .cancelled : .signalingFailed)
+        viewModelContext?.viewState.diagnostics?.flush()
     }
 }
 

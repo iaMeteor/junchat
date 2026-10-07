@@ -69,6 +69,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
          appHooks: AppHooks,
          appSettings: AppSettings,
          analyticsService: AnalyticsService,
+         callDiagnosticsCollector: CallDiagnosticsCollector? = nil,
          callAudioSessionController: CallAudioSessionController = .init(),
          callConnectedTonePlayer: @escaping () -> Void = CallScreenViewModel.playDefaultCallConnectedTone,
          callEndedTonePlayer: @escaping () -> Void = CallScreenViewModel.playDefaultCallEndedTone,
@@ -104,7 +105,8 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         widgetDriver = configuration.roomProxy.elementCallWidgetDriver(deviceID: deviceID)
 
         super.init(initialViewState: CallScreenViewState(script: CallScreenJavaScriptMessageName.allCasesInjectionScript,
-                                                         certificateValidator: appHooks.certificateValidatorHook))
+                                                         certificateValidator: appHooks.certificateValidatorHook,
+                                                         diagnostics: callDiagnosticsCollector.map { CallDiagnosticRecorder(collector: $0) }))
 
         state.bindings.isAudioEnabled = { [weak self] in
             self?.callMediaCoordinator.currentAudioEnabled ?? false
@@ -289,6 +291,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
     private func cleanUpLocalCallState() {
         guard !hasCleanedUpLocalCallState else { return }
         hasCleanedUpLocalCallState = true
+        state.diagnostics?.finish()
 
         logAudioSessionSnapshot(reason: "before call cleanup")
         timeoutTask = nil
@@ -328,6 +331,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
                 hasWidgetLoaded = true
                 // This means that the call room was joined successfully, we can stop the timeout task.
                 MXLog.info("[JunchatCall] widget loaded")
+                state.diagnostics?.record(stage: .signaling, status: .succeeded)
                 timeoutTask = nil
             }
         }
@@ -391,6 +395,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
             guard let self, !Task.isCancelled, !hasRequestedHangup else { return }
 
             MXLog.info("[JunchatCall] setupCall start voice=\(configuration.voiceOnly) playConnectedTone=\(configuration.playConnectedTone)")
+            state.diagnostics?.record(stage: .signaling, status: .started)
 
             let baseURL = if let baseURLOverride = configuration.elementCallBaseURLOverride {
                 baseURLOverride
@@ -425,6 +430,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
             case .failure(let error):
                 guard !Task.isCancelled, !hasRequestedHangup, !hasCleanedUpLocalCallState else { return }
                 MXLog.error("Failed starting ElementCall Widget Driver with \(CallDiagnostics.errorSummary(error))")
+                state.diagnostics?.record(stage: .signaling, status: .failed, code: .signalingFailed)
                 state.bindings.alertInfo = .init(id: UUID(),
                                                  title: L10n.errorUnknown,
                                                  primaryButton: .init(title: L10n.actionOk) {
@@ -453,6 +459,8 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
             try? await Task.sleep(for: duration)
             guard !Task.isCancelled, let self else { return }
             MXLog.error("Failed to join Element Call: Timeout")
+            state.diagnostics?.record(stage: .signaling, status: .failed, code: .signalingFailed)
+            state.diagnostics?.flush()
             state.bindings.alertInfo = .init(id: UUID(),
                                              title: L10n.commonError,
                                              message: L10n.errorUnknown,
@@ -524,8 +532,17 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
 
         switch event {
         case .audioRouteChanged:
+            state.diagnostics?.record(stage: .audioRoute, status: .stateChanged, state: diagnosticAudioRoute)
             await recoverPreferredVoiceOutputOnWeb(reason: "audio route changed")
         case .lifecycleRecovery(let reason):
+            switch reason {
+            case .applicationDidBecomeActive:
+                state.diagnostics?.record(stage: .lifecycle, status: .stateChanged, state: .foreground)
+            case .audioInterruptionEnded, .mediaServicesReset:
+                state.diagnostics?.record(stage: .capture, status: .retrying, code: .interrupted, source: .microphone)
+            default:
+                break
+            }
             MXLog.info("[JunchatCall] recover call media after \(reason.rawValue)")
             logAudioSessionSnapshot(reason: "after lifecycle route recovery \(reason.rawValue)")
             await recoverPreferredVoiceOutputOnWeb(reason: reason.rawValue)
@@ -539,6 +556,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
         guard callMediaCoordinator.remoteMediaConnected() else { return }
 
         MXLog.info("[JunchatCall] remote media connected")
+        state.diagnostics?.record(stage: .connection, status: .stateChanged, state: .connected)
         logAudioSessionSnapshot(reason: "before remote media connected recovery")
         logAudioSessionSnapshot(reason: "after remote media connected recovery")
         await recoverPreferredVoiceOutputOnWeb(reason: "remote media connected")
@@ -697,6 +715,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
             let result = try await state.bindings.javaScriptEvaluator?(message)
             MXLog.debug("Evaluated widget javascript \(CallDiagnostics.jsonSummary(json)) result=\(CallDiagnostics.valueSummary(result))")
         } catch {
+            state.diagnostics?.record(stage: .signaling, status: .failed, code: .signalingFailed)
             MXLog.error("Received javascript evaluation \(CallDiagnostics.errorSummary(error))")
         }
     }
@@ -731,6 +750,7 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
             let result = try await state.bindings.javaScriptEvaluator?(javaScript)
             MXLog.info("[JunchatCall] recovered preferred voice output on web after \(reason) result=\(CallDiagnostics.valueSummary(result))")
         } catch {
+            state.diagnostics?.record(stage: .audioRoute, status: .failed, code: .unknown)
             MXLog.error("[JunchatCall] failed recovering preferred voice output on web after \(reason) \(CallDiagnostics.errorSummary(error))")
         }
 
@@ -759,7 +779,18 @@ class CallScreenViewModel: CallScreenViewModelType, CallScreenViewModelProtocol 
             }
             MXLog.debug("Evaluated audio output devices javascript result=\(CallDiagnostics.valueSummary(result))")
         } catch {
+            state.diagnostics?.record(stage: .audioRoute, status: .failed, code: .unknown)
             MXLog.error("Received javascript evaluation \(CallDiagnostics.errorSummary(error))")
+        }
+    }
+
+    private var diagnosticAudioRoute: CallDiagnosticEvent.State {
+        switch AVAudioSession.sharedInstance().currentRoute.outputs.first?.portType {
+        case .builtInReceiver: .earpiece
+        case .builtInSpeaker: .speaker
+        case .bluetoothA2DP, .bluetoothHFP, .bluetoothLE: .bluetooth
+        case .headphones: .headphones
+        default: .unknown
         }
     }
 }

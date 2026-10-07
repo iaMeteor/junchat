@@ -19,6 +19,7 @@ struct CallScreenViewState: BindableState {
     var url: URL?
     
     let certificateValidator: CertificateValidatorHookProtocol
+    var diagnostics: CallDiagnosticRecorder?
     
     var bindings = Bindings()
 }

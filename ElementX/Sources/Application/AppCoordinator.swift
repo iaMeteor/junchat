@@ -31,17 +31,10 @@ class AppCoordinator: AppCoordinatorProtocol, AuthenticationFlowCoordinatorDeleg
     private var backgroundTask: UIBackgroundTaskIdentifier?
     
     private var userSessionMigrationsOldVersion: Version?
+    private var callDiagnosticsCollector: CallDiagnosticsCollector?
     private var userSession: UserSessionProtocol? {
         didSet {
-            JunchatErrorReporter.setUploader((userSession as? JunchatDiagnosticsProviding)?.junchatDiagnosticsUploader)
-            userSessionObserver?.cancel()
-            if let userSession {
-                configureElementCallService()
-                configureNotificationManager()
-                observeUserSessionChanges()
-                startSync()
-                Task { await appHooks.configure(with: userSession) }
-            }
+            userSessionDidChange()
         }
     }
     
@@ -826,7 +819,8 @@ class AppCoordinator: AppCoordinatorProtocol, AuthenticationFlowCoordinatorDeleg
                                                                     navigationRootCoordinator: navigationRootCoordinator,
                                                                     appLockService: appLockFlowCoordinator.appLockService,
                                                                     flowParameters: flowParameters,
-                                                                    verificationPromptDecisionStore: VerificationPromptDecisionStore(userDefaults: AppSettings.sharedUserDefaults))
+                                                                    verificationPromptDecisionStore: VerificationPromptDecisionStore(userDefaults: AppSettings.sharedUserDefaults),
+                                                                    callDiagnosticsCollector: callDiagnosticsCollector)
         
         userSessionFlowCoordinator.actionsPublisher
             .sink { [weak self] action in
@@ -856,6 +850,7 @@ class AppCoordinator: AppCoordinatorProtocol, AuthenticationFlowCoordinatorDeleg
         guard let userSession else {
             fatalError("User session not setup")
         }
+        callDiagnosticsCollector?.invalidate()
         
         windowManager.closeAllSecondaryWindows()
         
@@ -1314,5 +1309,26 @@ class AppCoordinator: AppCoordinatorProtocol, AuthenticationFlowCoordinatorDeleg
                     task.setTaskCompleted(success: true)
                 }
             }
+    }
+}
+
+private extension AppCoordinator {
+    func userSessionDidChange() {
+        callDiagnosticsCollector?.invalidate()
+        callDiagnosticsCollector = CallDiagnosticsCollector.forSession(uploader: (userSession as? JunchatDiagnosticsProviding)?.junchatDiagnosticsUploader,
+                                                                       appVersion: InfoPlistReader.main.bundleShortVersionString,
+                                                                       build: InfoPlistReader.main.bundleVersion) { failure in
+            // Info logs stay local; error logs would recursively enqueue another upload.
+            MXLog.info("[JunchatCallDiagnostics] upload failed category=\(failure)")
+        }
+        JunchatErrorReporter.setUploader((userSession as? JunchatDiagnosticsProviding)?.junchatDiagnosticsUploader)
+        userSessionObserver?.cancel()
+        if let userSession {
+            configureElementCallService()
+            configureNotificationManager()
+            observeUserSessionChanges()
+            startSync()
+            Task { await appHooks.configure(with: userSession) }
+        }
     }
 }

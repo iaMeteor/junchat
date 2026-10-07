@@ -38,6 +38,7 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
     private let appLockService: AppLockServiceProtocol
     private let flowParameters: CommonFlowParameters
     private let callScreenCoordinatorFactory: CallScreenCoordinatorFactory
+    private let callDiagnosticsCollector: CallDiagnosticsCollector?
 
     private var userSession: UserSessionProtocol {
         flowParameters.userSession
@@ -105,11 +106,13 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
          appLockService: AppLockServiceProtocol,
          flowParameters: CommonFlowParameters,
          verificationPromptDecisionStore: VerificationPromptDecisionStoreProtocol,
+         callDiagnosticsCollector: CallDiagnosticsCollector? = nil,
          callScreenCoordinatorFactory: @escaping CallScreenCoordinatorFactory = { CallScreenCoordinator(parameters: $0) }) {
         self.navigationRootCoordinator = navigationRootCoordinator
         self.appLockService = appLockService
         self.flowParameters = flowParameters
         self.callScreenCoordinatorFactory = callScreenCoordinatorFactory
+        self.callDiagnosticsCollector = callDiagnosticsCollector
 
         navigationTabCoordinator = NavigationTabCoordinator()
         navigationRootCoordinator.setRootCoordinator(navigationTabCoordinator)
@@ -853,7 +856,8 @@ class UserSessionFlowCoordinator: FlowCoordinatorProtocol {
                                                                        allowPictureInPicture: true,
                                                                        appSettings: flowParameters.appSettings,
                                                                        appHooks: flowParameters.appHooks,
-                                                                       analytics: flowParameters.analytics))
+                                                                       analytics: flowParameters.analytics,
+                                                                       callDiagnosticsCollector: callDiagnosticsCollector))
 
         callScreenCoordinatorCancellable = callScreenCoordinator.actions
             .sink { [weak self, weak callScreenCoordinator] action in
